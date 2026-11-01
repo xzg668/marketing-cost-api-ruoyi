@@ -31,6 +31,7 @@ import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import java.math.BigDecimal;
+import java.time.Year;
 import java.util.List;
 import java.util.Set;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -113,6 +114,109 @@ class ManufactureRateCategoryCostMatchTest {
 
   private List<CostRunCostItemDto> calculate(
       ManufactureRateMapper rateMapper, MaterialMasterRaw raw) {
+    return calculate(rateMapper, raw, null);
+  }
+
+  @Test
+  @DisplayName("制造费用率核算：成品料品档案不存在时按OA事业部匹配年度和业务单元费率")
+  void missingMaterialMasterUsesOaDivision() {
+    ManufactureRateMapper rateMapper = mock(ManufactureRateMapper.class);
+    stubDivisionRate(rateMapper, "电子产品事业部", "0.150000");
+
+    CostRunCostItemDto manufacture =
+        findManufacture(calculate(rateMapper, null, " 电子产品事业部 "));
+
+    assertThat(manufacture.getRate()).isEqualByComparingTo("0.150000");
+    assertThat(manufacture.getRemark()).contains("OA事业部", "电子产品事业部");
+  }
+
+  @Test
+  @DisplayName("制造费用率核算：有料号级配置时仍优先于OA事业部")
+  void materialCodeRateWinsBeforeOaDivision() {
+    ManufactureRateMapper rateMapper = mock(ManufactureRateMapper.class);
+    when(rateMapper.selectOne(any())).thenAnswer(invocation -> {
+      AbstractWrapper<ManufactureRate, ?, ?> query = invocation.getArgument(0);
+      query.getSqlSegment();
+      assertThat(query.getParamNameValuePairs().values()).doesNotContain("电子产品事业部");
+      return manufactureRate("0.200000");
+    });
+
+    assertThat(findManufacture(calculate(rateMapper, null, "电子产品事业部")).getRate())
+        .isEqualByComparingTo("0.200000");
+  }
+
+  @Test
+  @DisplayName("制造费用率核算：已有料品档案时保留主档事业部优先级")
+  void existingMaterialMasterKeepsItsDivision() {
+    ManufactureRateMapper rateMapper = mock(ManufactureRateMapper.class);
+    stubDivisionRate(rateMapper, "板换事业部", "0.180000");
+
+    CostRunCostItemDto manufacture =
+        findManufacture(calculate(rateMapper, raw("J11AH", "J11"), "电子产品事业部"));
+
+    assertThat(manufacture.getRate()).isEqualByComparingTo("0.180000");
+    assertThat(manufacture.getRemark()).isNull();
+  }
+
+  @Test
+  @DisplayName("制造费用率核算：主档存在但费率未配置或事业部为空时不能改用OA掩盖缺失")
+  void existingMaterialMasterDoesNotFallBackOnRateMiss() {
+    ManufactureRateMapper rateMapper = mock(ManufactureRateMapper.class);
+    stubDivisionRate(rateMapper, "电子产品事业部", "0.150000");
+
+    for (String masterDivision : new String[] {"板换事业部", null}) {
+      CostRunCostItemDto manufacture = findManufacture(calculate(
+          rateMapper, raw("J11AH", "J11", masterDivision), "电子产品事业部"));
+      assertThat(manufacture.getRate()).isNull();
+      assertThat(manufacture.getRemark()).contains("制造费用率未命中");
+    }
+  }
+
+  @Test
+  @DisplayName("制造费用率核算：无主档且OA事业部为空时给出明确原因")
+  void missingMaterialAndOaDivisionRemainMissing() {
+    CostRunCostItemDto manufacture = findManufacture(
+        calculate(mock(ManufactureRateMapper.class), null, "  "));
+
+    assertThat(manufacture.getRate()).isNull();
+    assertThat(manufacture.getRemark()).contains("OA事业部为空");
+  }
+
+  @Test
+  @DisplayName("制造费用率核算：OA事业部未配置费率时保留缺失并说明匹配维度")
+  void unconfiguredOaDivisionRemainsMissing() {
+    CostRunCostItemDto manufacture = findManufacture(
+        calculate(mock(ManufactureRateMapper.class), null, "电子产品事业部"));
+
+    assertThat(manufacture.getRate()).isNull();
+    assertThat(manufacture.getRemark())
+        .contains("OA事业部 电子产品事业部 无事业部级配置", "businessUnitType=COMMERCIAL");
+  }
+
+  @Test
+  @DisplayName("制造费用率核算：OA事业部有效零费率保留为零")
+  void zeroOaDivisionRateIsValid() {
+    ManufactureRateMapper rateMapper = mock(ManufactureRateMapper.class);
+    stubDivisionRate(rateMapper, "电子产品事业部", "0.000000");
+
+    assertThat(findManufacture(calculate(rateMapper, null, "电子产品事业部")).getRate())
+        .isEqualByComparingTo("0.000000");
+  }
+
+  private static void stubDivisionRate(
+      ManufactureRateMapper rateMapper, String division, String value) {
+    when(rateMapper.selectOne(any())).thenAnswer(invocation -> {
+      AbstractWrapper<ManufactureRate, ?, ?> query = invocation.getArgument(0);
+      query.getSqlSegment();
+      var parameters = query.getParamNameValuePairs().values();
+      assertThat(parameters).contains(Year.now().getValue(), "COMMERCIAL");
+      return parameters.contains("DIVISION") && parameters.contains(division)
+          ? manufactureRate(value) : null;
+    });
+  }
+
+  private List<CostRunCostItemDto> calculate(
+      ManufactureRateMapper rateMapper, MaterialMasterRaw raw, String oaDivision) {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
@@ -120,14 +224,16 @@ class ManufactureRateCategoryCostMatchTest {
     form.setId(1L);
     form.setOaNo("OA-MFR-CATEGORY");
     form.setBusinessUnitType("COMMERCIAL");
+    form.setSourceBusinessDivision(oaDivision);
+    String materialCode = raw == null ? "FINISHED-PLATE" : raw.getMaterialCode();
     OaFormItem item = new OaFormItem();
     item.setOaFormId(1L);
-    item.setMaterialNo(raw.getMaterialCode());
+    item.setMaterialNo(materialCode);
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any())).thenReturn(form);
     when(formItemMapper.selectList(any())).thenReturn(List.of(item));
     when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
-        .thenReturn(List.of(raw));
+        .thenReturn(raw == null ? List.of() : List.of(raw));
 
     CostRunCostItemServiceImpl service =
         new CostRunCostItemServiceImpl(
@@ -148,13 +254,13 @@ class ManufactureRateCategoryCostMatchTest {
             mock(CostRunCacheLookupService.class));
     CostRunContext context =
         CostRunContext.quote(
-            form.getOaNo(), 1L, raw.getMaterialCode(), null, null, "COMMERCIAL", "2026-08", "TEST");
+            form.getOaNo(), 1L, materialCode, null, null, "COMMERCIAL", "2026-08", "TEST");
     context.setPriceOrgCode("210");
     context.setMaterialOrganizationCode("COMMERCIAL");
     return service.listByMaterialCodes(
         form.getOaNo(),
-        raw.getMaterialCode(),
-        Set.of(raw.getMaterialCode()),
+        materialCode,
+        Set.of(materialCode),
         context,
         List.of(),
         false,

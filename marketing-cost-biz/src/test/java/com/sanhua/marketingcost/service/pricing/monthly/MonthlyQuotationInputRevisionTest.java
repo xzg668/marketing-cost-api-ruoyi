@@ -47,6 +47,7 @@ class MonthlyQuotationInputRevisionTest {
         new BigDecimal("10"), new BigDecimal("10")), "P/A", new BigDecimal("2.5")).withInputs(MonthlyPreparationInputs.capture(plan, "P/A"))));
     when(prepared.selectList(any())).thenAnswer(ignored -> List.of(row));
     when(prices.readByIds(eq("COMMERCIAL"), any())).thenReturn(Map.of(17L, selection));
+    when(prices.lookup(any())).thenReturn(new MonthlyMaterialPrices.Lookup(Map.of(request, selection), Set.of()));
   }
 
   @Test void savedNormalPriceObservesOnlyTheUnpricedStructureAndNeverReadsCurrentSources() {
@@ -87,6 +88,15 @@ class MonthlyQuotationInputRevisionTest {
         .isInstanceOf(IllegalStateException.class).hasMessageContaining("保存月价依据不一致");
   }
 
+  @Test void supersededMonthlyPriceInvalidatesPreparationWithoutChangingSavedEvidence() {
+    var before = service.read(form, item, "2026-10");
+    when(prices.lookup(any())).thenReturn(new MonthlyMaterialPrices.Lookup(Map.of(), Set.of(request)));
+    var changed = service.read(form, item, "2026-10");
+    assertThat(changed.evidence()).isNotEqualTo(before.evidence());
+    assertThat(changed.unadoptedMaterials()).containsExactly("A");
+    assertThat(prices.readByIds("COMMERCIAL", Set.of(17L))).containsEntry(17L, selection);
+  }
+
   @Test void aPendingSiblingOnlyObservesItsOwnSourceAndNecessaryAggregateDependencies() {
     var pending = new PricePrepareItem(); pending.setMaterialCode("MAKE"); pending.setQuantity(BigDecimal.ONE);
     pending.setResultRefType("MAKE_PART_PRICE");
@@ -114,6 +124,7 @@ class MonthlyQuotationInputRevisionTest {
     row.setMaterialCode("P"); row.setQuantity(BigDecimal.ONE); row.setResultRefType("MAKE_PART");
     row.setInputSnapshotJson(new ObjectMapper().writeValueAsString(Map.of("calculatorVersion", "MAKE_PART_V1", "monthlyInputs", codec.encode(input))));
     when(prices.readByIds(eq("COMMERCIAL"), any())).thenReturn(Map.of(17L, dependent, 18L, scrap));
+    when(prices.lookup(any())).thenReturn(new MonthlyMaterialPrices.Lookup(Map.of(request, dependent, dependency, scrap), Set.of()));
     var scope = service.read(form, item, "2026-10");
     assertThat(scope.unadoptedMaterials()).isEmpty();
     assertThat(scope.householdObservers()).containsExactly("P");
@@ -132,6 +143,7 @@ class MonthlyQuotationInputRevisionTest {
     row.setInputSnapshotJson(codec.encode(MonthlyPreparationPrice.of(new QuotationPriceSession.Value(request, household,
         BigDecimal.TEN, BigDecimal.TEN), "P/A", new BigDecimal("2.5")).withInputs(MonthlyPreparationInputs.capture(plan, "P/A"))));
     when(prices.readByIds(eq("COMMERCIAL"), any())).thenReturn(Map.of(17L, household));
+    when(prices.lookup(any())).thenReturn(new MonthlyMaterialPrices.Lookup(Map.of(request, household), Set.of()));
     var scope = service.read(form, item, "2026-10");
     assertThat(scope.unadoptedMaterials()).isEmpty();
     assertThat(scope.householdObservers()).containsExactly("P");

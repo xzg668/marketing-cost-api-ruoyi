@@ -145,6 +145,54 @@ class QuoteCostingWorkbenchServiceImplTest {
       mock(com.sanhua.marketingcost.service.CostInputRevisionService.class);
 
   @Test
+  void failedBomPreparationKeepsIdentityAndFailureInsteadOfRecognizingOldRows() {
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
+        .thenReturn(List.of(row(10L, "FIN-001", "OLD-MAT")));
+    var workspace = workspace("OLD-BUILD", "SYSTEM_FAILED");
+    workspace.setCurrentStep("QUOTE_BOM");
+    workspace.setLastErrorStep("QUOTE_BOM");
+    workspace.setLastErrorCode("BOM_SYSTEM_ERROR");
+    workspace.setLastErrorMessage("料品主档缺失，无法判断裸品/非裸品");
+    workspace.setCurrentCostVersionId(88L);
+    when(workspaceService.find(10L, SAMPLE_PERIOD_MONTH)).thenReturn(Optional.of(workspace));
+    when(priceTypeRecognitionService.getRecognition("OA-001", 10L, SAMPLE_PERIOD_MONTH))
+        .thenThrow(new com.sanhua.marketingcost.service.ingest.QuoteIngestException(
+            "BOM 准备结果尚未就绪，不能生成结算行"));
+
+    var result = service.getWorkbench("OA-001", 10L);
+
+    assertThat(result.getItem().getMaterialNo()).isEqualTo("FIN-001");
+    assertThat(result.getPeriodMonth()).isEqualTo(SAMPLE_PERIOD_MONTH);
+    assertThat(result.getWorkflowStatus().getQuoteBomStatus()).isEqualTo("BLOCKED");
+    assertThat(result.getWorkflowStatus().getCurrentBlockedStep()).isEqualTo("QUOTE_BOM");
+    assertThat(result.getCostingWorkspace().getLastErrorMessage()).contains("料品主档缺失");
+    assertThat(result.getCostingWorkspace().getCurrentCostVersionId()).isEqualTo(88L);
+    assertThat(result.getBomRows()).hasSize(1);
+    verifyNoInteractions(priceTypeRecognitionService, effectiveBomCostingService, costRunVersionInvalidationService);
+    verify(workspaceService, never()).update(any(), anyInt());
+  }
+
+  @Test
+  void laterStageFailureDoesNotBlockPreparedBomOrPriceRecognition() {
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
+        .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
+    var workspace = workspace("CURRENT-BUILD", "SYSTEM_FAILED");
+    workspace.setCurrentStep("PRICE_PREPARE");
+    when(workspaceService.find(10L, SAMPLE_PERIOD_MONTH)).thenReturn(Optional.of(workspace));
+
+    var result = service.getWorkbench("OA-001", 10L);
+
+    assertThat(result.getWorkflowStatus().getQuoteBomStatus()).isEqualTo("DONE");
+    verify(priceTypeRecognitionService).getRecognition("OA-001", 10L, SAMPLE_PERIOD_MONTH);
+  }
+
+  @Test
   void readingChangedPriceInputsMarksTheViewStaleWithoutRewritingPublishedState() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));

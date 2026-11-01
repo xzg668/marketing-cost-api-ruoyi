@@ -106,6 +106,26 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     assertThat(ownership.find(material).productId()).isEqualTo(productId);
   }
 
+  @Test void dispatchTransfersOnlyAnUnassignedEmptyPriceClaim() {
+    var original = repository.findProduct(productId).orElseThrow();
+    service.claimForDispatch(productId);
+    jdbc.update("UPDATE lp_quote_tech_task SET task_status='UNASSIGNED',assignee_user_id=NULL,assignee_name=NULL WHERE id=?", original.getTaskId());
+    jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=NULL,assignee_name=NULL WHERE product_id=?", productId);
+    Long second = product(102L, "李工", "2026-09");
+    service.claimForDispatch(second);
+    assertThat(ownership.find(material).productId()).isEqualTo(second);
+    assertThat(repository.findProduct(productId).orElseThrow().getCurrentEditVersionId()).isNull();
+    assertThat(repository.findTask(original.getTaskId()).orElseThrow().getTaskStatus()).isEqualTo("UNASSIGNED");
+  }
+
+  @Test void dispatchCannotTakeAnAssignedPriceClaimEvenWithoutADraft() {
+    service.claimForDispatch(productId);
+    Long second = product(102L, "李工", "2026-09");
+    assertThatThrownBy(() -> service.claimForDispatch(second)).isInstanceOf(TechnicalDataTaskException.class)
+        .hasMessageContaining("不能重复补价");
+    assertThat(ownership.find(material).productId()).isEqualTo(productId);
+  }
+
   @Test void publicPriceAndChangedRequirementsRejectStaleSaveWithoutClaim() {
     when(requirements.check(any(),any())).thenReturn(check("AVAILABLE","changed"));
     assertThatThrownBy(() -> service.save(productId,input("FIXED",0),WANG)).hasMessageContaining("需求或来源已变化");

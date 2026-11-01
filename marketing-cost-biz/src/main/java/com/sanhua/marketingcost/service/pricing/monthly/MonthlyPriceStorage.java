@@ -7,7 +7,10 @@ import com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.Pric
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.PricingType;
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.SourceEvidence;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.YearMonth;
 import java.util.*;
 import org.springframework.stereotype.Repository;
@@ -22,6 +25,13 @@ public class MonthlyPriceStorage {
   private final MonthlyPriceStorageMapper mapper;
   private final MonthlyPriceDocumentCodec codec;
   private final MonthlyPriceLinkMapper links;
+  private record ParsedEvidence(SourceEvidence evidence, String hash) {}
+  // Cache parsing only, never a database lookup or price/applicability decision.
+  private final Cache<String, ParsedEvidence> parsedEvidence = Caffeine.newBuilder()
+          .maximumWeight(16L * 1024 * 1024)
+          .weigher((String encoded, ParsedEvidence value) -> (int) Math.min(Integer.MAX_VALUE,
+              128L + 2L * encoded.length() + 2L * value.evidence().json().length()))
+          .expireAfterAccess(Duration.ofMinutes(5)).build();
 
   public MonthlyPriceStorage(MonthlyPriceStorageMapper mapper,MonthlyPriceDocumentCodec codec,MonthlyPriceLinkMapper links) {
     this.mapper=mapper;this.codec=codec;this.links=links;
@@ -42,6 +52,13 @@ public class MonthlyPriceStorage {
     requireAdoptionTransaction();Objects.requireNonNull(applicability);Objects.requireNonNull(fact);
     SourceEvidence.ofJson(firstUseJson);
     if(actor==null || actor.isBlank())throw new IllegalArgumentException("Adoption actor is required");
+    var source=codec.decode(codec.wrap(fact.evidence().json()),JsonNode.class);
+    long revision=mapper.invoiceRevisions(key.businessUnitType(),List.of(key.materialCode())).stream()
+        .filter(value->applicability.fragments().stream().anyMatch(fragment->fragment.organizations().contains(value.orgCode())))
+        .mapToLong(MonthlyPriceStorageMapper.InvoiceRevision::revision).max().orElse(0);
+    if(Set.of("INVOICE","ODS_ORDER","INQUIRY","TECH_FIXED").contains(source.path("sourceKind").asText())
+        && revision!=source.path("invoiceRevision").asLong(0))
+      throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,"发票来源在采用前已更新，请重新取价");
     String hash=MonthlyPriceDocumentCodec.sha256(key.canonical());
     for(var existing:mapper.lockFamily(hash)) {
       var saved=read(existing);
@@ -51,6 +68,9 @@ public class MonthlyPriceStorage {
       }
     }
     var row=new MonthlyMaterialPriceRow();
+    // Even a newly available higher source needs a new identity after an old order was superseded.
+    // Its typed evidence stays unchanged, and later invoice imports never invalidate that higher source.
+    row.setInvoiceRevision(revision);
     row.setFamilyHash(hash);row.setPricingMonth(key.month().toString());row.setBusinessUnitType(key.businessUnitType());
     row.setMaterialCode(key.materialCode());row.setSpecification(key.specification());row.setPricingUnit(key.unit());
     row.setCurrency(key.currency());row.setTaxBasis(key.taxBasis().name());row.setRequestedSupplierCode(key.requestedSupplierCode());
@@ -102,14 +122,30 @@ public class MonthlyPriceStorage {
     });
     return List.copyOf(result);
   }
+  public Map<MonthlyPriceRequest,Long> invoiceRevisions(Collection<MonthlyPriceRequest> requests) {
+    var result=new LinkedHashMap<MonthlyPriceRequest,Long>();
+    var groups=new LinkedHashMap<String,Set<String>>();
+    requests.forEach(request->{var key=request.family();result.put(request,0L);groups.computeIfAbsent(key.businessUnitType(),ignored->new LinkedHashSet<>()).add(key.materialCode());});
+    groups.forEach((unit,codes)->{
+      var list=new ArrayList<>(codes);var versions=new HashMap<String,Long>();
+      for(int start=0;start<list.size();start+=256)mapper.invoiceRevisions(unit,list.subList(start,Math.min(start+256,list.size())))
+          .forEach(row->versions.put(row.materialCode()+"\u0000"+row.orgCode(),row.revision()));
+      result.replaceAll((request,value)->request.family().businessUnitType().equals(unit)?versions.getOrDefault(request.family().materialCode()+"\u0000"+request.priceOrgCode(),0L):value);
+    });
+    return result;
+  }
   private StoredPrice read(MonthlyMaterialPriceRow row) {
     var key=new MonthlyPriceFamilyKey(YearMonth.parse(row.getPricingMonth()),row.getBusinessUnitType(),row.getMaterialCode(),
         row.getSpecification(),row.getPricingUnit(),row.getCurrency(),TaxBasis.valueOf(row.getTaxBasis()),row.getRequestedSupplierCode());
     var applicability=codec.decode(row.getApplicabilityJson(),MonthlyPriceApplicability.class);
-    var evidence=SourceEvidence.ofJson(codec.unwrap(row.getSourceEvidenceJson()));
+    var parsed=parsedEvidence.get(row.getSourceEvidenceJson(), encoded -> {
+      var evidence=SourceEvidence.ofJson(codec.unwrap(encoded));
+      return new ParsedEvidence(evidence,evidence.sha256());
+    });
+    var evidence=parsed.evidence();
     if(!MonthlyPriceDocumentCodec.sha256(key.canonical()).equals(row.getFamilyHash())
         || !MonthlyPriceDocumentCodec.sha256(applicability.canonical()).equals(row.getApplicabilityHash())
-        || !evidence.sha256().equals(row.getSourceEvidenceHash())
+        || !parsed.hash().equals(row.getSourceEvidenceHash())
         || !Objects.equals(row.getOrganizationMask(),organizationMask(applicability)))
       throw new IllegalStateException("Stored monthly price identity/evidence conflict");
     var type=PricingType.valueOf(row.getPricingType());

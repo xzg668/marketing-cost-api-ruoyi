@@ -245,6 +245,111 @@ class QuoteCostRunWorkbenchServiceImplTest {
   }
 
   @Test
+  void approvedFallbacksAndOptionalBlanksAreCompleteOnSave() {
+    var version = version(89L, "RUNNING-2", "RUNNING", "TOP-A");
+    stubCalculation(version, "123.450000");
+    var costs = resolvedFallbackCosts();
+    version.setCostItemCount(costs.size());
+    when(versionMapper.update(any(QuoteCostRunVersion.class), any(Wrapper.class))).thenReturn(1);
+    when(versionMapper.selectById(89L)).thenReturn(version);
+    when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(costs);
+    var part = new CostRunPartItem();
+    part.setAmount(BigDecimal.TEN);
+    when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(part));
+
+    service.runToSuccess("OA-001", 101L, new QuoteCostRunTrialRequest(), "pipeline-user");
+
+    assertThat(version.getDataQualityStatus()).isEqualTo("COMPLETE");
+    assertThat(version.getDataQualityWarningCount()).isZero();
+  }
+
+  @Test
+  void savedWarningIsReassessedWithoutChangingHistoryOrAmounts() {
+    var saved = savedQualityVersion(resolvedFallbackCosts());
+    var response = service.getCostRun("OA-001", 101L, CURRENT_PERIOD);
+
+    assertThat(response.getCurrentDisplayVersion().getDataQualityStatus()).isEqualTo("COMPLETE");
+    assertThat(response.getLatestConfirmed().getDataQualityWarningCount()).isZero();
+    assertThat(response.getCurrentDisplayVersion().getTotalCost()).isEqualByComparingTo("123.45");
+    assertThat(saved.getDataQualityStatus()).isEqualTo("WARNING");
+    assertThat(response.getCostItems()).anySatisfy(row ->
+        assertThat(row.getRemark()).contains("按OA事业部"));
+    verify(versionMapper, never()).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
+    verify(workspaceService, never()).update(any(), any(Integer.class));
+    verify(cuAdjustmentCalcService, never()).calculate(any());
+  }
+
+  @Test
+  void resolvedFallbackDoesNotHideRealWarningInSameRemark() {
+    var costs = resolvedFallbackCosts();
+    costs.get(1).setRemark(costs.get(1).getRemark() + "；来源已过期，请财务关注");
+    savedQualityVersion(costs);
+    var quality = service.getCostRun("OA-001", 101L, CURRENT_PERIOD).getCurrentDisplayVersion();
+    assertThat(quality.getDataQualityStatus()).isEqualTo("WARNING");
+    assertThat(quality.getDataQualityWarningCount()).isEqualTo(1);
+    assertThat(quality.getDataQualitySummary()).contains("来源已过期").doesNotContain("公共净损失率缺失");
+  }
+
+  @Test
+  void missingRequiredRateCannotBeHiddenByOldZeroAmount() {
+    var costs = resolvedFallbackCosts();
+    costs.add(storedCost("WATER_POWER", "0", null, null));
+    savedQualityVersion(costs);
+    var quality = service.getCostRun("OA-001", 101L, CURRENT_PERIOD).getCurrentDisplayVersion();
+    assertThat(quality.getDataQualityStatus()).isEqualTo("WARNING");
+    assertThat(quality.getDataQualitySummary()).contains("WATER_POWER", "费率缺失");
+  }
+
+  @Test
+  void missingRequiredAmountAndInvalidOptionalConfigurationRemainWarnings() {
+    var costs = resolvedFallbackCosts();
+    costs.add(storedCost("SALARY", null, null, null));
+    costs.get(costs.size() - 2).setRemark("费用配置异常");
+    savedQualityVersion(costs);
+    var quality = service.getCostRun("OA-001", 101L, CURRENT_PERIOD).getCurrentDisplayVersion();
+    assertThat(quality.getDataQualityStatus()).isEqualTo("WARNING");
+    assertThat(quality.getDataQualitySummary()).contains("SALARY 金额为空", "费用配置异常");
+  }
+
+  private QuoteCostRunVersion savedQualityVersion(List<CostRunCostItem> costs) {
+    var version = version(88L, "SAVED-1", "SUCCESS", "TOP-A");
+    version.setTotalCost(new BigDecimal("123.45"));
+    version.setPartItemCount(0);
+    version.setCostItemCount(costs.size());
+    version.setDataQualityStatus("WARNING");
+    version.setDataQualityWarningCount(12);
+    version.setDataQualitySummary("旧的误报警告");
+    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(null, version);
+    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(version));
+    when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(costs);
+    return version;
+  }
+
+  private List<CostRunCostItem> resolvedFallbackCosts() {
+    var costs = new java.util.ArrayList<CostRunCostItem>();
+    costs.add(storedCost("TOTAL", "123.45", null, null));
+    costs.add(storedCost("LOSS", "0.2", "0.01", "公共净损失率缺失，采用已审批补录版本 154"));
+    costs.add(storedCost("MANUFACTURE", "0.6", "0.15",
+        "成品料号 1145100050625 未找到 U9 主档，按OA事业部 电子产品事业部 匹配制造费用率"));
+    costs.add(storedCost("OVERHAUL", "0.04", "0.004304",
+        "成品料号 1145100050625 未找到 U9 主档，按OA事业部 电子产品事业部 匹配部门经费"));
+    for (String code : List.of("OTHER_EXP_TECH_MOULD", "OTHER_EXP_TECH_CERTIFICATION",
+        "OTHER_EXP_TECH_DEPRECIATION", "OTHER_EXP_TECH_TOOLING", "DEPT_OTHER")) {
+      costs.add(storedCost(code, null, null, null));
+    }
+    return costs;
+  }
+
+  private CostRunCostItem storedCost(String code, String amount, String rate, String remark) {
+    var cost = new CostRunCostItem();
+    cost.setCostCode(code);
+    cost.setAmount(amount == null ? null : new BigDecimal(amount));
+    cost.setRate(rate == null ? null : new BigDecimal(rate));
+    cost.setRemark(remark);
+    return cost;
+  }
+
+  @Test
   @DisplayName("提交后上游输入修订发生变化时回滚结果")
   void runToSuccessRejectsChangedSourceRevision() {
     CostInputRevisionService inputRevisionService = mock(CostInputRevisionService.class);

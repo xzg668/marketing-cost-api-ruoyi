@@ -45,7 +45,7 @@ class FinanceEffectivePriceIntegrationTest {
           "V311__original_linked_expression_capacity.sql",
           "V325__finance_effective_price.sql",
           "V326__original_workbook_source.sql",
-          "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql");
+          "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql", "V356__inquiry_price_sources.sql");
   static SqlSessionTemplate sql;
   static DataSourceTransactionManager manager;
   static JdbcTemplate jdbc;
@@ -146,7 +146,8 @@ class FinanceEffectivePriceIntegrationTest {
             manager,
             mock(FinanceEffectivePriceService.class),
             com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(sql, manager, json),
-            com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json));
+            com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json),
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, manager, json));
     snapshots = new OriginalLinkedRuleSnapshot(json);
     calculator =
         mock(
@@ -638,6 +639,7 @@ class FinanceEffectivePriceIntegrationTest {
     var bRatio = FinanceEffectivePriceSelectionTest.ratio("B", "0.5");
     bRatio.setMaterialCode("MAT");
     when(ratioMapper.selectList(any())).thenReturn(List.of(aRatio, bRatio));
+    stubBatchRatios(ratioMapper);
     var supplierPrices = new SupplierPriceSelectionService(ratioMapper, decisions);
     var oaMapper = mock(OaFormMapper.class);
     var form = new OaForm();
@@ -726,6 +728,7 @@ class FinanceEffectivePriceIntegrationTest {
     var bRatio = FinanceEffectivePriceSelectionTest.ratio("B", "0.5");
     bRatio.setMaterialCode("MAT");
     when(ratioMapper.selectList(any())).thenReturn(List.of(aRatio, bRatio));
+    stubBatchRatios(ratioMapper);
     var suppliers =
         new SupplierPriceSelectionService(ratioMapper, mock(SupplierPriceDecisionMapper.class));
     var bands = mock(PriceRangeItemMapper.class);
@@ -828,6 +831,17 @@ class FinanceEffectivePriceIntegrationTest {
     a.setFormulaExpr("[cu]+3");
     assertThatThrownBy(() -> service.require(a, base.financial())).hasMessageContaining("来源已变化");
     assertThat(results.selectCount(null)).isOne();
+  }
+
+  private static void stubBatchRatios(SupplierSupplyRatioMapper mapper) {
+    // Current production selection reads relationships in batches. Keep the same changing
+    // business inputs used by these tests, through that actual mapper boundary.
+    when(mapper.currentRelations(anyString(),any(),any())).thenAnswer(call ->
+        mapper.selectList(null).stream().map(row -> {
+          var result=new com.sanhua.marketingcost.entity.monthly.MonthlySupplierRatioInput();
+          org.springframework.beans.BeanUtils.copyProperties(row,result);
+          result.setRequestedMaterialCode(row.getMaterialCode());return result;
+        }).toList());
   }
 
   @Test
@@ -1056,7 +1070,8 @@ class FinanceEffectivePriceIntegrationTest {
             manager,
             service,
             com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(sql, manager, json),
-            com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json));
+            com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json),
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, manager, json));
   }
 
   OriginalLinkedImportService linkedImporter(FinanceEffectivePriceService generation) {

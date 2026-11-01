@@ -4,12 +4,9 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.dto.quotebom.QuoteProductTypeResolveResult;
-import com.sanhua.marketingcost.enums.QuoteProductType;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
-import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
@@ -20,12 +17,11 @@ import org.junit.jupiter.api.Test;
 
 class TechnicalDataPackageSourceCheckTest {
   private final TechnicalDataPackageSourceQuery sources = mock(TechnicalDataPackageSourceQuery.class);
-  private final QuoteProductTypeResolveService types = mock(QuoteProductTypeResolveService.class);
   private final ElectronicDrawingWorkflowContextPort drawings = mock(ElectronicDrawingWorkflowContextPort.class);
   private final QuoteBomSupplementDetailMapper details = mock(QuoteBomSupplementDetailMapper.class);
   private final MaterialMasterRawMapper materials = mock(MaterialMasterRawMapper.class);
   private final TechnicalDataSharedModules shared = mock(TechnicalDataSharedModules.class);
-  private final TechnicalDataPackageSourceCheck check = new TechnicalDataPackageSourceCheck(sources, types,
+  private final TechnicalDataPackageSourceCheck check = new TechnicalDataPackageSourceCheck(sources,
       drawings, details, materials, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), shared);
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L, 2L, "OA", "2026-09", "COMMERCIAL",
       "PRODUCT", "产品", null, null, "210", "COMMERCIAL", LocalDate.of(2026, 9, 1), LocalDateTime.now());
@@ -38,15 +34,14 @@ class TechnicalDataPackageSourceCheckTest {
     assertThat(check.check(context, TechnicalDataAvailability.AVAILABLE).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
   }
 
-  @Test void bareProductCanFillPackagingWithoutWaitingForDrawing() {
-    when(types.resolve("PRODUCT", "COMMERCIAL")).thenReturn(new QuoteProductTypeResolveResult("PRODUCT", QuoteProductType.BARE, "11", null, null, null, null));
+  @Test void noU9BomCanSupplementPackagingWithoutRootTypeOrDrawing() {
     assertThat(check.check(context, TechnicalDataAvailability.MISSING).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    assertThat(check.check(context, TechnicalDataAvailability.ERROR).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
   }
 
-  @Test void nonBareUnknownDrawingDoesNotCreateSpeculativePackagingTodo() {
-    when(types.resolve("PRODUCT", "COMMERCIAL")).thenReturn(new QuoteProductTypeResolveResult("PRODUCT", QuoteProductType.NON_BARE, "12", null, null, null, null));
-    assertThat(check.check(context, TechnicalDataAvailability.MISSING).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
-    assertThat(check.check(context, TechnicalDataAvailability.ERROR).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
+  @Test void unconfirmedU9DoesNotBecomeMissingPackaging() {
+    assertThat(check.check(context, TechnicalDataAvailability.UNCONFIRMED).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
+    verifyNoInteractions(drawings, details, materials, sources);
   }
 
   @Test void sharedDrawingUsesOriginalQuoteItemAndMonthForPackageAssessment() {
@@ -107,8 +102,7 @@ class TechnicalDataPackageSourceCheckTest {
         .thenReturn(List.of(material));
   }
 
-  @Test void bareClassificationDoesNotOverrideAnAlreadyVerifiedDrawingPackage() {
-    when(types.resolve("PRODUCT", "COMMERCIAL")).thenReturn(new QuoteProductTypeResolveResult("PRODUCT", QuoteProductType.BARE, "11", null, null, null, null));
+  @Test void alreadyVerifiedDrawingPackageIsReusedWithoutProductTypeClassification() {
     var drawing = new ElectronicDrawingWorkContext(11L, 1, 21L, 42L, 1L, 2L,
         "TASK", "OA", "PRODUCT", null, "产品", null, null, "BARE", "COMMERCIAL", "2026-09",
         "210", "COMMERCIAL", "COMMERCIAL", "210", true, true, "READY_FOR_COSTING", "COSTING",

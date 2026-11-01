@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
+import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository;
 import com.sanhua.marketingcost.mapper.*;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -13,6 +14,30 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class TechnicalDataRequirementRefreshServiceTest {
+  @Test void removingUnassignedGapRefreshesActualRecipientStateWithoutUnlockingSubmittedModules() {
+    var mapper = mock(QuoteTechModuleMapper.class);
+    var tasks = mock(QuoteTechTaskMapper.class);
+    var jdbc = mock(JdbcTemplate.class);
+    var recipients = mock(TechnicalDataOaRecipientRepository.class);
+    var task = new QuoteTechTask(); task.setId(6L); task.setTaskStatus("PENDING");
+    task.setTaskVersion(4); task.setApplicableOrgCode("210");
+    task.setOaAssignmentVersion(1); task.setExternalTaskStatus("PUBLISHED");
+    var drawing = new QuoteTechModule(); drawing.setId(8L); drawing.setModuleType("DRAWING_BOM");
+    drawing.setRequiredFlag(1); drawing.setModuleStatus("PENDING"); drawing.setRowVersion(1);
+    drawing.setSourceAvailability("MISSING"); drawing.setSourceReference("old-source");
+    var ready = new TechnicalDataModuleRequirement("DRAWING_BOM", false, "DRAWING_SOURCE_AVAILABLE", "图库已发布",
+        TechnicalDataAvailability.AVAILABLE, "published-source", LocalDateTime.now());
+    when(tasks.selectActiveForUpdate(168L,"2026-10")).thenReturn(task);
+    when(mapper.selectByTaskId(6L)).thenReturn(List.of(drawing));
+    when(mapper.refreshRequirement(8L,1,ready,"NOT_REQUIRED")).thenReturn(1);
+    var service = new TechnicalDataRequirementRefreshService(mapper,jdbc,tasks,new OaMessageCodec(new ObjectMapper()),recipients);
+    service.reconcile(168L,"2026-10","210",List.of(ready));
+    var order = inOrder(mapper,recipients);
+    order.verify(mapper).refreshRequirement(8L,1,ready,"NOT_REQUIRED");
+    order.verify(recipients).refreshTask(6L);
+    verify(jdbc,never()).update(contains("task_status='PENDING'"),anyLong());
+  }
+
   @Test void registeredPostBomGapDoesNotUnlockOrReplaceSubmittedModules() {
     var mapper = mock(QuoteTechModuleMapper.class);
     var tasks = mock(QuoteTechTaskMapper.class);
@@ -31,7 +56,7 @@ class TechnicalDataRequirementRefreshServiceTest {
     when(tasks.selectActiveForUpdate(168L,"2026-10")).thenReturn(task);
     when(mapper.selectByTaskId(6L)).thenReturn(List.of(submitted,price));
     when(mapper.refreshRequirement(8L,0,gap,"PENDING")).thenReturn(1);
-    var service=new TechnicalDataRequirementRefreshService(mapper,jdbc,tasks,new OaMessageCodec(new ObjectMapper()));
+    var service=new TechnicalDataRequirementRefreshService(mapper,jdbc,tasks,new OaMessageCodec(new ObjectMapper()),mock(TechnicalDataOaRecipientRepository.class));
     assertThat(service.reconcile(168L,"2026-10","210",List.of(gap))).contains("新增", "原已提交资料保留");
     verify(mapper).refreshRequirement(8L,0,gap,"PENDING");
     verify(mapper,never()).refreshRequirement(eq(7L),anyInt(),any(),anyString());
@@ -54,7 +79,7 @@ class TechnicalDataRequirementRefreshServiceTest {
     var unknown=new QuoteTechModule(); unknown.setId(8L); unknown.setModuleType("PRICE"); unknown.setModuleStatus("PENDING");
     when(tasks.selectActiveForUpdate(168L,"2026-10")).thenReturn(task);
     when(mapper.selectByTaskId(6L)).thenReturn(List.of(owned,unknown));
-    var service=new TechnicalDataRequirementRefreshService(mapper,jdbc,tasks,new OaMessageCodec(new ObjectMapper()));
+    var service=new TechnicalDataRequirementRefreshService(mapper,jdbc,tasks,new OaMessageCodec(new ObjectMapper()),mock(TechnicalDataOaRecipientRepository.class));
     var facts=List.of(new TechnicalDataModuleRequirement("MANUFACTURING",true,"MISSING","原模块",
         TechnicalDataAvailability.MISSING,"changed",LocalDateTime.now()),new TechnicalDataModuleRequirement("PRICE",false,
         "WAIT","待检查",TechnicalDataAvailability.UNCONFIRMED,null,LocalDateTime.now()));
@@ -71,7 +96,7 @@ class TechnicalDataRequirementRefreshServiceTest {
     task.setApplicableOrgCode("210"); task.setOaAssignmentVersion(0);
     when(tasks.selectActiveForUpdate(168L, "2026-09")).thenReturn(task);
     when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(6L), eq(6L), eq(6L))).thenReturn(false);
-    var service = new TechnicalDataRequirementRefreshService(modules, jdbc, tasks, new OaMessageCodec(new ObjectMapper()));
+    var service = new TechnicalDataRequirementRefreshService(modules, jdbc, tasks, new OaMessageCodec(new ObjectMapper()),mock(TechnicalDataOaRecipientRepository.class));
 
     assertThat(service.reconcile(168L, "2026-09", "220", List.of())).contains("210", "220", "旧空任务已作废");
     verify(jdbc).update(contains("UPDATE lp_quote_tech_product SET active_flag=0"), eq(6L));
@@ -87,7 +112,7 @@ class TechnicalDataRequirementRefreshServiceTest {
     task.setApplicableOrgCode("210");
     when(tasks.selectActiveForUpdate(168L, "2026-09")).thenReturn(task);
     when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(6L), eq(6L), eq(6L))).thenReturn(true);
-    var service = new TechnicalDataRequirementRefreshService(modules, jdbc, tasks, new OaMessageCodec(new ObjectMapper()));
+    var service = new TechnicalDataRequirementRefreshService(modules, jdbc, tasks, new OaMessageCodec(new ObjectMapper()),mock(TechnicalDataOaRecipientRepository.class));
     assertThat(service.reconcile(168L, "2026-09", "220", List.of())).contains("已保留");
     task.setTaskStatus("APPROVED");
     assertThat(service.reconcile(168L, "2026-09", "220", List.of())).contains("已保留");
@@ -105,7 +130,7 @@ class TechnicalDataRequirementRefreshServiceTest {
     module.setSourceAvailability("MISSING"); module.setSourceReference("{\"source\":\"U9\",\"snapshotId\":1}");
     when(modules.selectByTaskId(1L)).thenReturn(List.of(module));
     var service = new TechnicalDataRequirementRefreshService(modules, mock(JdbcTemplate.class),
-        mock(QuoteTechTaskMapper.class), new OaMessageCodec(new ObjectMapper()));
+        mock(QuoteTechTaskMapper.class), new OaMessageCodec(new ObjectMapper()),mock(TechnicalDataOaRecipientRepository.class));
     service.refresh(task, List.of(new TechnicalDataModuleRequirement("PROFILE", true, "MISSING", "缺少",
         TechnicalDataAvailability.MISSING, "{\"snapshotId\":1,\"source\":\"U9\"}", LocalDateTime.now())));
     verify(modules, never()).refreshRequirement(anyLong(), anyInt(), any(), anyString());

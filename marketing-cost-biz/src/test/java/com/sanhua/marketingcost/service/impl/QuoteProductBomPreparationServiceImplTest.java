@@ -39,6 +39,8 @@ import com.sanhua.marketingcost.service.PackageComponentStructureReadService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.SupplementBomReadService;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -55,6 +57,8 @@ class QuoteProductBomPreparationServiceImplTest {
   static void initTableInfo() {
     TableInfoHelper.initTableInfo(
         new MapperBuilderAssistant(new MybatisConfiguration(), ""), QuoteBomPreparationRecord.class);
+    TableInfoHelper.initTableInfo(
+        new MapperBuilderAssistant(new MybatisConfiguration(), ""), QuoteBomStatus.class);
   }
 
   private OaFormItemMapper itemMapper;
@@ -66,6 +70,7 @@ class QuoteProductBomPreparationServiceImplTest {
   private SupplementBomReadService supplementBomReadService;
   private PackageComponentStructureReadService packageReadService;
   private QuoteProductBomPreparationServiceImpl service;
+  private CurrentU9BomGateway originalBom;
 
   @BeforeEach
   void setUp() {
@@ -77,6 +82,8 @@ class QuoteProductBomPreparationServiceImplTest {
     formalBomReadService = mock(FormalBomReadService.class);
     supplementBomReadService = mock(SupplementBomReadService.class);
     packageReadService = mock(PackageComponentStructureReadService.class);
+    originalBom = mock(CurrentU9BomGateway.class);
+    when(originalBom.read(any())).thenReturn(CurrentU9BomResult.available("U9", "V1", "batch", 1));
     service =
         new QuoteProductBomPreparationServiceImpl(
             itemMapper,
@@ -87,7 +94,7 @@ class QuoteProductBomPreparationServiceImplTest {
             formalBomReadService,
             supplementBomReadService,
             packageReadService,
-            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)));
+            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)), originalBom);
 
     when(statusMapper.selectOne(any())).thenReturn(null);
     when(preparationRecordMapper.selectOne(any())).thenReturn(null);
@@ -105,6 +112,61 @@ class QuoteProductBomPreparationServiceImplTest {
             })
         .when(preparationRecordMapper)
         .insert(any(QuoteBomPreparationRecord.class));
+  }
+
+  @Test
+  void noU9BomAndMissingRootMasterCanUsePublishedDrawingWithoutProductTypeLookup() {
+    stubQuoteLine("NEW-ED", "2026-05");
+    when(originalBom.read(any())).thenReturn(CurrentU9BomResult.notFound("无 U9 BOM"));
+    when(productTypeResolveService.resolve("NEW-ED", "COMMERCIAL"))
+        .thenReturn(type("NEW-ED", QuoteProductType.DATA_MISSING));
+    var status = new QuoteBomStatus();
+    status.setId(301L); status.setOaFormItemId(10L); status.setCostPeriodMonth("2026-05");
+    status.setBomSource("ELECTRONIC_DRAWING_BOM");
+    when(statusMapper.selectOne(any())).thenReturn(status);
+    when(supplementBomReadService.readApproved("NEW-ED", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"))
+        .thenReturn(new SupplementBomReadResult("NEW-ED", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05",
+            true, 901L, "QCPT-ED", "ELECTRONIC_DRAWING_PDF", null, List.of(sourceLine("NEW-ED", 1)), null));
+
+    var preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.ready()).isTrue();
+    assertThat(preview.abnormal()).isFalse();
+    assertThat(preview.bodyBomLineCount()).isOne();
+    assertThat(preview.needPackage()).isFalse();
+    verifyNoInteractions(productTypeResolveService, packageReadService);
+  }
+
+  @Test
+  void noU9BomWithoutPublishedStructureRequestsFullSupplementInsteadOfRootMaster() {
+    stubQuoteLine("NEW-NO-BOM", "2026-05");
+    when(originalBom.read(any())).thenReturn(CurrentU9BomResult.notFound("无 U9 BOM"));
+    when(productTypeResolveService.resolve("NEW-NO-BOM", "COMMERCIAL"))
+        .thenReturn(type("NEW-NO-BOM", QuoteProductType.DATA_MISSING));
+    stubFormalRead("NEW-NO-BOM", "2026-05", formalMissing("NEW-NO-BOM", "2026-05"));
+    when(supplementBomReadService.readApproved("NEW-NO-BOM", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"))
+        .thenReturn(supplementMissing("NEW-NO-BOM", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"));
+
+    var preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.abnormal()).isFalse();
+    assertThat(preview.needTechnicianTask()).isTrue();
+    assertThat(preview.missingScopes()).containsExactly("NON_BARE_FULL_BOM");
+    verifyNoInteractions(productTypeResolveService, packageReadService);
+  }
+
+  @Test
+  void unavailableU9QueryCannotBeTreatedAsNoBomOrBypassTypeValidation() {
+    stubQuoteLine("QUERY-FAILED", "2026-05");
+    for (var result : List.of(CurrentU9BomResult.timeout("U9 查询超时"),
+        CurrentU9BomResult.error("U9 查询错误"), CurrentU9BomResult.organizationMismatch("U9 组织不符"),
+        CurrentU9BomResult.dataEmpty("U9 数据不完整"))) {
+      when(originalBom.read(any())).thenReturn(result);
+      org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.prepareByOaFormItem(10L))
+          .isInstanceOf(com.sanhua.marketingcost.service.ingest.QuoteIngestException.class)
+          .hasMessage(result.message());
+    }
+    verifyNoInteractions(productTypeResolveService, formalBomReadService, supplementBomReadService, packageReadService);
   }
 
   @Test
@@ -142,7 +204,7 @@ class QuoteProductBomPreparationServiceImplTest {
     assertThat(preview.ready()).isTrue();
     assertThat(preview.quoteProductCode()).isEqualTo("MODEL:MODEL-NEW-10");
     assertThat(preview.productType()).isEqualTo("NON_BARE");
-    verifyNoInteractions(productTypeResolveService);
+    verifyNoInteractions(productTypeResolveService, originalBom);
     ArgumentCaptor<QuoteBomPreparationRecord> recordCaptor =
         ArgumentCaptor.forClass(QuoteBomPreparationRecord.class);
     verify(preparationRecordMapper).insert(recordCaptor.capture());
@@ -229,7 +291,7 @@ class QuoteProductBomPreparationServiceImplTest {
     assertThat(legacy.getPriceOrgCode()).isEqualTo("210");
     assertThat(legacy.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     verify(preparationRecordMapper, never()).insert(any(QuoteBomPreparationRecord.class));
-    verify(preparationRecordMapper, times(1)).updateById(legacy);
+    verify(preparationRecordMapper, times(1)).update(eq(legacy), any(Wrapper.class));
     ArgumentCaptor<QuoteBomStatus> statusCaptor = ArgumentCaptor.forClass(QuoteBomStatus.class);
     verify(statusMapper).updateById(statusCaptor.capture());
     assertThat(statusCaptor.getValue().getPreparationRecordId()).isEqualTo(401L);

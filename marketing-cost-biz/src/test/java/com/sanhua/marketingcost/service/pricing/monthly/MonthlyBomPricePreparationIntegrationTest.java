@@ -63,7 +63,7 @@ class MonthlyBomPricePreparationIntegrationTest {
     assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for (String file : List.of("V342__monthly_material_price_storage.sql", "V344__monthly_material_price_single_table.sql")) {
+    for (String file : List.of("V342__monthly_material_price_storage.sql", "V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+file),"/tmp/patch.sql");
       var applied = MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp06_scope_test < /tmp/patch.sql");
       assertThat(applied.getExitCode()).withFailMessage(applied.getStderr()).isZero();

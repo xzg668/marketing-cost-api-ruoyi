@@ -766,7 +766,10 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       return TAB_STALE;
     }
     if (workspace != null
-        && "WAIT_BOM".equalsIgnoreCase(trimToNull(workspace.getWorkspaceStatus()))) {
+        && ("WAIT_BOM".equalsIgnoreCase(trimToNull(workspace.getWorkspaceStatus()))
+            || ("SYSTEM_FAILED".equalsIgnoreCase(trimToNull(workspace.getWorkspaceStatus()))
+                && "QUOTE_BOM".equalsIgnoreCase(trimToNull(workspace.getCurrentStep()))))) {
+      // 本轮组树失败时旧结算行仍保留，不能据此继续预览本轮尚未就绪的 BOM。
       return TAB_BLOCKED;
     }
     if (rows == null || rows.isEmpty()) {

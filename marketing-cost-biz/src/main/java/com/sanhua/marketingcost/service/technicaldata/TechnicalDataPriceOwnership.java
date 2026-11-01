@@ -39,7 +39,8 @@ public class TechnicalDataPriceOwnership {
       long current = jdbc.queryForObject("SELECT owner_module_id FROM lp_quote_tech_price_claim WHERE material_code=? FOR UPDATE", Long.class, item.materialNo());
       var owner = find(item.materialNo());
       if (current != moduleId) {
-        if (!"CANCELLED".equals(owner.taskStatus()) || TechnicalDataSubmissionState.submitted(owner.moduleStatus())) {
+        if ((!"CANCELLED".equals(owner.taskStatus()) || TechnicalDataSubmissionState.submitted(owner.moduleStatus()))
+            && !unassignedEmpty(owner.moduleId())) {
           throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.SHARED_MODULE_CONFLICT,
               item.materialNo() + " 已由" + Objects.toString(owner.assigneeName(), "原技术员") + "办理，请查看原任务 " + owner.taskId() + "，不能重复补价");
         }
@@ -52,5 +53,19 @@ public class TechnicalDataPriceOwnership {
         throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.VERSION_CONFLICT, item.materialNo() + " 的适用组织或单位已变化，请核实原补录资料");
       }
     }
+  }
+
+  private boolean unassignedEmpty(long moduleId) {
+    // Lock the current module/task state as well as the claim before transferring it.
+    return !jdbc.queryForList("""
+        SELECT m.id FROM lp_quote_tech_module m
+        JOIN lp_quote_tech_product p ON p.id=m.product_id
+        JOIN lp_quote_tech_task t ON t.id=p.task_id
+        WHERE m.id=? AND m.module_type='PRICE' AND m.module_status='PENDING'
+          AND m.assignee_user_id IS NULL AND m.current_version_id IS NULL
+          AND t.task_status='UNASSIGNED' AND t.active_flag=1
+          AND p.product_status='PENDING' AND p.active_flag=1 AND p.effective_version_id IS NULL
+        FOR UPDATE
+        """, moduleId).isEmpty();
   }
 }

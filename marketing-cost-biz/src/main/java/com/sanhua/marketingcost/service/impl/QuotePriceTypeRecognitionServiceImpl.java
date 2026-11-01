@@ -756,6 +756,8 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     return switch (sourceKind) {
       case "PURCHASE_FIXED", "TECH_FIXED" -> "固定价";
       case "ODS_ORDER" -> "订单价";
+      case "INVOICE" -> "发票价";
+      case "INQUIRY" -> "询价";
       case "ODS_TIER" -> "阶梯价";
       case "LINKED", "LINKED_LEGACY" -> "联动价";
       case "RANGE_QTY", "RANGE_FACTOR", "RANGE_LEGACY_FACTOR" -> "区间价";

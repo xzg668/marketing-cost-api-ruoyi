@@ -14,6 +14,7 @@ public interface MonthlyPriceQueryMapper {
       """
 FROM lp_material_monthly_price FORCE INDEX (idx_monthly_price_query)
 WHERE business_unit_type=#{bu} AND pricing_month=#{q.month}
+""" + " AND " + MonthlyPriceStorageMapper.CURRENT + "\n" + """
 <if test="q.materialCode != null">AND material_code=#{q.materialCode} AND BINARY material_code=BINARY #{q.materialCode}</if>
 <if test="q.organization != null">AND (organization_mask &amp; #{q.organizationMask}) != 0</if>
 <if test="q.pricingType != null">AND pricing_type=#{q.pricingType}</if>

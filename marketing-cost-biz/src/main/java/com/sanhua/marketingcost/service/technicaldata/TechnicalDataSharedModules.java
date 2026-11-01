@@ -27,13 +27,13 @@ public class TechnicalDataSharedModules {
     var existing = repository.existing(identity, type);
     if (existing.size() > 1) throw conflict("同一产品的" + label(type) + "已有重复办理记录，请核对原任务；不能自动选择或覆盖");
     // 首次接入唯一约束时，先登记已在办理的旧任务，不让新任务抢占。
-    if (ownerId == current.moduleId() && !existing.isEmpty() && existing.getFirst().moduleId() != ownerId) {
+    if (!existing.isEmpty() && existing.getFirst().moduleId() != current.moduleId()) {
       throw occupied(existing.getFirst(), type);
     }
     if (ownerId == current.moduleId()) return;
     var owner = repository.find(identity, type);
     if (owner == null) throw conflict("原补录来源不存在，请核对资料");
-    if ("CANCELLED".equals(owner.taskStatus()) && !TechnicalDataSubmissionState.submitted(owner.versionStatus())) {
+    if (canRelease(owner)) {
       repository.transfer(identity, type, ownerId, current.moduleId());
       return;
     }
@@ -46,11 +46,21 @@ public class TechnicalDataSharedModules {
     var existing = repository.existing(identity, type);
     if (existing.size() > 1) throw conflict("同一产品的" + label(type) + "已有重复办理记录，请核对原任务");
     var owner = repository.find(identity, type);
-    if (owner == null) return existing.isEmpty() ? null : existing.getFirst();
+    // 未分派、未填报的空模块及已取消未提交的占用不能充当资料来源。
+    // 正式分派时才由 requireOwnership 在同一事务中转移，查询不改历史。
+    if (owner == null || canRelease(owner)) {
+      return existing.isEmpty() ? null : existing.getFirst();
+    }
     if (!existing.isEmpty() && !Objects.equals(owner.moduleId(), existing.getFirst().moduleId())) {
       throw conflict("补录来源与原办理任务不一致，请核对资料");
     }
     return owner;
+  }
+
+  private boolean canRelease(TechnicalDataSharedModuleRepository.Owner owner) {
+    return "CANCELLED".equals(owner.taskStatus()) && !TechnicalDataSubmissionState.submitted(owner.versionStatus())
+        || "UNASSIGNED".equals(owner.taskStatus()) && owner.assigneeId() == null && owner.versionId() == null
+            && ("PENDING".equals(owner.moduleStatus()) || "NOT_REQUIRED".equals(owner.moduleStatus()));
   }
 
   private TechnicalDataTaskException occupied(TechnicalDataSharedModuleRepository.Owner owner, String type) {

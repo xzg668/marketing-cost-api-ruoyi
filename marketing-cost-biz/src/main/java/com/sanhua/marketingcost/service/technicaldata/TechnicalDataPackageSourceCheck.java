@@ -1,11 +1,9 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
-import com.sanhua.marketingcost.enums.QuoteProductType;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
-import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
 import java.util.Objects;
@@ -14,21 +12,20 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-/** 只有确实缺少包装关系才分派；未取得图库或组树失败不伪装成包装缺失。 */
+/** 无 U9 BOM 时按实际补录包装检查；查询或组树失败不伪装成包装缺失。 */
 @Service
 public class TechnicalDataPackageSourceCheck {
   private final TechnicalDataPackageSourceQuery sources;
-  private final QuoteProductTypeResolveService productTypes;
   private final ElectronicDrawingWorkflowContextPort drawings;
   private final QuoteBomSupplementDetailMapper details;
   private final MaterialMasterRawMapper materials;
   private final OaMessageCodec json;
   private final TechnicalDataSharedModules shared;
 
-  public TechnicalDataPackageSourceCheck(TechnicalDataPackageSourceQuery sources, QuoteProductTypeResolveService productTypes,
+  public TechnicalDataPackageSourceCheck(TechnicalDataPackageSourceQuery sources,
       ElectronicDrawingWorkflowContextPort drawings, QuoteBomSupplementDetailMapper details,
       MaterialMasterRawMapper materials, OaMessageCodec json, TechnicalDataSharedModules shared) {
-    this.sources = sources; this.productTypes = productTypes; this.drawings = drawings;
+    this.sources = sources; this.drawings = drawings;
     this.details = details; this.materials = materials; this.json = json; this.shared = shared;
   }
 
@@ -42,7 +39,9 @@ public class TechnicalDataPackageSourceCheck {
             available ? "沿用本产品正式 BOM 包装关系" : missingMessage(packaging.missingParents()),
             json.write(packaging.sources().stream().map(row -> row.evidence()).toList()));
       }
-      var type = productTypes.resolve(context.productCode(), context.materialOrganizationCode());
+      if (original != TechnicalDataAvailability.MISSING) {
+        return fact(context, TechnicalDataAvailability.UNCONFIRMED, "U9 原始 BOM 尚未核实，请先检查来源", null);
+      }
       var owner = shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM");
       boolean sharedSource = owner != null && (!Objects.equals(owner.quoteItemId(), context.oaFormItemId())
           || !Objects.equals(owner.accountingMonth(), context.accountingMonth()));
@@ -56,10 +55,8 @@ public class TechnicalDataPackageSourceCheck {
           context.businessUnitType(), context.priceOrgCode(),
           sharedSource ? owner.accountingMonth() : context.accountingMonth());
       if (drawing == null || drawing.sourceVersionId() == null || drawing.compositionFingerprint() == null) {
-        if (type != null && type.productType() == QuoteProductType.BARE) {
-          return fact(context, TechnicalDataAvailability.MISSING, "本产品为裸品，需要补录本次包装", "BARE:" + context.productCode());
-        }
-        return fact(context, TechnicalDataAvailability.UNCONFIRMED, "先核实本产品 BOM，再判断是否缺包装；已有包装草稿保留", null);
+        return fact(context, TechnicalDataAvailability.MISSING,
+            "本产品无 U9 原始 BOM，需要补录本次包装", "U9_NOT_FOUND:" + context.productCode());
       }
       var rows = details.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<com.sanhua.marketingcost.entity.QuoteBomSupplementDetail>lambdaQuery()
           .eq(com.sanhua.marketingcost.entity.QuoteBomSupplementDetail::getSupplementVersionId, drawing.sourceVersionId()));

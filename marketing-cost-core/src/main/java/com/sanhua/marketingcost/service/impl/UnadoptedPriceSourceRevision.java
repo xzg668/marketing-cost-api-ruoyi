@@ -13,6 +13,38 @@ final class UnadoptedPriceSourceRevision {
 
   UnadoptedPriceSourceRevision(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
+  String invoices(String unit,Collection<String> materials) {
+    if(materials.isEmpty())return hash(jdbc.queryForList("SELECT material_code,MAX(batch_id) revision FROM lp_invoice_price WHERE business_unit_type=? GROUP BY material_code ORDER BY material_code",unit));
+    return hash(scoped("lp_invoice_price","material_code",materials,"business_unit_type=?",unit));
+  }
+
+  String inquiries(String unit,String month,Collection<String> materials) {
+    var observed=new ArrayList<Object>();
+    var args=new ArrayList<Object>();args.add(month);args.add(unit);args.add(month);
+    String matching="";
+    if(!materials.isEmpty()) {
+      var archive=scoped("lp_material_master_raw","material_code",materials,"active_flag=1");
+      observed.add(archive);
+      var codes=new TreeSet<String>();var specifications=new TreeSet<String>();
+      materials.forEach(code->codes.add(com.sanhua.marketingcost.service.pricing.inquiry.InquiryNames.normalize(code)));
+      for(var row:archive)for(String field:List.of("material_model","material_spec")) {
+        String name=com.sanhua.marketingcost.service.pricing.inquiry.InquiryNames.normalize(Objects.toString(value(row,field),""));
+        if(!name.isBlank())specifications.add(name);
+      }
+      matching=" AND (r.material_key IN ("+placeholders(codes.size())+")";args.addAll(codes);
+      if(!specifications.isEmpty()){matching+=" OR r.specification_key IN ("+placeholders(specifications.size())+")";args.addAll(specifications);}
+      matching+=")";
+    }
+    var rules=jdbc.queryForList("SELECT r.id,r.identity_key,r.batch_id,r.price_month,MAX(p.id) effective_revision "
+        +"FROM lp_inquiry_rule r LEFT JOIN lp_inquiry_effective_price p ON p.rule_id=r.id AND p.price_month=? "
+        +"WHERE r.business_unit_type=? AND r.price_month<=?"+matching
+        +" GROUP BY r.id,r.identity_key,r.batch_id,r.price_month ORDER BY r.id",args.toArray());
+    observed.add(rules);
+    if(!rules.isEmpty())observed.add(jdbc.queryForList("SELECT DISTINCT supplier_code,supplier_name FROM lp_supplier_supply_ratio "
+        +"WHERE business_unit_type=? AND is_active=1 AND deleted=0 ORDER BY supplier_code,supplier_name",unit));
+    return hash(observed);
+  }
+
   /** Refresh missing candidates on latest-partition replacement; adopted monthly inputs never call this. */
   String ods(String unit,Collection<String> materials) {
     if(!"COMMERCIAL".equals(unit))return "NOT_APPLICABLE";

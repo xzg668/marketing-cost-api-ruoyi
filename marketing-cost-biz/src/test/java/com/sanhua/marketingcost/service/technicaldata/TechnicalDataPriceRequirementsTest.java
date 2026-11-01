@@ -160,6 +160,44 @@ class TechnicalDataPriceRequirementsTest {
     assertThat(result.issues()).contains("SOLDER：来源校验失败");
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"PENDING", "WAIT_IMPORT"})
+  void supplierConfirmationDoesNotBecomeATechnicianPriceDemand(String reviewStatus) {
+    var prepared = bomGaps();
+    var scope = new com.sanhua.marketingcost.service.pricing.SupplierPriceScope(
+        "COMMERCIAL", "OA", null, "2026-09", java.time.LocalDate.of(2026, 9, 1), "210", "GLASS", "FIXED");
+    prepared.setSupplierPriceReviews(List.of(new com.sanhua.marketingcost.service.pricing.SupplierPriceReview(
+        "scope", "fingerprint", scope, List.of(), reviewStatus, null, null, "待确认")));
+    var result = service.check(task, product);
+    assertThat(result.issues()).isEmpty();
+    assertThat(result.items()).extracting(TechnicalDataPriceRequirement::materialNo).containsExactly("MISSING");
+    verify(prices, never()).calculateMaterialUnitPrice(eq("GLASS"), any(), any(), any(), any(), any(), any(), any());
+    assertThat(prepared.getGaps()).hasSize(2);
+  }
+
+  @Test void unexplainedWaitingGapStillBlocksDispatch() {
+    bomGaps();
+    when(prices.calculateMaterialUnitPrice(eq("GLASS"), any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(MakePartMaterialPriceResolveResult.miss("GLASS", "ERROR", "来源状态异常", null));
+    assertThat(service.check(task, product).issues()).contains("GLASS：来源状态异常");
+  }
+
+  private com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult bomGaps() {
+    product.setMaterialNo("TOP");
+    when(jdbc.queryForList(anyString(), nullable(Long.class), eq("2026-09")))
+        .thenReturn(List.of(Map.of("current_bom_build_batch_id", "build")));
+    var prepared = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult();
+    var summary = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult();
+    summary.setStatus("PARTIAL"); prepared.setSummary(summary);
+    var missing = new PricePrepareGap(); missing.setGapMaterialCode("MISSING");
+    missing.setGapType("MISSING_PRICE"); missing.setReasonCode("MISSING");
+    var waiting = new PricePrepareGap(); waiting.setGapMaterialCode("GLASS");
+    waiting.setGapType("MISSING_PRICE"); waiting.setReasonCode("WAITING"); waiting.setPriceType("FIXED");
+    prepared.setGaps(List.of(missing, waiting));
+    when(preparation.calculate(any())).thenReturn(prepared);
+    return prepared;
+  }
+
   private QuoteTechModule module(String type) {
     var value=new QuoteTechModule(); value.setModuleType(type); value.setCurrentVersionId(3L); return value;
   }

@@ -28,7 +28,9 @@ class MonthlyPriceSourcesTest {
   final MonthlySupplementalFixedPriceSource supplemental=fake(MonthlySupplementalFixedPriceSource.class);
   final MonthlyScrapPriceSource scrap=fake(MonthlyScrapPriceSource.class);
   final MonthlyOdsPriceSource ods=fake(MonthlyOdsPriceSource.class);
-  final MonthlyPriceSources sources=new MonthlyPriceSources(priorities,household,fixed,settlement,linked,originalLinked,range,originalRange,quantities,rangeRows,supplemental,scrap,ods);
+  final MonthlyInvoicePriceSource invoices=fake(MonthlyInvoicePriceSource.class);
+  final MonthlyInquiryPriceSource inquiries=fake(MonthlyInquiryPriceSource.class);
+  final MonthlyPriceSources sources=new MonthlyPriceSources(priorities,household,fixed,settlement,linked,originalLinked,range,originalRange,quantities,rangeRows,supplemental,scrap,ods,invoices,inquiries);
   final Context context=new Context("COMMERCIAL","route",1L,"product",YearMonth.of(2026,10),LocalDateTime.of(2026,10,1,0,0),"test","210");
   static <T> T fake(Class<T> type){return java.lang.reflect.Modifier.isFinal(type.getModifiers())?mock(type,withSettings().mockMaker(org.mockito.MockMakers.INLINE)):mock(type);}
   boolean manual=false;
@@ -53,9 +55,46 @@ class MonthlyPriceSourcesTest {
     when(settlement.read(any(),anyMap())).thenAnswer(call->missing(((Map<MonthlyPriceRequest,?>)call.getArgument(1)).keySet()));
     when(ods.orders(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
     when(ods.tiers(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
+    when(invoices.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
+    when(inquiries.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
     when(supplemental.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
   }
   Candidates read(Set<MonthlyPriceRequest> requests){return sources.resolve(context,requests,ignored->{throw new AssertionError("No formula dependency expected");});}
+  @Test void inquiryFollowsOrderAndPrecedesSupplementalFixed() {
+    var request=request("inquiry");when(inquiries.read(any(),anySet())).thenReturn(found(request,"INQUIRY"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);
+    var calls=inOrder(ods,invoices,inquiries);calls.verify(ods).tiers(any(),anySet());calls.verify(invoices).read(any(),anySet());
+    calls.verify(ods).orders(any(),anySet());calls.verify(inquiries).read(any(),anySet());verifyNoInteractions(supplemental);
+  }
+  @Test void validOrderPreventsInquirySelection() {
+    var request=request("order");when(ods.orders(any(),anySet())).thenReturn(found(request,"ODS_ORDER"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);verifyNoInteractions(inquiries);
+  }
+  @Test void missingScrapDependencyMayUseInquiryButInvalidScrapCannotBeHidden() {
+    var request=request("scrap-inquiry");when(inquiries.read(any(),anySet())).thenReturn(found(request,"INQUIRY"));
+    assertThat(sources.resolveScrap(context,Set.of(request),ignored->{throw new AssertionError();}).values()).containsKey(request);
+    clearInvocations(inquiries);
+    when(scrap.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.INVALID_INPUT,"bad scrap"))));
+    assertThat(sources.resolveScrap(context,Set.of(request),ignored->{throw new AssertionError();}).problems().get(request).reason()).isEqualTo(Failure.INVALID_INPUT);
+    verifyNoInteractions(inquiries);
+  }
+  @Test void waitingInquiryDoesNotBecomeSupplementalFixed() {
+    var request=request("pending-inquiry");when(inquiries.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.WAITING,"waiting base"))));
+    assertThat(read(Set.of(request)).problems().get(request).reason()).isEqualTo(Failure.WAITING);verifyNoInteractions(supplemental);
+  }
+  @Test void invoiceSitsAfterTierAndBeforeOrder() {
+    var request=request("invoice");when(invoices.read(any(),anySet())).thenReturn(found(request,"INVOICE"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);
+    verify(ods).tiers(context,Set.of(request));verify(ods,never()).orders(any(),anySet());verifyNoInteractions(supplemental);
+  }
+  @Test void applicableTierPreventsInvoiceSelection() {
+    var request=request("tier");when(ods.tiers(any(),anySet())).thenReturn(found(request,"ODS_TIER"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);verifyNoInteractions(invoices);
+  }
+  @Test void invoiceFailureDoesNotFallThroughToOrder() {
+    var request=request("invoice-error");when(invoices.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.INVALID_INPUT,"invalid"))));
+    assertThat(read(Set.of(request)).problems().get(request).reason()).isEqualTo(Failure.INVALID_INPUT);verify(ods,never()).orders(any(),anySet());
+  }
   MonthlyPriceRequest request(String code){return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(context.month(),"COMMERCIAL",code,null,"件","CNY",TaxBasis.EXCLUDED,null),"210",NonCuConditions.empty(),BigDecimal.ONE);}
   static Candidates missing(Collection<MonthlyPriceRequest> requests){var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();requests.forEach(request->problems.put(request,new Problem(Failure.MISSING,"missing")));return new Candidates(Map.of(),problems);}
   static Candidate candidate(String kind){return new Candidate(new Selection(null,MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of("210"),QuantityInterval.all(),ConditionDomain.any())),PriceFact.normal(new BigDecimal("12"),SourceEvidence.ofJson("{\"sourceKind\":\""+kind+"\"}"),Set.of())),null);}

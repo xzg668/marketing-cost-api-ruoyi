@@ -60,10 +60,29 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     scope(context,requests);var lookup=lookup(requests);var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();
     lookup.values().forEach((request,value)->values.put(request,new Candidate(value,null)));
     if(lookup.missing().isEmpty())return new Candidates(values,Map.of());
+    var invoiceRevisions=storage.invoiceRevisions(lookup.missing());
     if(activeBatches.contains(lookup.missing()))throw failure(Failure.INVALID_INPUT,"Cyclic current-source dependency requests");
     var next=new HashSet<>(activeBatches);next.add(lookup.missing());var active=Set.copyOf(next);
     java.util.function.Function<Set<MonthlyPriceRequest>,Candidates> children=dependencies->resolveCandidates(context,dependencies,active,true);
     var resolved=scrap?sources.resolveScrap(context,lookup.missing(),children):sources.resolve(context,lookup.missing(),children);
+    if(!invoiceRevisions.equals(storage.invoiceRevisions(invoiceRevisions.keySet())))
+      throw failure(Failure.REPLAN_REQUIRED,"发票来源在取价期间更新，请重新取价");
+    var stamped=new LinkedHashMap<MonthlyPriceRequest,Candidate>();
+    resolved.values().forEach((request,candidate)->{
+      long revision=invoiceRevisions.getOrDefault(request,0L);
+      if(revision==0 || candidate.selection().monthlyPriceId()!=null) { stamped.put(request,candidate);return; }
+      var selected=candidate.selection();var fact=selected.fact();
+      var document=codec.decode(codec.wrap(fact.evidence().json()),com.fasterxml.jackson.databind.node.ObjectNode.class);
+      if(!Set.of("INVOICE","ODS_ORDER","INQUIRY","TECH_FIXED").contains(document.path("sourceKind").asText())) {
+        stamped.put(request,candidate);return;
+      }
+      document.put("invoiceRevision",revision);
+      var revised=new PriceFact(fact.type(),fact.price(),fact.householdRate(),SourceEvidence.ofJson(codec.unwrap(codec.encode(document))),fact.dependencies());
+      context.supplierReviews().successfulReviews().stream().filter(binding->binding.evidenceSha256().equals(fact.evidence().sha256()))
+          .forEach(binding->context.supplierReviews().add(binding.review(),revised.evidence().sha256()));
+      stamped.put(request,new Candidate(new Selection(null,selected.applicability(),revised),candidate.householdSourceId()));
+    });
+    resolved=new Candidates(stamped,resolved.problems());
     var reported=new HashSet<>(resolved.values().keySet());reported.addAll(resolved.problems().keySet());
     if(!reported.containsAll(lookup.missing()))throw failure(Failure.PERSISTENCE_INCOMPLETE,"Source resolver omitted requests");
     scope(context,reported);

@@ -238,12 +238,65 @@ class OaQuotationRequestMapperTest {
   }
 
   @Test
-  void missingKeysArraysAndUnknownFieldsFailAtSourcePath() throws Exception {
+  void omittedBusinessInputsRemainNullAndReportGaps() throws Exception {
     var r = sample(2);
     ((ObjectNode) r.path("mainData")).remove("syb");
-    assertThatThrownBy(() -> mapper.map(r, PEER))
-        .isInstanceOf(OaQuotationValidationException.class)
-        .hasMessageContaining("事业部");
+    var mapped = mapper.map(r, PEER);
+    assertThat(mapped.quote().request().getHeader().getSourceBusinessDivision()).isNull();
+    assertThat(mapped.issues()).extracting(OaQuotationResponse.InputIssue::field)
+        .contains("mainData.syb");
+  }
+
+  @Test
+  void sc006AcceptsTheSparseProductFieldsSentByOaBeforeCosting() throws Exception {
+    var source = sample(2);
+    var fields = (ObjectNode) source.path("detailData").get(0).path("fields");
+    fields.retain("cpmc", "khbm", "lh", "shxh", "ysfyz", "yjnylwz", "cyl");
+    var before = source.deepCopy();
+
+    var item = mapper.map(source, PEER).quote().request().getItems().getFirst();
+
+    assertThat(item.getTotalWithShip()).isNull();
+    assertThat(item.getTotalNoShip()).isNull();
+    assertThat(item.getMaterialCost()).isNull();
+    assertThat(item.getLaborCost()).isNull();
+    assertThat(item.getManufacturingCost()).isNull();
+    assertThat(item.getManagementCost()).isNull();
+    assertThat(item.getMaterialNo()).isEqualTo(fields.path("lh").asText());
+    assertThat(source).isEqualTo(before);
+  }
+
+  @Test
+  void allSixFormsTreatOmittedNullBusinessFieldsAsNull() throws Exception {
+    for (int n = 1; n <= 6; n++) {
+      var explicit = sample(n);
+      var omitted = explicit.deepCopy();
+      var main = (ObjectNode) omitted.path("mainData");
+      main.properties().stream().filter(e -> e.getValue().isNull()).map(java.util.Map.Entry::getKey)
+          .toList().forEach(main::remove);
+      for (var row : omitted.path("detailData")) {
+        var fields = (ObjectNode) row.path("fields");
+        fields.properties().stream().filter(e -> e.getValue().isNull()).map(java.util.Map.Entry::getKey)
+            .toList().forEach(fields::remove);
+      }
+      var expected = mapper.map(explicit, PEER);
+      var actual = mapper.map(omitted, PEER);
+      assertThat(actual.quote().request().getHeader())
+          .usingRecursiveComparison().isEqualTo(expected.quote().request().getHeader());
+      assertThat(actual.quote().request().getItems()).usingRecursiveComparison()
+          .ignoringFields("extraFields").isEqualTo(expected.quote().request().getItems());
+      assertThat(actual.issues()).isEqualTo(expected.issues());
+    }
+  }
+
+  @Test
+  void requiredEnvelopeFieldsArraysAndUnknownFieldsStillFail() throws Exception {
+    for (String key : new String[] {"requestId", "formNo", "processCode", "mainData", "detailData"}) {
+      var missing = sample(2);
+      missing.remove(key);
+      assertThatThrownBy(() -> mapper.map(missing, PEER))
+          .as("required field %s", key).isInstanceOf(OaQuotationValidationException.class);
+    }
     var a = sample(2);
     ((ObjectNode) a.path("mainData")).putArray("sqdw").add("事业部");
     assertThatThrownBy(() -> mapper.map(a, PEER)).hasMessageContaining("单个字符串");

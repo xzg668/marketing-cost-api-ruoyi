@@ -236,7 +236,9 @@ public final class MonthlyProductCost {
         if (parent == null || !inside(row.path(), parent.path()) || row.path().equals(parent.path()))
           throw new IllegalArgumentException("Explanation requires its contributing settlement parent");
       } else for (String ancestor = parent(row.path()); ancestor != null; ancestor = parent(ancestor)) {
-        if (contributing.containsKey(ancestor))
+        // A direct price at the ancestor is independent (e.g. outsourced processing fee).
+        // An aggregate parent has only descendant uses and must still exclude counted children.
+        if (contributing.containsKey(ancestor) && !uses.contains(ancestor))
           throw new IllegalArgumentException("Nested material settlements would be counted twice");
       }
     }

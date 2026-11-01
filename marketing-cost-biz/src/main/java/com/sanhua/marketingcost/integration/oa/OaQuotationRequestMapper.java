@@ -299,12 +299,9 @@ public class OaQuotationRequestMapper {
         definitions.stream().map(Field::key).collect(java.util.stream.Collectors.toSet()));
     for (Field f : definitions) {
       String at = path + "." + f.key();
-      if (!node.has(f.key())) {
-        if (!f.optional()) fail(at, "缺少" + f.label() + "字段；原单未填也须传null");
-        else continue;
-      }
       JsonNode value = node.get(f.key());
-      if (value.isNull()) continue;
+      // OA 省略未填写的业务字段时，与显式 null 相同；原始报文仍按收到的内容留存。
+      if (value == null || value.isNull()) continue;
       if (f.number()) {
         BigDecimal parsed = decimal(value, at, f.label());
         if (parsed == null) continue;

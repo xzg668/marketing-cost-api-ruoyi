@@ -24,8 +24,18 @@ public record MonthlyPreparationInputs(int schemaVersion, String rootPath,
   }
 
   public static MonthlyPreparationInputs capture(MonthlyAdoptionPlan plan, String path) {
+    return capture(plan, path, true);
+  }
+
+  /** A separately priced occurrence owns only its use, even when its BOM path has priced children. */
+  public static MonthlyPreparationInputs captureDirect(MonthlyAdoptionPlan plan, String path) {
+    return capture(plan, path, false);
+  }
+
+  private static MonthlyPreparationInputs capture(MonthlyAdoptionPlan plan, String path, boolean subtree) {
     String root = MonthlyBomPricingScope.pathKey(path);
-    var uses = plan.uses().stream().filter(use -> within(use.path(), root))
+    var uses = plan.uses().stream().filter(use -> subtree ? within(use.path(), root)
+        : MonthlyBomPricingScope.pathKey(use.path()).equals(root))
         .filter(use -> plan.selections().get(use.request()).fact().type() != MonthlyAdoptionPlan.PricingType.HOUSEHOLD_INQUIRY
             || MonthlyBomPricingScope.pathKey(use.path()).equals(root)).toList();
     var selected = closure(plan.selections(), uses);

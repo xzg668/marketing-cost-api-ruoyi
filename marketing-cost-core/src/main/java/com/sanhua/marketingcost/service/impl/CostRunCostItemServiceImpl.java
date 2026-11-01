@@ -438,10 +438,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     // 运费属于报价商务信息，不进入成本核算；这里只累计正式配置的其他费用。
     costCodes.add(OTHER_EXP_PACKAGE);
     BigDecimal deptTotal =
-        feeResult.overhaul
-            .add(feeResult.toolingRepair)
-            .add(feeResult.waterPower)
-            .add(feeResult.other);
+        amountOrZero(feeResult.overhaul.amount())
+            .add(amountOrZero(feeResult.tooling.amount()))
+            .add(amountOrZero(feeResult.water.amount()))
+            .add(amountOrZero(feeResult.other.amount()));
     BigDecimal materialTotal =
         partTotal
             .add(auxTotal)
@@ -480,7 +480,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal mgmtAmount = amounts.management();
     BigDecimal salesAmount = amounts.sales();
     BigDecimal financeAmount = amounts.finance();
-    BigDecimal totalAmount = amounts.total();
+    // A partial material subtotal may be displayed, but missing required department fees
+    // must not produce a complete cost. Missing subject amounts remain null in their rows.
+    BigDecimal totalAmount = feeResult.hasRequiredAmounts() ? amounts.total() : null;
 
     List<CostRunCostItemDto> items = new ArrayList<>();
     items.add(buildItem(MATERIAL, "材料费", null, null, materialTotal));
@@ -525,20 +527,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         useTechnicalPackage ? "lp_quote_tech_data_version" : null,
         useTechnicalPackage ? technicalData.versionId() : null));
     items.add(buildItem(TOTAL, "不含税总成本", null, null, totalAmount));
-    // T10：4 项部门经费共享 feeResult.remark
-    items.add(buildItem(
-        OVERHAUL, "大修费", feeResult.baseAmount, feeResult.overhaulRate, feeResult.overhaul, feeResult.remark));
-    items.add(buildItem(
-        TOOLING_REPAIR,
-        "工装零星修理费",
-        feeResult.baseAmount,
-        feeResult.toolingRepairRate,
-        feeResult.toolingRepair,
-        feeResult.remark));
-    items.add(buildItem(
-        WATER_POWER, "水电费", feeResult.baseAmount, feeResult.waterPowerRate, feeResult.waterPower, feeResult.remark));
-    items.add(buildItem(
-        DEPT_OTHER, "其他费用", feeResult.baseAmount, feeResult.otherRate, feeResult.other, feeResult.remark));
+    items.add(buildDepartmentItem(OVERHAUL, "大修费", feeResult.overhaul));
+    items.add(buildDepartmentItem(TOOLING_REPAIR, "工装零星修理费", feeResult.tooling));
+    items.add(buildDepartmentItem(WATER_POWER, "水电费", feeResult.water));
+    items.add(buildDepartmentItem(DEPT_OTHER, "其他费用", feeResult.other));
 
     // T24：见机表原材料汇总（不参与 totalAmount 累加；category=BOM_BUCKET 与上面 EXPENSE 行严格隔离）
     //   - 焊料 BUCKET_WELD: Σ(part 子件 cost_element=主要材料-焊料)
@@ -1124,11 +1116,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private DepartmentFeeResult calculateDepartmentFees(
       String finishedProductCode, BigDecimal laborTotal, CostSourceContext costSourceContext) {
-    DepartmentFeeResult result = new DepartmentFeeResult();
-    if (laborTotal == null || laborTotal.signum() == 0) {
-      // T10：无人工数据 → 4 项部门费率项都不会算出来
-      result.remark = "无人工数据，无法取部门经费率";
-      return result;
+    if (laborTotal == null) {
+      var missing = new DepartmentSubjectAmount(null, null, null, "无人工数据，无法计算部门经费");
+      return new DepartmentFeeResult(missing, missing, missing, missing);
     }
 
     String businessUnitType =
@@ -1171,18 +1161,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
             DEPARTMENT_SUBJECT_OTHER,
             laborTotal);
 
-    result.overhaul = amountOrZero(overhaul.amount());
-    result.toolingRepair = amountOrZero(tooling.amount());
-    result.waterPower = amountOrZero(water.amount());
-    result.other = amountOrZero(other.amount());
-    result.baseAmount = firstNonNull(overhaul.baseAmount(), tooling.baseAmount(), water.baseAmount(), other.baseAmount());
-    result.overhaulRate = overhaul.rate();
-    result.toolingRepairRate = tooling.rate();
-    result.waterPowerRate = water.rate();
-    result.otherRate = other.rate();
-    result.remark =
-        joinRemarks(overhaul.remark(), tooling.remark(), water.remark(), other.remark());
-    return result;
+    return new DepartmentFeeResult(overhaul, tooling, water, other);
+  }
+
+  private CostRunCostItemDto buildDepartmentItem(
+      String code, String name, DepartmentSubjectAmount subject) {
+    return buildItem(code, name, subject.baseAmount(), subject.rate(), subject.amount(), subject.remark());
   }
 
   private DepartmentSubjectAmount calculateDepartmentSubjectAmount(
@@ -1218,7 +1202,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal effectiveRate = resolveDepartmentEffectiveRate(rate);
     BigDecimal manhourCost = divide(laborTotal, manhourRate);
     return new DepartmentSubjectAmount(
-        manhourCost, effectiveRate, multiplyAmount(manhourCost, effectiveRate), null);
+        manhourCost, effectiveRate, multiplyAmount(manhourCost, effectiveRate), lookup.remark());
   }
 
   static BigDecimal resolveDepartmentEffectiveRate(DepartmentFundRate rate) {
@@ -1250,23 +1234,30 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return new DepartmentFundLookup(null, "部门经费率未命中：报价单产品料号为空");
     }
     MaterialMasterRaw raw = lookupMaterialByCode(code, costSourceContext);
-    String productionDivision = trimToNull(raw == null ? null : raw.getProductionDivision());
+    String productionDivision = trimToNull(raw == null
+        ? (costSourceContext == null ? null : costSourceContext.sourceBusinessDivision)
+        : raw.getProductionDivision());
+    String divisionSource = raw == null ? "OA事业部" : "主档事业部";
     if (productionDivision == null) {
       return new DepartmentFundLookup(
-          null, "部门经费率未命中：报价料号 " + code + " 在 lp_material_master_raw 未找到 production_division");
+          null, "部门经费率未命中：报价料号 " + code + (raw == null
+              ? " 未找到 U9 主档且OA事业部为空" : " 主档 production_division 为空")
+              + "，费用科目 " + String.join("/", expenseSubjects));
     }
     for (String subject : expenseSubjects) {
       DepartmentFundRate rate =
           findDepartmentFundRateBySubject(productionDivision, subject, rateYear, businessUnitType);
       if (rate != null) {
-        return new DepartmentFundLookup(rate, null);
+        return new DepartmentFundLookup(rate, raw == null
+            ? "成品料号 " + code + " 未找到 U9 主档，按OA事业部 " + productionDivision + " 匹配部门经费"
+            : null);
       }
     }
     return new DepartmentFundLookup(
         null,
         "部门经费率未命中：报价料号 "
             + code
-            + " 主档事业部 "
+            + " " + divisionSource + " "
             + productionDivision
             + "，"
             + rateYear
@@ -1332,7 +1323,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return materialMasterRawMapper.selectByLatestBatchAndCodes(materialCodes, null, organization);
   }
 
-  /** 制造费用率：成品料号优先；未命中时按成本料号查 U9 事业部+型号、名称+事业部；最后按成品料号事业部兜底。 */
+  /** 制造费用率：成品料号优先，再按 U9 型号、名称、大类及事业部匹配；成品主档不存在时用 OA 事业部。 */
   private RateLookup findManufactureRate(
       String finishedProductCode, Set<String> costMaterialCodes, CostSourceContext costSourceContext) {
     String finishedCode = trimToNull(finishedProductCode);
@@ -1455,6 +1446,23 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         missReasons.add("成品料号 " + finishedCode + " 主档事业部 " + finishedDivision + " 无事业部级配置");
       } else {
         missReasons.add("成品料号 " + finishedCode + " 未找到 U9 主档事业部");
+      }
+      if (finishedRaw == null) {
+        String oaDivision = trimToNull(
+            costSourceContext == null ? null : costSourceContext.sourceBusinessDivision);
+        if (oaDivision == null) {
+          missReasons.add("OA事业部为空，无法在成品料品档案缺失时匹配事业部费率");
+        } else {
+          RateLookup oaLookup = toManufactureLookup(findManufactureRateByMatch(
+              MANUFACTURE_MATCH_LEVEL_DIVISION, oaDivision, rateYear, businessUnitType));
+          if (oaLookup != null) {
+            String source = "成品料号 " + finishedCode + " 未找到 U9 主档，按OA事业部 "
+                + oaDivision + " 匹配制造费用率";
+            return new RateLookup(oaLookup.rate(), oaLookup.remark() == null
+                ? source : source + "；" + oaLookup.remark());
+          }
+          missReasons.add("OA事业部 " + oaDivision + " 无事业部级配置");
+        }
       }
     }
 
@@ -2448,18 +2456,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return amount == null ? BigDecimal.ZERO : amount;
   }
 
-  private BigDecimal firstNonNull(BigDecimal... values) {
-    if (values == null) {
-      return null;
-    }
-    for (BigDecimal value : values) {
-      if (value != null) {
-        return value;
-      }
-    }
-    return null;
-  }
-
   private boolean isExcludedAuxSubject(AuxCostItemDto subject) {
     return EXCLUDED_AUX_SUBJECT_PACKAGING.equals(
         trimToNull(subject == null ? null : subject.getAuxSubjectName()));
@@ -2700,17 +2696,11 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
   }
 
-  private static class DepartmentFeeResult {
-    private BigDecimal baseAmount;
-    private BigDecimal overhaulRate;
-    private BigDecimal toolingRepairRate;
-    private BigDecimal waterPowerRate;
-    private BigDecimal otherRate;
-    private BigDecimal overhaul = BigDecimal.ZERO;
-    private BigDecimal toolingRepair = BigDecimal.ZERO;
-    private BigDecimal waterPower = BigDecimal.ZERO;
-    private BigDecimal other = BigDecimal.ZERO;
-    /** T10：部门经费率缺失说明（4 项 OVERHAUL/TOOLING_REPAIR/WATER_POWER/DEPT_OTHER 共用） */
-    private String remark;
+  private record DepartmentFeeResult(
+      DepartmentSubjectAmount overhaul, DepartmentSubjectAmount tooling,
+      DepartmentSubjectAmount water, DepartmentSubjectAmount other) {
+    boolean hasRequiredAmounts() {
+      return overhaul.amount() != null && tooling.amount() != null && water.amount() != null;
+    }
   }
 }

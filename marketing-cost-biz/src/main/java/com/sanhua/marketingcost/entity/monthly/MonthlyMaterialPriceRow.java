@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 @Setter
 public class MonthlyMaterialPriceRow {
   private Long id;
+  private Long invoiceRevision;
   private String applicabilityHash;
   private String applicabilityJson;
   private Integer organizationMask;

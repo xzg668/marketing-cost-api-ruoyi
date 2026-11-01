@@ -94,6 +94,16 @@ public final class MonthlySupplementalFixedPriceSource {
             || !owner.unit().equals(request.family().unit()) || !owner.currency().equals(request.family().currency())
             || !"CNY".equals(owner.currency()))
           throw new IllegalArgumentException("技术价格声明的组织、业务单元、单位或币税口径不适用");
+        // A reserved but never assigned/edited module is not a supplemental price source.
+        // It must remain a gap so the first actual dispatch can claim and fill it.
+        if("UNASSIGNED".equals(owner.taskStatus()) && "PENDING".equals(owner.moduleStatus())
+            && owner.assigneeId()==null && owner.sourceVersionId()==null
+            && owner.effectiveVersionId()==null && "PENDING".equals(owner.productStatus())
+            && Integer.valueOf(1).equals(owner.taskActive()) && Integer.valueOf(1).equals(owner.productActive())) {
+          if(!fixed.getOrDefault(code,List.of()).isEmpty())
+            throw new IllegalArgumentException("未分派的空补录不能已有发布固定价");
+          problems.put(request,new Problem(Failure.MISSING,"缺少有效价格，待分派技术员补录"));continue;
+        }
         var key=new ApprovalKey(owner.owner(),owner.taskActive(),owner.productActive(),owner.productStatus(),owner.effectiveVersionId(),owner.originalFormId(),owner.flowId(),request.priceOrgCode());
         var approved=approvalCache.computeIfAbsent(key,ignored->approve(context,currentForm,request,owner,capturedProducts.get(owner.productId()),capturedFlows.get(owner.flowId()),capturedBasis.get(owner.flowId())));
         if(approved.error()!=null){
@@ -161,10 +171,11 @@ public final class MonthlySupplementalFixedPriceSource {
     var module=data.modules().stream().filter(value->Objects.equals(value.getId(),owner.moduleId())).findFirst().orElse(null);
     if(module==null || !Objects.equals(module.getProductId(),owner.productId()) || !"PRICE".equals(module.getModuleType())
         || !Integer.valueOf(1).equals(module.getRequiredFlag()) || !Integer.valueOf(1).equals(module.getOaEditAllowed())
-        || module.getAssigneeUserId()==null || !Objects.equals(module.getAssigneeUserId(),owner.assigneeId())
+        || !Objects.equals(module.getAssigneeUserId(),owner.assigneeId())
         || !Objects.equals(module.getModuleStatus(),owner.moduleStatus())
         || !Objects.equals(module.getCurrentVersionId(),owner.sourceVersionId()))return false;
     if(owner.sourceVersionId()==null)return "PENDING".equals(owner.moduleStatus());
+    if(module.getAssigneeUserId()==null)return false;
     var draft=data.versions().get(owner.sourceVersionId());
     if(draft==null || !Objects.equals(draft.getProductId(),owner.productId()) || !"DRAFT".equals(draft.getVersionStatus()))return false;
     // A malformed stored draft is an error, while incomplete editable price fields remain editable.

@@ -55,6 +55,9 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  private TechnicalFixture technical() throws Exception { return technical(null,1,"001001"); }
  private TechnicalFixture technical(String existing, long userId, String employee) throws Exception { return technical(existing,userId,employee,true); }
  private TechnicalFixture technical(String existing, long userId, String employee, boolean send) throws Exception {
+   return technical(existing,userId,employee,send,true);
+ }
+ private TechnicalFixture technical(String existing, long userId, String employee, boolean send, boolean prepare) throws Exception {
    String f=existing==null?flow():existing;
    if(existing==null) quote(f);
    jdbc.update("INSERT IGNORE INTO sys_user(user_id,user_name,nick_name,employee_no,status,del_flag) VALUES(?,?,'回调验收技术员',?,'0','0')",userId,"callback-user-"+userId,employee);
@@ -78,6 +81,7 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
      long dispatch=outgoing("DISPATCH-"+UUID.randomUUID(),"TASK_DISPATCH");String key="T-PERSON-"+UUID.randomUUID();
      jdbc.update("INSERT INTO lp_quote_tech_oa_recipient(task_id,assignment_version,assignee_user_id,assignee_name,external_user_id,module_types_json,outbound_message_id,external_task_id,dispatch_status,todo_status,active_flag,integration_task_id) VALUES(?,1,?,'测试技术员',?,'[\"PROFILE\"]',?,'WI-OLD','CONFIRMED','OPEN',1,?)",task.getId(),userId,employee,dispatch,key);
      long person=jdbc.queryForObject("SELECT id FROM lp_quote_tech_oa_recipient WHERE integration_task_id=?",Long.class,key);
+     if (!prepare) return new TechnicalFixture(f,key,task.getId(),product.getId(),person,0,null,0,draft.getId());
      var frozen=versions.freeze(product,people.findById(person),product.getRowVersion(),1L);
      String requestId="TS-"+UUID.randomUUID();long sent=outgoing(requestId,"TECH_SUBMIT");
      jdbc.update("INSERT INTO lp_quote_tech_submission(task_id,product_id,technical_version_id,submission_round,request_id,expected_task_version,expected_product_version,content_schema_version,content_fingerprint,content_snapshot_json,summary_json,assignee_user_id,submitted_by,prepared_at,recipient_id,module_types_json,outbound_message_id) VALUES(?,?,?,1,?,0,0,2,?,'{}','{}',?,?,NOW(6),?,'[\"PROFILE\"]',?)",task.getId(),product.getId(),frozen.getId(),requestId,frozen.getContentFingerprint(),userId,userId,person,sent);
@@ -283,4 +287,112 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  private String submissionState(TechnicalFixture f){return jdbc.queryForObject("SELECT submission_status FROM lp_quote_tech_submission WHERE id=?",String.class,f.submissionId());}
  private String flowState(String f){return jdbc.queryForObject("SELECT state FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,f);}
  private long flowVersion(String f){return jdbc.queryForObject("SELECT applied_version FROM lp_oa_workflow_state WHERE workflow_request_id=?",Long.class,f);}
+
+ @Test void initialTechnicalCallbackWithoutEmployeesOpensExistingAssignmentAndReplaysOnce() throws Exception {
+   var a=technical(null,1,"001001",false,false);
+   jdbc.update("UPDATE lp_quote_tech_module SET oa_edit_allowed=0 WHERE product_id=?",a.productId());
+   var notice=event(a.flow(),"TECHNICAL");
+   http.perform(post(URL).header("Authorization",TOKEN).contentType("application/json").content(notice.toString()))
+       .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED"));
+   assertThat(people.findById(a.personId()).todoStatus()).isEqualTo("OPEN");
+   assertThat(people.findById(a.personId()).latestSubmissionId()).isNull();
+   assertThat(jdbc.queryForObject("SELECT oa_edit_allowed FROM lp_quote_tech_module WHERE product_id=?",Integer.class,a.productId())).isEqualTo(1);
+   assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_submission WHERE task_id=?",Long.class,a.taskId())).isZero();
+   assertThat(flowState(a.flow())).isEqualTo("TECHNICAL");
+   assertThat(flowVersion(a.flow())).isEqualTo(1);
+   assertThat(receive(notice)).isEqualTo("SUCCEEDED");
+   assertThat(flowVersion(a.flow())).isEqualTo(1);
+ }
+
+ @Test void oneTechnicianAcrossProductsNeedsNoEmployeeArray() throws Exception {
+   var a=technical(null,1,"001001",false,false);
+   var b=technical(a.flow(),1,"001001",false,false);
+   assertThat(receive(event(a.flow(),"TECHNICAL"))).isEqualTo("SUCCEEDED");
+   assertThat(people.findById(a.personId()).callbackSequence()).isEqualTo(1);
+   assertThat(people.findById(b.personId()).callbackSequence()).isEqualTo(1);
+ }
+
+ @Test void omittedEmployeesNeverSelectAnArbitraryPersonOrOtherQuotation() throws Exception {
+   var a=technical(null,1,"001001",false,false);
+   technical(a.flow(),9900002,"002002",false,false);
+   assertThatThrownBy(()->receive(event(a.flow(),"TECHNICAL"))).hasMessageContaining("多位技术员");
+   String empty=flow();quote(empty);
+   assertThatThrownBy(()->receive(event(empty,"TECHNICAL"))).hasMessageContaining("没有已生效的技术员分派");
+   assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_state WHERE workflow_request_id IN (?,?)",Long.class,a.flow(),empty)).isZero();
+ }
+
+ @Test void initialNotificationRequiresConfirmedDispatch() throws Exception {
+   var a=technical(null,1,"001001",false,false);
+   jdbc.update("UPDATE lp_quote_tech_oa_recipient SET dispatch_status='UNKNOWN' WHERE id=?",a.personId());
+   assertThatThrownBy(()->receive(event(a.flow(),"TECHNICAL"))).hasMessageContaining("分派尚未确认");
+   assertThat(people.findById(a.personId()).callbackSequence()).isZero();
+ }
+
+ @Test void returnWithoutEmployeesStillReturnsOnlyTheAssignedTechnician() throws Exception {
+   var a=technical();
+   assertThat(receive(event(a.flow(),"TECHNICAL"))).isEqualTo("SUCCEEDED");
+   assertThat(submissionState(a)).isEqualTo("RETURNED");
+ }
+
+ @Test void mixedInitialAndSubmittedProductsAreNotImplicitlyReturned() throws Exception {
+   var a=technical();technical(a.flow(),1,"001001",false,false);
+   assertThatThrownBy(()->receive(event(a.flow(),"TECHNICAL"))).hasMessageContaining("办理阶段不一致");
+   assertThat(submissionState(a)).isEqualTo("SENDING");
+ }
+
+ @Test void delayedInitialReplayCannotReturnASubsequentlyPreparedSubmission() throws Exception {
+   var a=technical(null,1,"001001",false);
+   jdbc.update("UPDATE lp_quote_tech_oa_recipient SET latest_submission_id=NULL,todo_status='OPEN' WHERE id=?",a.personId());
+   var notice=event(a.flow(),"TECHNICAL");
+   assertThat(receive(notice)).isEqualTo("SUCCEEDED");
+   jdbc.update("UPDATE lp_quote_tech_oa_recipient SET latest_submission_id=?,todo_status='PREPARED' WHERE id=?",a.submissionId(),a.personId());
+   assertThat(receive(notice)).isEqualTo("SUCCEEDED");
+   assertThat(submissionState(a)).isEqualTo("PREPARED");
+   assertThat(people.findById(a.personId()).todoStatus()).isEqualTo("PREPARED");
+   assertThat(flowVersion(a.flow())).isEqualTo(1);
+ }
+
+ @Test void concurrentInitialCallbacksWithoutEmployeesApplyOnlyOnce() throws Exception {
+   var a=technical(null,1,"001001",false,false);var notice=event(a.flow(),"TECHNICAL");
+   try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)) {
+     var jobs=executor.invokeAll(List.of((java.util.concurrent.Callable<String>)()->receive(notice),()->receive(notice)));
+     for(var job:jobs) assertThat(job.get()).isEqualTo("SUCCEEDED");
+   }
+   assertThat(flowVersion(a.flow())).isEqualTo(1);
+ }
+
+ private String pendingDispatch(TechnicalFixture a,String state) {
+   long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_quote_tech_task WHERE id=?",Long.class,a.taskId());
+   String batch=UUID.randomUUID().toString();
+   jdbc.update("INSERT INTO lp_oa_technical_batch(id,operation,oa_form_id,actor_user_id,request_key,input_fingerprint,status,request_json) VALUES(?,'I02',?,1,?,?,?,?)",
+       batch,form,batch,"a".repeat(64),state,codec.write(Map.of("requestId",a.flow())));
+   jdbc.update("UPDATE lp_oa_integration_message SET technical_batch_id=? WHERE id=(SELECT outbound_message_id FROM lp_quote_tech_oa_recipient WHERE id=?)",batch,a.personId());
+   jdbc.update("UPDATE lp_quote_tech_oa_recipient SET active_flag=0,todo_status='WAITING',dispatch_status='QUEUED' WHERE id=?",a.personId());
+   return batch;
+ }
+
+ @Test void callbackBeforeDispatchHttpResponseActivatesTheSavedAssignment() throws Exception {
+   var a=technical(null,1,"001001",false,false);
+   String batch=pendingDispatch(a,"SENDING");
+   var notice=event(a.flow(),"TECHNICAL");
+   assertThat(receive(notice)).isEqualTo("SUCCEEDED");
+   assertThat(nativeBatches.find(batch,false).status()).isEqualTo("SUCCESS");
+   assertThat(people.findById(a.personId()).active()).isTrue();
+   assertThat(people.findById(a.personId()).dispatchStatus()).isEqualTo("CONFIRMED");
+   assertThat(people.findById(a.personId()).todoStatus()).isEqualTo("OPEN");
+   new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(tx->nativeBatches.received(batch,
+       new com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult("late",com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult.Status.UNKNOWN,null,"TIMEOUT","迟到超时",a.flow(),null,1)));
+   assertThat(nativeBatches.find(batch,false).status()).isEqualTo("SUCCESS");
+   assertThat(receive(notice)).isEqualTo("SUCCEEDED");
+   assertThat(flowVersion(a.flow())).isEqualTo(1);
+ }
+
+ @Test void callbackCannotActivateAnUnsentOrRejectedDispatch() throws Exception {
+   for(String state:List.of("PREPARED","REJECTED","NOT_SENT")) {
+     var a=technical(null,1,"001001",false,false);String batch=pendingDispatch(a,state);
+     assertThatThrownBy(()->receive(event(a.flow(),"TECHNICAL"))).hasMessageContaining("没有已生效的技术员分派");
+     assertThat(nativeBatches.find(batch,false).status()).isEqualTo(state);
+     assertThat(people.findById(a.personId()).active()).isFalse();
+   }
+ }
 }

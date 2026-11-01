@@ -85,6 +85,39 @@ class TechnicalDataPackageApplicationIntegrationTest extends BomMapperTestBase {
     assertThatThrownBy(() -> service.save(productId, reference(components.getFirst().sources().get(0), "1"), WANG)).hasMessageContaining("不属于本次组织");
   }
 
+  @Test void samePackageOwnBomGroupsDespiteDifferentFinishedProductVersions() {
+    var parent = hierarchy.selectById(parent2);
+    parent.setBomVersion("F004"); hierarchy.updateById(parent);
+    var components = service.references(productId, key + "-P", WANG).components();
+    assertThat(components).hasSize(1);
+    assertThat(components.getFirst().sources()).hasSize(2)
+        .extracting(row -> row.evidence().bomVersion()).containsExactly("V1", "F004");
+    // The source chosen for saving still identifies its actual finished-product BOM.
+    var source = components.getFirst().sources().get(1);
+    assertThat(service.save(productId, reference(source, "2"), WANG).issues()).isEmpty();
+    assertThat(hierarchy.selectById(parent2).getBomVersion()).isEqualTo("F004");
+  }
+
+  @Test void differentPackageOwnVersionsOrQuantitiesRemainSeparateChoices() {
+    var child = hierarchy.selectById(child2);
+    child.setBomVersion("PACKAGE-V2"); hierarchy.updateById(child);
+    assertThat(service.references(productId, key + "-P", WANG).components()).hasSize(2);
+    child.setBomVersion("V1"); child.setQtyPerParent(new BigDecimal("0.75")); hierarchy.updateById(child);
+    assertThat(service.references(productId, key + "-P", WANG).components()).hasSize(2);
+  }
+
+  @Test void referenceOnlyUsesNodesInsideEffectiveRangeIncludingBoundaries() {
+    var child = hierarchy.selectById(child2);
+    child.setEffectiveFrom(LocalDate.of(2026, 9, 2)); hierarchy.updateById(child);
+    assertThat(service.references(productId, key + "-P", WANG).components().getFirst().sources())
+        .extracting(row -> row.evidence().parentNodeId()).containsExactly(parent1);
+    child.setEffectiveFrom(LocalDate.of(2026, 9, 1)); child.setEffectiveTo(LocalDate.of(2026, 9, 1)); hierarchy.updateById(child);
+    assertThat(service.references(productId, key + "-P", WANG).components().getFirst().sources()).hasSize(2);
+    child.setEffectiveFrom(LocalDate.of(2026, 8, 1)); child.setEffectiveTo(LocalDate.of(2026, 8, 31)); hierarchy.updateById(child);
+    assertThat(service.references(productId, key + "-P", WANG).components().getFirst().sources())
+        .extracting(row -> row.evidence().parentNodeId()).containsExactly(parent1);
+  }
+
   @Test void legacyU9WithoutBusinessUnitUsesItsExplicitPriceOrganization() {
     jdbc.update("UPDATE lp_bom_raw_hierarchy SET business_unit_type=NULL WHERE top_product_code=?", key + "-T2");
     var source = service.references(productId, key + "-T2", WANG).components().getFirst().sources().getFirst();

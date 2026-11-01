@@ -458,7 +458,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     var evidence = new MonthlyPreparationEvidence(monthlyCodec);
     for (var row : execution.items) {
       if (!ITEM_STATUS_READY.equals(row.getStatus()) || row.getQuantity() == null || row.getQuantity().signum() == 0) continue;
-      var inputs = MonthlyPreparationInputs.capture(adoptedInputs, roots.get(row.getSettlementKey()));
+      var inputs = evidence.capture(row, adoptedInputs, roots.get(row.getSettlementKey()));
       if (inputs.uses().isEmpty()) throw new IllegalStateException("已计价准备缺少实际月价输入：" + row.getMaterialCode());
       row.setInputSnapshotJson(evidence.attach(row, inputs));
       if (execution.persist) {

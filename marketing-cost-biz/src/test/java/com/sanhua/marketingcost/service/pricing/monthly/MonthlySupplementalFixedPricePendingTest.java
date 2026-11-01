@@ -33,7 +33,41 @@ class MonthlySupplementalFixedPricePendingTest {
   private long item = 11L, form = 10L;
   private int active = 1, editable = 1;
   private Long effective;
+  private Long assignee = 101L;
   private String priceJson;
+
+  @Test void anotherQuotesUnassignedEmptyClaimDoesNotBlockDispatch() {
+    item = 12L; form = 12L; taskStatus = "UNASSIGNED"; assignee = null;
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+    verifyNoInteractions(approvals);
+  }
+
+  @Test void ownUnassignedEmptyClaimRemainsMissingBeforeDispatch() {
+    taskStatus = "UNASSIGNED"; assignee = null;
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+    verifyNoInteractions(approvals);
+  }
+
+  @Test void ownClaimRemainsMissingWhileDispatchPreparesBeforeOaAssignsTheModule() {
+    taskStatus = "PENDING"; assignee = null;
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+  }
+
+  @Test void anotherTasksPendingDispatchStillOwnsItsClaim() {
+    item = 12L; taskStatus = "PENDING"; assignee = null;
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+  }
+
+  @Test void unassignedLabelCannotHideAnAssignedModule() {
+    item = 12L; taskStatus = "UNASSIGNED";
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+  }
+
+  @Test void unassignedLabelCannotHideSavedContent() {
+    item = 12L; taskStatus = "UNASSIGNED"; assignee = null;
+    versionStatus = "DRAFT"; priceJson = "{\"items\":[]}";
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+  }
 
   @Test void newlyDispatchedOwnPriceGapRemainsMissingWithoutAnyCandidate() {
     assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
@@ -105,10 +139,10 @@ class MonthlySupplementalFixedPricePendingTest {
   private void assertProblem(MonthlyAdoptionRetryPolicy.Failure expected) {
     Long versionId = versionStatus == null ? null : 50L;
     var owner = new MonthlySupplementalFixedPriceSourceMapper.Ownership("MISSING", 40L, 20L, 30L, item,
-        "TOP", "PRICE", taskStatus, moduleStatus, 101L, "技术员", versionId, versionStatus, "COMMERCIAL", "210",
+        "TOP", "PRICE", taskStatus, moduleStatus, assignee, "技术员", versionId, versionStatus, "COMMERCIAL", "210",
         "2026-10", form, null, active, active, productStatus, effective, 2, "210", "COMMERCIAL", "件", "CNY");
     var module = new QuoteTechModule(); module.setId(40L); module.setProductId(20L); module.setModuleType("PRICE");
-    module.setRequiredFlag(1); module.setOaEditAllowed(editable); module.setAssigneeUserId(101L);
+    module.setRequiredFlag(1); module.setOaEditAllowed(editable); module.setAssigneeUserId(assignee);
     module.setModuleStatus(moduleStatus); module.setCurrentVersionId(versionId);
     var version = new QuoteTechDataVersion(); version.setId(50L); version.setProductId(20L);
     version.setVersionStatus(versionStatus); version.setPriceItemsJson(priceJson);

@@ -27,6 +27,10 @@ import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.SupplementBomReadService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
+import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
+import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDate;
@@ -65,6 +69,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   private final SupplementBomReadService supplementBomReadService;
   private final PackageComponentStructureReadService packageComponentStructureReadService;
   private final QuoteBomContextResolver quoteBomContextResolver;
+  private final CurrentU9BomGateway originalBom;
 
   public QuoteProductBomPreparationServiceImpl(
       OaFormItemMapper oaFormItemMapper,
@@ -75,7 +80,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       FormalBomReadService formalBomReadService,
       SupplementBomReadService supplementBomReadService,
       PackageComponentStructureReadService packageComponentStructureReadService,
-      QuoteBomContextResolver quoteBomContextResolver) {
+      QuoteBomContextResolver quoteBomContextResolver,
+      CurrentU9BomGateway originalBom) {
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -85,6 +91,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     this.supplementBomReadService = supplementBomReadService;
     this.packageComponentStructureReadService = packageComponentStructureReadService;
     this.quoteBomContextResolver = quoteBomContextResolver;
+    this.originalBom = originalBom;
   }
 
   @Override
@@ -109,8 +116,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     String productCode = bomContext.productCode();
     String periodMonth = bomContext.costPeriodMonth();
     QuoteDataOrganization organization = bomContext.organization();
+    boolean noOriginalBom = QuoteProductIdentityUtils.hasFormalMaterialNo(context.item())
+        && originalBomMissing(context, bomContext, resolveQuoteDate(quoteDate));
     QuoteProductTypeResolveResult typeResult =
-        resolveProductType(
+        noOriginalBom ? fullSupplementType(context.item(), productCode) : resolveProductType(
             context.item(), productCode, organization.materialOrganizationCode());
     if (typeResult.productType() == QuoteProductType.DATA_MISSING
         || typeResult.productType() == QuoteProductType.UNKNOWN) {
@@ -207,6 +216,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
           context, typeResult, periodMonth, organization, electronicDrawing);
     }
 
+    if (noOriginalBom) {
+      return prepareFullSupplement(context, typeResult, periodMonth, organization, "本产品无 U9 原始 BOM");
+    }
+
     if (typeResult.productType() == QuoteProductType.NON_BARE) {
       return prepareNonBare(context, typeResult, periodMonth, organization, resolveQuoteDate(quoteDate));
     }
@@ -297,6 +310,13 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
           List.of());
     }
 
+    return prepareFullSupplement(context, typeResult, periodMonth, organization, formal.gapMessage());
+  }
+
+  private QuoteProductBomPreparationPreview prepareFullSupplement(
+      QuoteContext context, QuoteProductTypeResolveResult typeResult,
+      String periodMonth, QuoteDataOrganization organization, String sourceGap) {
+    String productCode = typeResult.quoteProductCode();
     SupplementBomReadResult supplement =
         supplementBomReadService.readApproved(
             productCode, QuoteProductType.NON_BARE.getCode(), SCOPE_NON_BARE_FULL_BOM, periodMonth);
@@ -334,7 +354,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
           List.of());
     }
 
-    List<String> gaps = compact(formal.gapMessage(), supplement.gapMessage(), "非裸品完整 BOM 缺失，需技术员补录");
+    List<String> gaps = compact(sourceGap, supplement.gapMessage(), "完整 BOM 缺失，需技术员补录");
     QuoteBomStatus status = upsertStatus(context, productCode, periodMonth, typeResult, null, String.join("；", gaps));
     QuoteBomPreparationRecord record =
         upsertPreparationRecord(
@@ -472,17 +492,30 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   private QuoteProductTypeResolveResult resolveProductType(
       OaFormItem item, String productCode, String organizationCode) {
     if (!QuoteProductIdentityUtils.hasFormalMaterialNo(item)) {
-      return new QuoteProductTypeResolveResult(
-          productCode,
-          QuoteProductType.NON_BARE,
-          null,
-          null,
-          item == null ? null : item.getProductName(),
-          item == null ? null : item.getSpec(),
-          null);
+      return fullSupplementType(item, productCode);
     }
     String organization = MaterialOrganization.normalize(organizationCode);
     return productTypeResolveService.resolve(productCode, organization);
+  }
+
+  private boolean originalBomMissing(QuoteContext context, QuoteBomContext bom, LocalDate effectiveDate) {
+    var item = context.item();
+    var form = context.form();
+    var result = originalBom.read(new QuoteBomReadContext(form.getId(), item.getId(), form.getOaNo(),
+        bom.costPeriodMonth(), firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
+        bom.productCode(), item.getProductName(), item.getSpec(), item.getSunlModel(),
+        bom.organization().priceOrgCode(), bom.organization().materialOrganizationCode(), effectiveDate,
+        LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE)));
+    if (result != null && result.status() == CurrentU9BomResult.Status.NOT_FOUND) return true;
+    if (result != null && result.status() == CurrentU9BomResult.Status.AVAILABLE) return false;
+    throw new QuoteIngestException(firstText(result == null ? null : result.message(),
+        "U9 原始 BOM 查询失败，请重新核实，不能按无 BOM 处理"));
+  }
+
+  private QuoteProductTypeResolveResult fullSupplementType(OaFormItem item, String productCode) {
+    // 无 U9 BOM 时使用既有完整补录 BOM 口径；NON_BARE 在此不表示从主档判定了成品类型。
+    return new QuoteProductTypeResolveResult(productCode, QuoteProductType.NON_BARE, null, null,
+        item == null ? null : item.getProductName(), item == null ? null : item.getSpec(), null);
   }
 
   private FormalBomReadResult readFormalBom(
@@ -544,7 +577,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     if (inserting) {
       quoteBomStatusMapper.insert(status);
     } else {
-      quoteBomStatusMapper.updateById(status);
+      quoteBomStatusMapper.update(status, Wrappers.<QuoteBomStatus>lambdaUpdate()
+          .eq(QuoteBomStatus::getId, status.getId())
+          .set(status.getBareProductCode() == null, QuoteBomStatus::getBareProductCode, null)
+          .set(status.getReferenceFinishedCode() == null, QuoteBomStatus::getReferenceFinishedCode, null));
     }
     return status;
   }
@@ -618,7 +654,13 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     if (inserting) {
       preparationRecordMapper.insert(record);
     } else {
-      preparationRecordMapper.updateById(record);
+      // MyBatis 默认忽略 null；恢复成功或切换到完整补录时必须清除旧错误和裸品引用。
+      preparationRecordMapper.update(record, Wrappers.<QuoteBomPreparationRecord>lambdaUpdate()
+          .eq(QuoteBomPreparationRecord::getId, record.getId())
+          .set(record.getErrorMessage() == null, QuoteBomPreparationRecord::getErrorMessage, null)
+          .set(record.getBareProductCode() == null, QuoteBomPreparationRecord::getBareProductCode, null)
+          .set(record.getReferenceFinishedCode() == null, QuoteBomPreparationRecord::getReferenceFinishedCode, null)
+          .set(record.getSourceTopProductCode() == null, QuoteBomPreparationRecord::getSourceTopProductCode, null));
     }
     // 状态表必须始终指向本次按“产品行 + 核算月”实际复用/写入的准备记录。
     // 迁移前遗留记录被复用时也要刷新该引用，否则会出现状态期间已切月、

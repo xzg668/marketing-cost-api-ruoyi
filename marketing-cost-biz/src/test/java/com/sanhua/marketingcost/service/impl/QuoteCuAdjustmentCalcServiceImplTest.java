@@ -117,6 +117,27 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   }
 
   @Test
+  void reportsMissingFinancialRatesBeforeCheckingTheNullTotal() {
+    when(costRunEngine.run(any())).thenAnswer(invocation -> {
+      var result = costResult(invocation.getArgument(0), "100", "140");
+      var manufacture = new CostRunCostItemDto(); manufacture.setCostCode("MANUFACTURE");
+      manufacture.setCostName("制造费用"); manufacture.setRemark("制造费用率未命中：产品没有 U9 主档事业部");
+      var management = new CostRunCostItemDto(); management.setCostCode("MGMT_EXP");
+      management.setCostName("管理费用"); management.setRemark("三项费用未命中：欧洲业务支持部-海外");
+      var total = new CostRunCostItemDto(); total.setCostCode("TOTAL");
+      result.setCostItems(List.of(cost("MATERIAL", "100"), manufacture, management, total));
+      result.getResult().setTotalCost(null);
+      return result;
+    });
+    assertThatThrownBy(() -> service.calculate(request()))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("制造费用率未命中")
+        .hasMessageContaining("三项费用未命中")
+        .hasMessageNotContaining("TOTAL成本项");
+    verify(scenarioMapper, never()).insert(any(QuoteCostPriceScenario.class));
+  }
+
+  @Test
   @DisplayName("成本头totalCost与TOTAL不一致时保存前阻断")
   void blocksWhenTotalIdentityIsBroken() {
     when(costRunEngine.run(any())).thenAnswer(invocation -> {
@@ -128,6 +149,21 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     assertThatThrownBy(() -> service.calculate(request()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("totalCost与TOTAL");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"WATER_POWER", "OVERHAUL", "TOOLING_REPAIR"})
+  void missingDepartmentRateCannotBeSavedAsZero(String code) {
+    when(costRunEngine.run(any())).thenAnswer(invocation -> {
+      var result = costResult(invocation.getArgument(0), "100", "140");
+      var missing = cost(code, "0");
+      missing.setRemark(code + "部门经费率未命中");
+      result.setCostItems(List.of(cost("MATERIAL", "100"), missing, cost("TOTAL", "140")));
+      return result;
+    });
+    assertThatThrownBy(() -> service.calculate(request()))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("部门经费率未命中");
+    verify(scenarioMapper, never()).insert(any(QuoteCostPriceScenario.class));
   }
 
   @Test

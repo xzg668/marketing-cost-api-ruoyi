@@ -19,11 +19,18 @@ class OaWorkflowNotificationTest {
     assertThat(parsed.employeeNos()).containsExactly("001001","001002");
   }
   @ParameterizedTest @ValueSource(strings={"TECHNICAL"})
-  void requiresTechniciansForTechnicalReturn(String type) {
-    assertThatThrownBy(()->OaWorkflowNotification.parse(event("WF",type))).hasMessageContaining("employeeNos");
+  void validatesExplicitTechniciansButAllowsLocalAssignmentResolution(String type) {
+    assertThat(OaWorkflowNotification.parse(event("WF",type)).employeeNos()).isEmpty();
     var numeric=event("WF",type);numeric.putArray("employeeNos").add(123);
     assertThatThrownBy(()->OaWorkflowNotification.parse(numeric)).hasMessageContaining("字符串");
     assertThatThrownBy(()->OaWorkflowNotification.parse(event("WF",type,"001","001"))).hasMessageContaining("重复");
+  }
+  @Test void actualInitialTechnicalCallbackDoesNotRequireEmployeeNumbers() throws Exception {
+    var body = new ObjectMapper().readTree("""
+        {"requestId":"1331723149347012608","eventType":"TECHNICAL",
+         "reason":"技术补录：产品1145100050625：孟天豪（12211062）补产品资料、包装、辅料、焊料、工资、净损失率、价格。 补录地址：http://172.16.113.239:8080/collaboration/technical-data/forms/6"}
+        """);
+    assertThat(OaWorkflowNotification.parse(body).employeeNos()).isEmpty();
   }
   @ParameterizedTest @ValueSource(strings={"COSTING","COMPLETED"})
   void documentEventsNeedNoTechnician(String type) {

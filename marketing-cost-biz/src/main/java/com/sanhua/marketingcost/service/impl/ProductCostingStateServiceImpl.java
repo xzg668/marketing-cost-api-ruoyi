@@ -65,9 +65,9 @@ public class ProductCostingStateServiceImpl implements ProductCostingStateServic
             Wrappers.lambdaQuery(PricePrepareItem.class)
                 .eq(PricePrepareItem::getPrepareNo, normalizedPrepareNo)
                 .eq(PricePrepareItem::getOaFormItemId, oaFormItemId)
-                .eq(PricePrepareItem::getCurrentFlag, 1)
-                .orderByAsc(PricePrepareItem::getSettlementKey)
-                .orderByAsc(PricePrepareItem::getId));
+                // The fingerprint canonicalizes its references/evidence itself. Sorting these
+                // rows in MySQL also sorts multi-megabyte JSON and can exhaust its sort buffer.
+                .eq(PricePrepareItem::getCurrentFlag, 1));
     if (prices == null || prices.isEmpty()) {
       throw new QuoteIngestException("当前最终价格没有完整明细，请重新生成");
     }

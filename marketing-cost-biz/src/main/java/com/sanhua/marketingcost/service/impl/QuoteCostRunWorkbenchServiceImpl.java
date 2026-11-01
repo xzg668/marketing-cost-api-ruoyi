@@ -61,6 +61,16 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private static final BigDecimal KG_PER_TON = new BigDecimal("1000");
   private static final Pattern NEGATED_HISTORICAL_PRICE_PATTERN =
       Pattern.compile("沿用历史(?:月份|因素)?价\\s*[=:：]\\s*否");
+  private static final Set<String> OPTIONAL_COSTS = Set.of(
+      "OTHER_EXP_TECH_MOULD", "OTHER_EXP_TECH_CERTIFICATION", "OTHER_EXP_TECH_DEPRECIATION",
+      "OTHER_EXP_TECH_TOOLING", "DEPT_OTHER");
+  private static final Set<String> REQUIRED_RATE_COSTS = Set.of(
+      "LOSS", "MANUFACTURE", "ADJUSTED_MANUFACTURE_COST", "MGMT_EXP", "SALES_EXP", "FIN_EXP",
+      "OVERHAUL", "TOOLING_REPAIR", "WATER_POWER");
+  private static final Pattern APPROVED_LOSS_SOURCE =
+      Pattern.compile("公共净损失率缺失，采用已审批补录版本 \\d+");
+  private static final Pattern OA_DIVISION_SOURCE =
+      Pattern.compile("成品料号 .+ 未找到 U9 主档，按OA事业部 .+ 匹配(?:制造费用率|部门经费)");
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -344,16 +354,23 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         || totals.get(0).getAmount().compareTo(version.getTotalCost()) != 0) {
       throw new QuoteIngestException("成本版本总计行与汇总金额不一致，本次核算已回滚");
     }
+    return assessDataQuality(parts, costs);
+  }
+
+  private DataQuality assessDataQuality(List<CostRunPartItem> parts, List<CostRunCostItem> costs) {
     Set<String> warnings = new LinkedHashSet<>();
     for (CostRunCostItem cost : costs) {
-      if (cost.getAmount() == null) {
-        warnings.add(firstText(cost.getCostCode(), cost.getCostName(), "未知费用项") + " 金额为空");
+      String label = firstText(cost.getCostName(), cost.getCostCode(), "未知费用项");
+      String code = Objects.requireNonNullElse(cost.getCostCode(), "");
+      if (cost.getAmount() == null && !OPTIONAL_COSTS.contains(code)) {
+        warnings.add(label + " 金额为空");
       }
-      if (isQualityWarningRemark(cost.getRemark())) {
-        warnings.add(
-            firstText(cost.getCostCode(), cost.getCostName(), "未知费用项")
-                + "："
-                + cost.getRemark().trim());
+      if (REQUIRED_RATE_COSTS.contains(code) && cost.getRate() == null) {
+        warnings.add(label + " 费率缺失");
+      }
+      String warning = costWarningRemark(cost);
+      if (StringUtils.hasText(warning)) {
+        warnings.add(label + "：" + warning);
       }
     }
     for (CostRunPartItem part : parts) {
@@ -372,6 +389,26 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             ? "成本汇总、部品明细和费用明细完整"
             : truncateQualitySummary(String.join("；", warnings));
     return new DataQuality(warnings.isEmpty() ? "COMPLETE" : "WARNING", warnings.size(), summary);
+  }
+
+  private String costWarningRemark(CostRunCostItem cost) {
+    if (!StringUtils.hasText(cost.getRemark())) return null;
+    String code = Objects.requireNonNullElse(cost.getCostCode(), "");
+    boolean calculated = cost.getAmount() != null
+        && (!REQUIRED_RATE_COSTS.contains(code) || cost.getRate() != null);
+    List<String> warnings = new ArrayList<>();
+    for (String fragment : cost.getRemark().split("；")) {
+      String text = fragment.trim();
+      // A successful, recorded fallback is provenance. Keep it in the saved row, but do not
+      // treat its description of the absent primary source as an unresolved quality issue.
+      boolean resolved = calculated && (
+          ("LOSS".equals(code) && APPROVED_LOSS_SOURCE.matcher(text).matches())
+          || (Set.of("MANUFACTURE", "MANUFACTURE_COST", "ADJUSTED_MANUFACTURE_COST",
+              "OVERHAUL", "TOOLING_REPAIR", "WATER_POWER").contains(code)
+              && OA_DIVISION_SOURCE.matcher(text).matches()));
+      if (!resolved && isQualityWarningRemark(text)) warnings.add(text);
+    }
+    return String.join("；", warnings);
   }
 
   private boolean isQualityWarningRemark(String remark) {
@@ -514,8 +551,31 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     if (result != null) {
       response.setResultHeader(result);
     }
-    response.setPartItems(partRows(versionId).stream().map(this::toPartDto).toList());
-    response.setCostItems(costRows(versionId).stream().map(this::toCostDto).toList());
+    List<CostRunPartItem> parts = partRows(versionId);
+    List<CostRunCostItem> costs = costRows(versionId);
+    response.setPartItems(parts.stream().map(this::toPartDto).toList());
+    response.setCostItems(costs.stream().map(this::toCostDto).toList());
+    var display = response.getCurrentDisplayVersion();
+    if (display != null && List.of(STATUS_SUCCESS, STATUS_HISTORY, STATUS_CONFIRMED).contains(display.getStatus())) {
+      // Reassess already-loaded saved facts for display; never rewrite historical costs or
+      // run a new calculation just to correct an old warning classification.
+      var totals = costs.stream().filter(row -> "TOTAL".equals(row.getCostCode())).toList();
+      boolean complete = parts.size() == intValue(display.getPartItemCount())
+          && costs.size() == intValue(display.getCostItemCount()) && totals.size() == 1
+          && totals.getFirst().getAmount() != null && display.getTotalCost() != null
+          && totals.getFirst().getAmount().compareTo(display.getTotalCost()) == 0;
+      DataQuality quality = complete ? assessDataQuality(parts, costs)
+          : new DataQuality("WARNING", 1, "成本版本汇总与明细不完整或不一致，请检查原结果");
+      applyDisplayQuality(display, quality);
+      var latest = response.getLatestConfirmed();
+      if (latest != null && Objects.equals(latest.getId(), versionId)) applyDisplayQuality(latest, quality);
+    }
+  }
+
+  private void applyDisplayQuality(QuoteCostRunSummaryResponse summary, DataQuality quality) {
+    summary.setDataQualityStatus(quality.status());
+    summary.setDataQualityWarningCount(quality.warningCount());
+    summary.setDataQualitySummary(quality.summary());
   }
 
   private List<String> readinessBlockingReasons(Scope scope) {

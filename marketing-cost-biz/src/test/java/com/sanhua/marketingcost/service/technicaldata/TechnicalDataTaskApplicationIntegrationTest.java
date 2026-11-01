@@ -8,7 +8,7 @@ import static org.mockito.Mockito.when;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataProfileUpdateRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPublishRequest;
 import com.sanhua.marketingcost.entity.SysUser;
-import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
+import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
 import com.sanhua.marketingcost.service.SysUserService;
 import java.util.List;
 import java.util.Map;
@@ -28,7 +28,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 @Tag("integration")
 @DisplayName("TW-01 批量分派的产品隔离与并发唯一性（真实 MySQL）")
-class TechnicalDataTaskApplicationIntegrationTest extends BomMapperTestBase {
+class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegrationTestBase {
   private static final AtomicLong IDS = new AtomicLong(8_100_000);
   private static final TechnicalDataActor ADMIN = new TechnicalDataActor(1L, "管理员", Set.of("*:*:*"));
   @Autowired private TechnicalDataTaskApplicationService service;
@@ -48,6 +48,8 @@ class TechnicalDataTaskApplicationIntegrationTest extends BomMapperTestBase {
 
   @MockBean private com.sanhua.marketingcost.service.NetLossRateQuery netLoss;
   @MockBean private TechnicalDataPackageSourceCheck packaging;
+  @MockBean private com.sanhua.marketingcost.service.PricePrepareService pricePreparation;
+  @Autowired private com.sanhua.marketingcost.mapper.MaterialMasterRawMapper materials;
 
   @BeforeEach void prepareUsers() {
     // 任务身份测试明确提供相邻模块的公共来源；实际包装和取率由各模块集成测试覆盖。
@@ -186,6 +188,44 @@ class TechnicalDataTaskApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(accepted.items().getFirst().task().assigneeUserId()).isEqualTo(102L);
     assertThat(accepted.items().getFirst().task().id()).isEqualTo(task.id());
     org.mockito.Mockito.verify(oa,org.mockito.Mockito.times(2)).submit(org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test void threeMissingPricesCanBeRedispatchedFromTheSameUnassignedTask() {
+    var ids = products(1);
+    var prepared = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult();
+    var summary = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult();
+    summary.setStatus("PARTIAL"); prepared.setSummary(summary);
+    for (int i = 1; i <= 3; i++) {
+      String code = "DISPATCH-PRICE-" + ids.getFirst() + "-" + i;
+      var material = new com.sanhua.marketingcost.entity.MaterialMasterRaw();
+      material.setMaterialCode(code); material.setOrganizationCode("COMMERCIAL"); material.setUnit("只");
+      material.setActiveFlag(1); material.setImportBatchId(code); material.setSourceType("EXCEL");
+      materials.insert(material);
+      var gap = new com.sanhua.marketingcost.entity.PricePrepareGap();
+      gap.setGapMaterialCode(code); gap.setGapType("MISSING_PRICE"); gap.setReasonCode("MISSING");
+      prepared.getGaps().add(gap);
+    }
+    when(pricePreparation.calculate(org.mockito.ArgumentMatchers.any())).thenReturn(prepared);
+    jdbc.update("UPDATE lp_quote_costing_workspace SET current_bom_build_batch_id='price-dispatch-test' WHERE oa_form_item_id=?", ids.getFirst());
+    org.mockito.Mockito.doReturn(new com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult("test",
+        com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult.Status.REJECTED,200,"test",
+        "受控拒绝",null,null,1)).when(oa).submit(org.mockito.ArgumentMatchers.any());
+    var first = service.publish(request(ids, 101L), ADMIN);
+    Long taskId = first.items().getFirst().task().id();
+    assertThat(service.detail(taskId, ADMIN).taskStatus()).isEqualTo("UNASSIGNED");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_price_claim c JOIN lp_quote_tech_module m ON m.id=c.owner_module_id JOIN lp_quote_tech_product p ON p.id=m.product_id WHERE p.task_id=?", Integer.class, taskId)).isEqualTo(3);
+    org.mockito.Mockito.doAnswer(call -> {
+      com.fasterxml.jackson.databind.node.ObjectNode body = call.getArgument(0);
+      return new com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult("test",
+          com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult.Status.SUCCESS,200,"0","成功",
+          body.path("requestId").asText(),null,1);
+    }).when(oa).submit(org.mockito.ArgumentMatchers.any());
+    var second = service.publish(request(ids, 102L), ADMIN);
+    assertThat(second.oaResult().status().name()).isEqualTo("SUCCESS");
+    assertThat(second.items().getFirst().task().id()).isEqualTo(taskId);
+    assertThat(modules.selectByTaskId(taskId)).filteredOn(row -> "PRICE".equals(row.getModuleType()))
+        .singleElement().satisfies(row -> assertThat(row.getAssigneeUserId()).isEqualTo(102L));
+    org.mockito.Mockito.verify(oa, org.mockito.Mockito.times(2)).submit(org.mockito.ArgumentMatchers.any());
   }
 
   private List<Long> products(int count) {

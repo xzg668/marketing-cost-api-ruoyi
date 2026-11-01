@@ -26,17 +26,21 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
   private final MonthlySupplementalFixedPriceSource supplemental;
   private final MonthlyScrapPriceSource scrap;
   private final MonthlyOdsPriceSource ods;
+  private final MonthlyInvoicePriceSource invoices;
+  private final MonthlyInquiryPriceSource inquiries;
 
   public MonthlyPriceSources(MaterialPricePriorityService priorities,HouseholdMonthlyPriceSource household,
       MonthlyFixedPriceSource fixed,MonthlySettlementPriceSource settlement,MonthlyLegacyLinkedPriceSource linked,
       MonthlyOriginalLinkedPriceSource originalLinked,MonthlyLegacyRangePriceSource range,
       MonthlyOriginalRangePriceSource originalRange,MonthlyQuantityRangeSource quantities,
       MonthlyLegacyRangeSourceMapper rangeRows,MonthlySupplementalFixedPriceSource supplemental,MonthlyScrapPriceSource scrap,
-      MonthlyOdsPriceSource ods) {
+      MonthlyOdsPriceSource ods,MonthlyInvoicePriceSource invoices,MonthlyInquiryPriceSource inquiries) {
     this.priorities=priorities;this.household=household;this.fixed=fixed;this.settlement=settlement;
     this.linked=linked;this.originalLinked=originalLinked;this.range=range;this.originalRange=originalRange;
     this.quantities=quantities;this.rangeRows=rangeRows;this.supplemental=supplemental;this.scrap=scrap;
     this.ods=ods;
+    this.invoices=invoices;
+    this.inquiries=inquiries;
   }
 
   @Override public Candidates resolve(Context context,Set<MonthlyPriceRequest> requests,
@@ -46,15 +50,18 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     var orders=orders(context,pending);
     var automatic=new LinkedHashSet<MonthlyPriceRequest>();pending.stream().filter(request->orders.get(request).size()>1).forEach(automatic::add);
     if(!automatic.isEmpty())accept(household.read(context,automatic),pending,values,problems);
-    // Registered scrap retains its existing exclusive source contract. This resolver is
-    // called only for missing monthly facts; registration cannot replace an adopted fact.
+    // Existing scrap rules retain priority; a genuinely missing scrap price may use inquiry.
     automatic.retainAll(pending);
     if (!automatic.isEmpty()) {
       var registeredScrap = scrap.read(context, Set.copyOf(automatic));
       accept(registeredScrap,pending,values,problems);
-      registeredScrap.problems().forEach((request,problem)->{
-        problems.put(request,problem);pending.remove(request);
-      });
+      var missingScrap=new LinkedHashSet<MonthlyPriceRequest>();
+      registeredScrap.problems().forEach((request,problem)->{if(problem.reason()==Failure.MISSING)missingScrap.add(request);});
+      if(!missingScrap.isEmpty()) {
+        var inquiry=inquiries.read(context,missingScrap);requireComplete(missingScrap,inquiry);
+        accept(inquiry,pending,values,problems);
+        for(var request:missingScrap)if(pending.remove(request))problems.put(request,registeredScrap.problems().get(request));
+      }
     }
     for(int rank=0;rank<MaterialPriceSourceType.DEFAULT_ORDER.size() && !pending.isEmpty();rank++) {
       var groups=new EnumMap<MaterialPriceSourceType,Set<MonthlyPriceRequest>>(MaterialPriceSourceType.class);
@@ -82,7 +89,15 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
+      var found=invoices.read(context,Set.copyOf(pending));requireComplete(pending,found);
+      accept(found,pending,values,problems);
+    }
+    if(!pending.isEmpty()) {
       var found=ods.orders(context,Set.copyOf(pending));requireComplete(pending,found);
+      accept(found,pending,values,problems);
+    }
+    if(!pending.isEmpty()) {
+      var found=inquiries.read(context,Set.copyOf(pending));requireComplete(pending,found);
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
@@ -96,10 +111,17 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
   @Override public Candidates resolveScrap(Context context,Set<MonthlyPriceRequest> requests,
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
     var found = scrap.read(context,requests);
+    var values = new LinkedHashMap<>(found.values());
     var problems = new LinkedHashMap<>(found.problems());
+    var missing = new LinkedHashSet<MonthlyPriceRequest>();
     for (var request : requests) if (!found.values().containsKey(request))
-      problems.putIfAbsent(request,new Problem(Failure.MISSING,"废料没有适用价格规则"));
-    return new Candidates(found.values(),problems);
+      if(!problems.containsKey(request)||problems.get(request).reason()==Failure.MISSING)missing.add(request);
+    if(!missing.isEmpty()) {
+      var inquiry=inquiries.read(context,missing);requireComplete(missing,inquiry);
+      for(var request:missing)problems.remove(request);
+      values.putAll(inquiry.values());problems.putAll(inquiry.problems());
+    }
+    return new Candidates(values,problems);
   }
 
   private Map<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>> orders(Context context,Set<MonthlyPriceRequest> requests) {

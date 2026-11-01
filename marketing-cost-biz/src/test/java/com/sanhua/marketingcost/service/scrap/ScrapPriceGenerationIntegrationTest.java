@@ -47,7 +47,7 @@ class ScrapPriceGenerationIntegrationTest {
           "V311__original_linked_expression_capacity.sql",
           "V325__finance_effective_price.sql",
           "V326__original_workbook_source.sql",
-          "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql");
+          "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql", "V356__inquiry_price_sources.sql");
   static SqlSessionTemplate sql;
   static JdbcTemplate jdbc;
   static DataSourceTransactionManager transactions;
@@ -189,7 +189,8 @@ class ScrapPriceGenerationIntegrationTest {
             transactions,
             FinanceEffectivePriceTestSupport.service(sql, json),
             generation,
-            com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json));
+            com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json),
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, transactions, json));
     copper =
         new FinanceFactorCuAdjustmentService(monthly, batches, identities, sources, publication);
   }

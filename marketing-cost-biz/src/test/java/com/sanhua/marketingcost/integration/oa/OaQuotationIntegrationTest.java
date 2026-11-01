@@ -204,6 +204,27 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
+  void sparseOaProductFieldsAreAcceptedAndMissingCostsStayNull() throws Exception {
+    var source = request(2);
+    ((ObjectNode) source.path("detailData").get(0).path("fields"))
+        .retain("cpmc", "khbm", "lh", "shxh", "ysfyz", "yjnylwz", "cyl");
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+            .contentType("application/json").content(source.toString()))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("0"))
+        .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+        .andReturn();
+    var result = json.readTree(response.getResponse().getContentAsByteArray());
+    long itemId = result.at("/data/itemMappings/0/quoteItemId").asLong();
+    var stored = jdbc.queryForMap("SELECT total_with_ship,total_no_ship,material_cost,labor_cost "
+        + "FROM oa_form_item WHERE id=?", itemId);
+    assertThat(stored.values()).containsOnlyNulls();
+    var raw = jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
+        String.class, source.path("requestId").asText());
+    assertThat(json.readTree(raw)).isEqualTo(source);
+    assertThat(service.receive(PEER, source.toString())).isEqualTo(result);
+  }
+
+  @Test
   void businessRejectionReturnsHttp200AndDoesNotCreateAQuotation() throws Exception {
     var source = request(2);
     ((ObjectNode) source.path("mainData")).put("hl", "无法解析的汇率");
@@ -502,7 +523,7 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
             post(URL).header("Authorization", TOKEN).contentType("application/json").content("{"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.data.status").value("REJECTED"));
-    ((ObjectNode) r.path("mainData")).remove("syb");
+    ((ObjectNode) r.path("mainData")).putArray("syb").add("非法数组");
     http.perform(
             post(URL)
                 .header("Authorization", TOKEN)

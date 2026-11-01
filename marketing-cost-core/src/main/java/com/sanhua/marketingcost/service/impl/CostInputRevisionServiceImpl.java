@@ -187,6 +187,9 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
         com.sanhua.marketingcost.service.pricing.OriginalPriceCalculationVersion.CURRENT);
     append(canonical, "productFeePolicy",
         com.sanhua.marketingcost.service.costing.ProductFeeContract.POLICY_VERSION);
+    // Missing department rates used to be stored as zero. Keep those versions as
+    // history, but require a new calculation under the mandatory-fee/OA fallback rule.
+    append(canonical, "departmentFeePolicy", "U9_OR_OA_REQUIRED_V1");
     append(canonical, "sources", sourceRevision);
     var monthly = monthlyInputs.read(form, item, pricingMonth);
     append(canonical, "monthlyPrices", monthly.evidence());
@@ -327,6 +330,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     var inputs = new UnadoptedPriceSourceRevision(jdbcTemplate);
     var canonical = new StringBuilder();
     append(canonical,"odsSources",inputs.ods(unit,materials));
+    append(canonical,"invoiceSources",inputs.invoices(unit,materials));
     var technical = new TreeSet<String>();
     var legacyRuleIds = new TreeSet<Long>();
     var financialOrganizations = new TreeSet<String>();
@@ -369,6 +373,9 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     var dependencies = inputs.scrapDependencies(unit, materials);
     append(canonical, "scrapMappings", dependencies.revision());
     scrapCodes.addAll(dependencies.materialCodes());
+    // No BOM/preparation scope means all inquiry sources must remain observable;
+    // unrelated scrap mappings must not accidentally narrow this initial discovery.
+    append(canonical,"inquirySources",inputs.inquiries(unit,month,materials.isEmpty()?List.of():scrapCodes));
     if (!dependencies.materialCodes().isEmpty()) append(canonical, "scrapSources", additionalPriceRevision(unit, new ArrayList<>(dependencies.materialCodes())));
     var parameters = new ArrayList<Object>(); parameters.add(unit);
     String sql = "SELECT id FROM lp_scrap_price WHERE business_unit_type=? AND price_type='LINKED'";

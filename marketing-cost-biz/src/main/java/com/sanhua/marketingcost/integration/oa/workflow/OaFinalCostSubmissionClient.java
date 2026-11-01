@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 /** I07 黄色报文：整单成本写入与核算节点提交只发送一次。 */
 @Component
 public class OaFinalCostSubmissionClient {
-  public record Row(Integer sourceRowIndex, String cost) {}
+  public record Row(Integer sourceRowIndex, String cost, String shippingFee) {}
   private final ObjectMapper json;
   private final OaWorkflowClient workflow;
   private final OaWorkflowProperties properties;
@@ -31,6 +31,7 @@ public class OaFinalCostSubmissionClient {
     }
     if (rows == null || rows.isEmpty()) throw new IllegalArgumentException("整单没有可提交的成本结果");
     String key = costField(processCode);
+    String withShippingKey = costWithShippingField(processCode);
     long subFormId = properties.requireFinalCostSubFormId(processCode);
     var body = json.createObjectNode();
     body.put("userid", employeeNo);
@@ -46,13 +47,32 @@ public class OaFinalCostSubmissionClient {
       if (!positions.add(row.sourceRowIndex())) {
         throw new IllegalArgumentException("原 OA 明细行号重复，不能确定成本写入位置");
       }
-      if (row.cost() == null || new BigDecimal(row.cost()).signum() < 0) {
-        throw new IllegalArgumentException("产品核算成本缺失或为负数");
-      }
+      BigDecimal cost = amount(row.cost(), "产品核算成本");
+      BigDecimal shipping = row.shippingFee() == null ? BigDecimal.ZERO : amount(row.shippingFee(), "产品运费");
       details.addObject().put("dataKey", key).put("content", row.cost())
+          .put("subFormId", subFormId).put("dataIndex", row.sourceRowIndex());
+      details.addObject().put("dataKey", withShippingKey).put("content", cost.add(shipping).toPlainString())
           .put("subFormId", subFormId).put("dataIndex", row.sourceRowIndex());
     }
     return body;
+  }
+
+  private String costWithShippingField(String processCode) {
+    return switch (processCode) {
+      case "FI-SC-005" -> "hyfzcbbhs";
+      case "FI-SC-006" -> "zcbbhs";
+      case "FI-SC-020" -> "hysfzcbbhs";
+      default -> throw new IllegalArgumentException("未配置该 OA 流程的含运费成本字段：" + processCode);
+    };
+  }
+
+  private static BigDecimal amount(String value, String label) {
+    if (value == null) throw new IllegalArgumentException(label + "缺失");
+    final BigDecimal amount;
+    try { amount = new BigDecimal(value); }
+    catch (NumberFormatException invalid) { throw new IllegalArgumentException(label + "不是有效金额"); }
+    if (amount.signum() < 0) throw new IllegalArgumentException(label + "不能为负数");
+    return amount;
   }
 
   public String costField(String processCode) {
@@ -67,7 +87,9 @@ public class OaFinalCostSubmissionClient {
 
   public OaWorkflowResult submit(ObjectNode body) {
     try (var call = OaInterfaceLog.start("I07_FINAL_COST_SUBMISSION")) {
-      call.business(body).field("productCount", body.at("/formData/dataDetails").size());
+      var positions = new HashSet<Integer>();
+      body.at("/formData/dataDetails").forEach(field -> positions.add(field.path("dataIndex").asInt()));
+      call.business(body).field("productCount", positions.size());
       try {
         var result = workflow.submit(body);
         call.result(result.status().name(), result.httpStatus(), result.errorCode());

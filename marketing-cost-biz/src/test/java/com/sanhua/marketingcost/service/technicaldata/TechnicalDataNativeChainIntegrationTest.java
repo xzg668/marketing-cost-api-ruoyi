@@ -11,7 +11,7 @@ import com.sanhua.marketingcost.integration.oa.OaIntegrationProperties;
 import com.sanhua.marketingcost.integration.oa.directory.*;
 import com.sanhua.marketingcost.integration.oa.workflow.*;
 import com.sanhua.marketingcost.mapper.QuoteTechTaskMapper;
-import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
+import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
 import com.sanhua.marketingcost.service.SysUserService;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -26,10 +26,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Tag("integration")
-class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
+class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegrationTestBase {
   private static final AtomicLong IDS=new AtomicLong(9_510_000);
-  private static final TechnicalDataActor ADMIN=new TechnicalDataActor(1L,"报价员",Set.of("*:*:*"));
-  private static final TechnicalDataActor DING=new TechnicalDataActor(101L,"丁云龙",Set.of("technical:data:task:list","technical:data:task:edit"));
+  protected static final TechnicalDataActor ADMIN=new TechnicalDataActor(1L,"报价员",Set.of("*:*:*"));
+  protected static final TechnicalDataActor DING=new TechnicalDataActor(101L,"丁云龙",Set.of("technical:data:task:list","technical:data:task:edit"));
   private static final TechnicalDataActor PAN=new TechnicalDataActor(102L,"潘晓红",DING.authorities());
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager manager;
@@ -48,11 +48,39 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
   @Autowired OaPersonDirectoryRepository directory;
 
   @Autowired TechnicalDataReturnService returns;
+  @Autowired TechnicalDataGapStatusQuery gapStatus;
   @Autowired TechnicalDataOaSubmissionLifecycle lifecycle;
   @Autowired TechnicalDataNetLossApplicationService netLoss;
+  @Autowired TechnicalDataRequirementRefreshService requirementRefresh;
   @Autowired com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository people;
   @Autowired com.sanhua.marketingcost.mapper.QuoteTechSubmissionMapper submissionMapper;
   @Autowired com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy access;
+
+  protected String accountingMonth() { return "2026-09"; }
+
+  @Test void resolvedUnassignedAdditionalGapRestoresSubmittedTaskWithoutResubmittingSavedModules() {
+    var fixture = submittedFixture(1, true);
+    long taskId = fixture.taskIds().getFirst();
+    var product = repository.findProducts(taskId).getFirst();
+    var saved = jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version WHERE product_id=? ORDER BY id", product.getId());
+    var submissions = jdbc.queryForList("SELECT * FROM lp_quote_tech_submission WHERE task_id=? ORDER BY id", taskId);
+    var tx = new TransactionTemplate(manager);
+    var missing = new TechnicalDataModuleRequirement("DRAWING_BOM", true, "DRAWING_SOURCE_PENDING", "待核实图库",
+        TechnicalDataAvailability.MISSING, "previous-source", java.time.LocalDateTime.now());
+    tx.executeWithoutResult(status -> requirementRefresh.reconcile(product.getOaFormItemId(), accountingMonth(), "210", List.of(missing)));
+    assertThat(taskMapper.selectById(taskId).getTaskStatus()).isEqualTo("PENDING");
+    var ready = new TechnicalDataModuleRequirement("DRAWING_BOM", false, "DRAWING_SOURCE_AVAILABLE", "图库已发布",
+        TechnicalDataAvailability.AVAILABLE, "published-source", java.time.LocalDateTime.now());
+    clearInvocations(oa);
+    tx.executeWithoutResult(status -> requirementRefresh.reconcile(product.getOaFormItemId(), accountingMonth(), "210", List.of(ready)));
+    assertThat(taskMapper.selectById(taskId).getTaskStatus()).isEqualTo("SUBMITTED");
+    var drawing = repository.findModules(product.getId()).stream().filter(m -> "DRAWING_BOM".equals(m.getModuleType())).findFirst().orElseThrow();
+    assertThat(drawing.getRequiredFlag()).isZero();
+    assertThat(drawing.getModuleStatus()).isEqualTo("NOT_REQUIRED");
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version WHERE product_id=? ORDER BY id", product.getId())).isEqualTo(saved);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_tech_submission WHERE task_id=? ORDER BY id", taskId)).isEqualTo(submissions);
+    verifyNoInteractions(oa);
+  }
 
   record Fixture(long formId,List<Long> taskIds,String dispatchId) {}
 
@@ -100,9 +128,9 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
       long item=IDS.incrementAndGet();
       jdbc.update("INSERT INTO oa_form_item(id,oa_form_id,seq,material_no,product_name,sunl_model,business_unit_type,deleted) VALUES(?,?,?,?,'测试产品','M','COMMERCIAL',0)",item,form,i+1,"P"+item);
       var task=new QuoteTechTask();task.setTaskNo("TD-CHAIN-"+item);task.setOaFormId(form);task.setOaFormItemId(item);task.setOaNo(oaNo);
-      task.setAccountingMonth("2026-09");task.setBusinessUnitType("COMMERCIAL");task.setApplicableOrgCode("210");task.setAssigneeUserId(i<dingProducts?101L:102L);task.setAssigneeName("技术员");
+      task.setAccountingMonth(accountingMonth());task.setBusinessUnitType("COMMERCIAL");task.setApplicableOrgCode("210");task.setAssigneeUserId(i<dingProducts?101L:102L);task.setAssigneeName("技术员");
       task=persistence.createTask(task); ids.add(task.getId());
-      var product=new QuoteTechProduct();product.setTaskId(task.getId());product.setOaFormItemId(item);product.setMaterialNo("P"+item);product.setProductName("测试产品");product.setQuoteNo(oaNo);product.setAccountingMonth("2026-09");product.setContentSchemaVersion(2);
+      var product=new QuoteTechProduct();product.setTaskId(task.getId());product.setOaFormItemId(item);product.setMaterialNo("P"+item);product.setProductName("测试产品");product.setQuoteNo(oaNo);product.setAccountingMonth(accountingMonth());product.setContentSchemaVersion(2);
       product.setSourceModel("PMM-NATIVE-" + item);
       product.setSourceSnapshotJson("{\"sourceModel\":\"PMM-NATIVE-" + item
           + "\",\"newProduct\":false,\"businessUnitType\":\"COMMERCIAL\",\"materialOrganizationCode\":\"COMMERCIAL\"}");
@@ -124,7 +152,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     return new Fixture(form,ids,batch);
   }
 
-  private void save(long taskId,TechnicalDataActor actor,String amount) {
+  protected void save(long taskId,TechnicalDataActor actor,String amount) {
     var product=repository.findProducts(taskId).getFirst();
     var request=new TechnicalDataProfileUpdateRequest();request.setExpectedVersion(product.getRowVersion());request.setProductProperty("非标品");
     request.setHasAdditionalFees(true);request.setUnitToolingFee(amount);request.setUnitMouldFee("/");request.setUnitCertificationFee("/");
@@ -136,7 +164,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     profiles.save(product.getId(),request,actor);
   }
 
-  private TechnicalDataDocumentSubmissionService.Request request(long form,TechnicalDataActor actor) {
+  protected TechnicalDataDocumentSubmissionService.Request request(long form,TechnicalDataActor actor) {
     return new TechnicalDataDocumentSubmissionService.Request(UUID.randomUUID().toString(),documents.workbench(form,actor).fingerprint());
   }
 
@@ -277,7 +305,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     assertThat(views.detail(f.taskIds().getFirst(),ADMIN).taskStatus()).isEqualTo("PENDING");
   }
 
-  private void materialActor() {
+  protected void materialActor() {
     jdbc.update("UPDATE sys_user SET employee_no='11101516' WHERE user_id=1");
     String username=jdbc.queryForObject("SELECT user_name FROM sys_user WHERE user_id=1",String.class);
     org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
@@ -285,7 +313,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
   }
   @AfterEach void clearActor() { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
 
-  private Fixture submittedFixture(int count,boolean extraModule) {
+  protected Fixture submittedFixture(int count,boolean extraModule) {
     var fixture=dispatched(count,false,extraModule);
     for(long id:fixture.taskIds()) { save(id,DING,"2.50"); if(extraModule) saveRate(id,"0.3"); }
     assertThat(documents.submit(fixture.formId(),request(fixture.formId(),DING),DING).status()).isEqualTo("SUCCESS");
@@ -294,7 +322,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     materialActor(); clearInvocations(oa);
     return fixture;
   }
-  private void saveRate(long taskId,String percent) {
+  protected void saveRate(long taskId,String percent) {
     var product=repository.findProducts(taskId).getFirst();
     var req=new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataNetLossSaveRequest();
     req.setExpectedVersion(product.getRowVersion());req.setEntryMode("MANUAL");req.setPercent(percent);
@@ -310,8 +338,8 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
   @Autowired com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationService notices;
 
   @Test void returnedTechnicianCanResubmitAndOriginalQuoterCanCostWithoutApprovalCallback() {
-    var f=dispatched(1,false);
-    long task=f.taskIds().getFirst();save(task,DING,"2.50");
+    var f=dispatched(1,false,true);
+    long task=f.taskIds().getFirst();save(task,DING,"2.50");saveRate(task,"0.3");
     assertThat(documents.submit(f.formId(),request(f.formId(),DING),DING).status()).isEqualTo("SUCCESS");
     materialActor();
     assertThat(access.quoterNode(f.formId()).workItemId()).startsWith("LOCAL-INITIAL:");
@@ -326,12 +354,16 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     notice.putArray("employeeNos").add("12211470");
     notices.receive(new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL")),notice.toString());
     assertThatThrownBy(()->access.requireCostPublication(f.formId())).hasMessageContaining("尚未全部成功提交");
+    long item = repository.findProducts(task).getFirst().getOaFormItemId();
+    assertThat(gapStatus.forForm(f.formId(),item,"2026-09").getFirst().pendingModules()).containsExactly("PROFILE","NET_LOSS");
     save(task,DING,"4.50");
+    assertThat(gapStatus.forForm(f.formId(),item,"2026-09").getFirst().pendingModules()).hasSize(2);
     assertThat(documents.submit(f.formId(),request(f.formId(),DING),DING).status()).isEqualTo("SUCCESS");
     assertThat(access.quoterNode(f.formId()).workItemId()).startsWith("LOCAL-TECHNICAL:");
     new TransactionTemplate(manager).executeWithoutResult(tx->costingSubmissions.accept(f.formId(),1L));
     access.requireCostPublication(f.formId());
     assertThat(taskMapper.selectById(task).getTaskStatus()).isEqualTo("SUBMITTED");
+    assertThat(gapStatus.forForm(f.formId(),item,"2026-09").getFirst().pendingModules()).isEmpty();
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_notification WHERE flow_id=(SELECT id FROM lp_oa_workflow_state WHERE workflow_request_id=?)",Long.class,"FLOW-"+f.formId())).isEqualTo(1);
   }
 
@@ -346,11 +378,14 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     verify(oa,times(1)).submit(any());
   }
 
-  @Test void returnOnlySelectedModuleThenSubmitOnlyReturnedProductAndPreserveSubmittedHistory() {
+  @Test void returnEntireProductThenResubmitAndPreserveOtherProductAndHistory() {
     var f=submittedFixture(2,true);long task=f.taskIds().getFirst();
     var before=repository.findProducts(task).getFirst();
     long oldProfile=repository.findModules(before.getId()).stream().filter(m->"PROFILE".equals(m.getModuleType())).findFirst().orElseThrow().getCurrentVersionId();
-    var req=returnRequest(task,"PROFILE");
+    assertThat(gapStatus.forForm(f.formId(), before.getOaFormItemId(), "2026-09").getFirst().pendingModules()).isEmpty();
+    assertThatThrownBy(() -> returns.submit(returnRequest(task,"PROFILE"), ADMIN)).hasMessageContaining("按产品退回全部");
+    verifyNoInteractions(oa);
+    var req=returnRequest(task,"PROFILE","NET_LOSS");
     var result=returns.submit(req,ADMIN);
     assertThat(result.status()).isEqualTo("SUCCESS");
     assertThat(returns.submit(req,ADMIN).batchId()).isEqualTo(result.batchId());
@@ -358,14 +393,17 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     verify(oa,times(1)).submit(argThat(body->body.path("remark").asText().contains("退回修改")
         && body.path("userid").asText().equals("11101516")
         && body.at("/formData/dataDetails/0/dataOptions/0/optionId").asText().equals("12211470")));
-    assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE");
+    assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE","NET_LOSS");
     assertThat(repository.findProducts(task).getFirst().getCurrentEditVersionId()).isEqualTo(before.getCurrentEditVersionId());
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE product_id=? AND version_status IN ('DRAFT','VOIDED')",Long.class,before.getId())).isEqualTo(1);
 
     assertThat(people.current(f.taskIds().getLast()).getFirst().todoStatus()).isEqualTo("SUBMITTED");
     assertThat(DING.canEditModule(taskMapper.selectById(task),repository.findModules(before.getId()).stream().filter(m->"PROFILE".equals(m.getModuleType())).findFirst().orElseThrow())).isTrue();
-    assertThat(netLoss.get(before.getId(),null,DING).editable()).isFalse();
-    assertThatThrownBy(()->saveRate(task,"0.9")).hasMessageContaining("未分派");
+    assertThat(netLoss.get(before.getId(),null,DING).editable()).isTrue();
+    assertThat(gapStatus.forForm(f.formId(), before.getOaFormItemId(), "2026-09").getFirst().pendingModules()).containsExactly("PROFILE","NET_LOSS");
+    var untouched = repository.findProducts(f.taskIds().getLast()).getFirst();
+    assertThat(gapStatus.forForm(f.formId(), untouched.getOaFormItemId(), "2026-09").getFirst().pendingModules()).isEmpty();
+    saveRate(task,"0.9");
     assertThat(jdbc.queryForObject("SELECT version_status FROM lp_quote_tech_data_version WHERE id=?",String.class,oldProfile)).isEqualTo("SUBMITTED");
     save(task,DING,"9.99");
     assertThat(views.detail(task,ADMIN).products().getFirst().profile().unitToolingFee()).isEqualTo("2.5");
@@ -374,11 +412,10 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     assertThat(resubmit.status()).isEqualTo("SUCCESS");
     assertThat(documents.submitted(f.formId(),resubmit.batchId(),ADMIN).tasks()).hasSize(1);
     var current=people.current(task).getFirst();
-    assertThat(submissionMapper.selectById(current.latestSubmissionId()).getModuleTypesJson()).contains("PROFILE").doesNotContain("NET_LOSS");
-    // 下一轮可退回此人另一块仍指向旧提交版本的资料。
-    assertThat(returns.submit(returnRequest(task,"NET_LOSS"),ADMIN).status()).isEqualTo("SUCCESS");
-    assertThat(netLoss.get(before.getId(),null,DING).editable()).isTrue();
-    assertThat(DING.canEditModule(taskMapper.selectById(task),repository.findModules(before.getId()).stream().filter(m->"PROFILE".equals(m.getModuleType())).findFirst().orElseThrow())).isFalse();
+    assertThat(submissionMapper.selectById(current.latestSubmissionId()).getModuleTypesJson()).contains("PROFILE","NET_LOSS");
+    assertThat(gapStatus.forForm(f.formId(), before.getOaFormItemId(), "2026-09").getFirst().pendingModules()).isEmpty();
+    assertThat(returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN).status()).isEqualTo("SUCCESS");
+    assertThat(gapStatus.forForm(f.formId(), before.getOaFormItemId(), "2026-09").getFirst().pendingModules()).hasSize(2);
     saveRate(task,"0.8");
     assertThat(documents.submit(f.formId(),request(f.formId(),DING),DING).status()).isEqualTo("SUCCESS");
   }
@@ -423,7 +460,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
     doReturn(new OaWorkflowResult("people-unknown",OaWorkflowResult.Status.UNKNOWN,200,"MISSING_REQUEST_ID",
         "回执缺少requestId","FLOW-"+f.formId(),null,1)).when(oa).submit(any());
-    var result=returns.submit(returnRequest(task,"PROFILE"),ADMIN);
+    var result=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
     assertThatThrownBy(()->returns.confirmPeople(result.batchId(),result.attempt(),"已核实",DING)).hasMessageContaining("原报价员");
     assertThatThrownBy(()->returns.confirmPeople(result.batchId(),result.attempt()," ",ADMIN)).hasMessageContaining("依据");
     assertThatThrownBy(()->returns.confirmPeople(result.batchId(),result.attempt()+1,"已核实",ADMIN)).hasMessageContaining("请刷新");
@@ -431,7 +468,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     var confirmed=returns.confirmPeople(result.batchId(),result.attempt(),"在OA核对丁云龙工号更新成功",ADMIN);
     assertThat(confirmed.status()).isEqualTo("SUCCESS");
     assertThat(returns.confirmPeople(result.batchId(),result.attempt(),"重复点击",ADMIN).status()).isEqualTo("SUCCESS");
-    assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE");
+    assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE","NET_LOSS");
     verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
     var saved=jdbc.queryForObject("SELECT people_result_json FROM lp_oa_technical_batch WHERE id=?",String.class,result.batchId());
     assertThat(saved).contains("MANUAL_CONFIRMED", "MISSING_REQUEST_ID", "manualConfirmation", "在OA核对丁云龙工号更新成功");
@@ -564,14 +601,14 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
   }
 
-  @Test void technicalNoticeConfirmsUnknownSecondStepWithoutExpandingSelectedModulesOrResending() {
+  @Test void technicalNoticeConfirmsUnknownSecondStepForWholeProductWithoutResending() {
     var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
     var product=repository.findProducts(task).getFirst();
     long oldRate=repository.findModules(product.getId()).stream().filter(m->"NET_LOSS".equals(m.getModuleType()))
         .findFirst().orElseThrow().getCurrentVersionId();
     doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.UNKNOWN,null,"TIMEOUT","结果未确认",
         "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
-    var result=returns.submit(returnRequest(task,"PROFILE"),ADMIN);
+    var result=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
     assertThat(result.status()).isEqualTo("UNKNOWN");
     var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
         .put("requestId","FLOW-"+f.formId()).put("eventType","TECHNICAL").put("reason","OA确认原退回已完成");
@@ -581,10 +618,10 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
     assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
     assertThat(returns.status(result.batchId(),ADMIN).status()).isEqualTo("SUCCESS");
-    assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE");
+    assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE","NET_LOSS");
     assertThat(repository.findModules(product.getId()).stream().filter(m->"NET_LOSS".equals(m.getModuleType()))
-        .findFirst().orElseThrow().getCurrentVersionId()).isEqualTo(oldRate);
-    assertThat(netLoss.get(product.getId(),null,DING).editable()).isFalse();
+        .findFirst().orElseThrow().getCurrentVersionId()).isNotEqualTo(oldRate);
+    assertThat(netLoss.get(product.getId(),null,DING).editable()).isTrue();
     save(task,DING,"9.99");
     verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
   }

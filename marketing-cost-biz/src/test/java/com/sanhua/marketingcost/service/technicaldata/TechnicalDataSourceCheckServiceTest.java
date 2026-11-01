@@ -94,6 +94,20 @@ class TechnicalDataSourceCheckServiceTest {
     assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
   }
 
+  @Test void publicationAdapterReadyStatusIsAvailableWithPersistedPublishedStage() {
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
+    var published = new ElectronicDrawingWorkContext(2L, 1, 3L, 41L, 1L, 2L, "TASK", "OA-1", "PRODUCT", null,
+        "产品", "SPEC", "MODEL", null, "FULL_BOM", "2026-09", "210", "211", "COMMERCIAL", "210",
+        true, true, "READY_FOR_COSTING", "PUBLISHED", null, null, "composition-41");
+    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(published);
+    assertThat(published.published()).isTrue();
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
+
+    // A raw stage string without the adapter's validated publication must remain incomplete.
+    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing("PUBLISHED", 41L, "old-fingerprint"));
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+  }
+
   @Test void missingDrawingStillRequiresSupplementAndLookupFailureIsAnError() {
     when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
     when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(null, null, null));
@@ -175,6 +189,28 @@ class TechnicalDataSourceCheckServiceTest {
     workspace.setCurrentBomBuildBatchId(null);
     assertThat(fact(TechnicalDataModuleType.PRICE).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
     verifyNoInteractions(prices);
+  }
+
+  @Test void originalTechnicalBlockEscapesJoinedTransactionInsteadOfBecomingUnexpectedRollback() throws Exception {
+    var failure = new com.sanhua.marketingcost.service.EffectiveTechnicalDataException(
+        "TECH_DATA_TASK_NOT_SUBMITTED", 2L, "2026-09", List.of("SOLDER"), "原补录尚未全部提交：焊料");
+    when(prices.calculate(any())).thenThrow(failure);
+    var connection = mock(java.sql.Connection.class);
+    when(connection.getAutoCommit()).thenReturn(true);
+    var dataSource = mock(javax.sql.DataSource.class);
+    when(dataSource.getConnection()).thenReturn(connection);
+    var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource);
+    var attributes = new org.springframework.transaction.interceptor.NameMatchTransactionAttributeSource();
+    attributes.addTransactionalMethod("calculate", new org.springframework.transaction.interceptor.DefaultTransactionAttribute());
+    var factory = new org.springframework.aop.framework.ProxyFactory(prices);
+    factory.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager, attributes));
+    var checked = new TechnicalDataSourceCheckService(publicSources, (PricePrepareService) factory.getProxy(),
+        codec, mock(QuoteTechnicalDataRepository.class), mock(TechnicalDataPriceRequirements.class), mock(TechnicalDataPriceOwnership.class));
+
+    assertThatThrownBy(() -> new org.springframework.transaction.support.TransactionTemplate(manager)
+        .execute(status -> checked.check(context, workspace))).isSameAs(failure);
+    verify(connection).rollback();
+    verify(connection, never()).commit();
   }
 
   @Test void historicalTypeGapStillChecksPricesWithDefaultPriority() {

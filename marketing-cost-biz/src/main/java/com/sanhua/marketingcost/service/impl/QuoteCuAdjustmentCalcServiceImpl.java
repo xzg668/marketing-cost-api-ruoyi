@@ -33,8 +33,10 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -82,6 +84,7 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     CostRunContext context = buildContext(scope, oaBatch, financePrepare, version);
     CostRunObjectResult costResult = requireCostResult(costRunEngine.run(context));
     validateNoAdjustmentCostItem(costResult);
+    validateRequiredRates(costResult);
     BigDecimal financeMaterialCost = uniqueCostAmount(costResult, COST_CODE_MATERIAL);
     BigDecimal totalCost = uniqueCostAmount(costResult, COST_CODE_TOTAL);
     validateResultTotal(costResult, totalCost);
@@ -344,6 +347,22 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
       throw new IllegalStateException("财务场景成本结果必须且只能有一条" + costCode + "成本项");
     }
     return money(matches.get(0).getAmount());
+  }
+
+  /** Missing rates leave ordinary amounts incomplete; report their source reasons before TOTAL. */
+  private void validateRequiredRates(CostRunObjectResult result) {
+    if (result.getCostItems() == null) return;
+    Set<String> required = Set.of("LOSS", "MANUFACTURE", "ADJUSTED_MANUFACTURE_COST",
+        "MGMT_EXP", "SALES_EXP", "FIN_EXP", "OVERHAUL", "TOOLING_REPAIR", "WATER_POWER");
+    var reasons = new LinkedHashSet<String>();
+    for (var item : result.getCostItems()) {
+      if (item != null && required.contains(item.getCostCode()) && item.getRate() == null) {
+        reasons.add(firstText(item.getRemark(), firstText(item.getCostName(), item.getCostCode()) + "缺少适用费率"));
+      }
+    }
+    if (!reasons.isEmpty()) {
+      throw new IllegalStateException("核算所需费率未齐全：" + String.join("；", reasons));
+    }
   }
 
   private void validateNoAdjustmentCostItem(CostRunObjectResult result) {

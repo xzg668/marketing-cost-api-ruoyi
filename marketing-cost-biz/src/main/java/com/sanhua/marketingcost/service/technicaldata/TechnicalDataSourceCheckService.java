@@ -62,7 +62,7 @@ public class TechnicalDataSourceCheckService {
         return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.ERROR,
             "PRICE_CHECK_FAILED", "价格检查失败，不能据此分派缺价任务", null);
       }
-      var gaps = result.getGaps();
+      var gaps = TechnicalDataPriceRequirements.technicalGaps(result);
       var product = technicalData.findActiveProduct(context.oaFormItemId(), context.accountingMonth());
       var additional = product.map(value -> priceRequirements.checkModuleReferences(
           technicalData.findTask(value.getTaskId()).orElseThrow(), value)).orElse(null);
@@ -104,6 +104,9 @@ public class TechnicalDataSourceCheckService {
           "PRICE_ITEMS_NOT_READY", "尚无已确认的计价物料清单", reference);
       return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.AVAILABLE,
           "PRICE_SOURCE_AVAILABLE", "本次计价物料已有可用价格，无需补价", reference);
+    } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException exception) {
+      // 资料未提交等业务阻断来自共用事务，必须交给上层返回原原因；吞掉后提交会变成回滚异常。
+      throw exception;
     } catch (RuntimeException exception) {
       return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.ERROR,
           "PRICE_QUERY_FAILED", "价格来源查询失败，请核实后重新检查", null);

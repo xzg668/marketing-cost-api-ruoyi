@@ -58,6 +58,9 @@ public class RequestLoggingAspect {
         // 图库查询含完整 PLM 签名链接；协议日志已统一脱敏，此处只记访问定位。
         boolean drawingEvidence = uri.startsWith("/api/v1/quote-requests/")
                 && uri.contains("/drawing-verifications");
+        // Saved BOM/price/cost reads can contain large evidence snapshots. The access log
+        // needs the request identity and duration, not a second complete JSON serialization.
+        boolean quoteRead = "GET".equals(method) && uri.startsWith("/api/v1/quote-requests/");
         String params = oauth ? "[OAuth:redacted]" : serializeArgs(joinPoint.getArgs(), PARAM_MAX_LENGTH);
         log.info(">>> {} {} | params={}", method, uri, params);
 
@@ -67,6 +70,7 @@ public class RequestLoggingAspect {
 
         String responseStr = oauth ? "[OAuth:redacted]" : drawingEvidence
                 ? "[DrawingEvidence:body omitted; use task/result references]"
+                : quoteRead ? "[QuoteRead:body omitted; use request/version references]"
                 : truncate(toJson(result), RESPONSE_MAX_LENGTH);
         if (duration >= SLOW_THRESHOLD_MS) {
             log.warn("<<< {} {} | {}ms (SLOW) | response={}", method, uri, duration, responseStr);

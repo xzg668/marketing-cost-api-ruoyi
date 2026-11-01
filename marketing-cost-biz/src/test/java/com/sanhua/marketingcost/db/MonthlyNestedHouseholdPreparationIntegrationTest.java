@@ -63,6 +63,72 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
   @AfterEach void clearTenant() { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
 
   @org.junit.jupiter.api.Test
+  void outsourcedFeeAndItsMaterialKeepSeparateMonthlyUsesThroughFinanceAndCostSaving() {
+    String key = "MPP-FEE-" + UUID.randomUUID().toString().substring(0, 8);
+    String fee = key + "-FEE", material = key + "-MAT";
+    String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    var date = YearMonth.parse(month).atDay(15).atStartOfDay();
+    jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,'COMMERCIAL',80000)", key);
+    long form = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, key);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,business_unit_type) VALUES(?,?,?,'COMMERCIAL')", form, key, key);
+    long item = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, form);
+    var rows = List.of(raw(key, key, key, "/" + key + "/", 0, "1", "1", "制造件", false, date),
+        raw(key, fee, key, "/" + key + "/" + fee + "/", 1, "2.5", "2.5", "委外加工件", false, date),
+        raw(key, material, fee, "/" + key + "/" + fee + "/" + material + "/", 2, "3", "7.5", "采购件", true, date));
+    for (var row : rows) {
+      rawHierarchy.insert(row);
+      jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,shape_attr) VALUES(?,?,'件','COMMERCIAL',?,1,?)",
+          row.getMaterialCode(), row.getMaterialName(), key, row.getShapeAttr());
+    }
+    for (String code : List.of(fee, material))
+      jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) "
+          + "VALUES('210',?,?,'件',?,0,'MPP-FEE',?,'2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())",
+          code, code, fee.equals(code) ? 2 : 3, date.toLocalDate().withDayOfMonth(1));
+    String build = freeze(form, item, key, month, date, rows);
+    costingBoms.buildFromEffectiveBom(item, build);
+    var request = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
+    request.setOaNo(key); request.setOaFormItemId(item); request.setTopProductCode(key);
+    request.setPeriodMonth(month); request.setPriceAsOfTime(date); request.setBusinessUnitType("COMMERCIAL");
+    var saved = preparations.generate(request);
+    assertThat(saved.getStatus()).as(saved.getMessage()).isEqualTo("SUCCESS");
+    // Reaches the exact production failure before inspecting individual saved uses.
+    var finance = financePreparations.generateFromOa(saved.getPrepareNo());
+    assertThat(finance.prepareResult().getStatus()).isEqualTo("SUCCESS");
+    var customerRows = preparedRows.selectList(Wrappers.lambdaQuery(PricePrepareItem.class).eq(PricePrepareItem::getPrepareNo, saved.getPrepareNo()));
+    var financialRows = preparedRows.selectList(Wrappers.lambdaQuery(PricePrepareItem.class).eq(PricePrepareItem::getPrepareNo, finance.financePrepareNo()));
+    assertThat(customerRows).hasSize(2);
+    var codec = new MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+    var evidence = new MonthlyPreparationEvidence(codec);
+    var selections = new LinkedHashMap<MonthlyPriceRequest, MonthlyAdoptionPlan.Selection>();
+    var uses = new ArrayList<MonthlyAdoptionPlan.Use>();
+    var bindings = new LinkedHashMap<String, MonthlyCostVersionService.PreparationBinding>();
+    var lines = new ArrayList<MonthlyProductCost.MaterialLine>();
+    for (var customer : customerRows) {
+      var captured = evidence.read(customer); String root = captured.rootPath();
+      var financial = financialRows.stream().filter(row -> root.equals(evidence.read(row).rootPath())).findFirst().orElseThrow();
+      assertThat(captured.uses()).singleElement().satisfies(use -> {
+        assertThat(use.request().family().materialCode()).isEqualTo(customer.getMaterialCode());
+        assertThat(use.cumulativeQuantity()).isEqualByComparingTo(customer.getQuantity());
+      });
+      assertThat(customer.getAmount()).isEqualByComparingTo(fee.equals(customer.getMaterialCode()) ? "5" : "22.5");
+      selections.putAll(captured.plan().selections()); uses.addAll(captured.uses());
+      bindings.put(root, new MonthlyCostVersionService.PreparationBinding(financial.getId(), customer.getId()));
+      lines.add(new MonthlyProductCost.MaterialLine(root, customer.getMaterialCode(), customer.getQuantity(),
+          captured.prices().stream().map(price -> price.selection().monthlyPriceId()).toList(), financial.getAmount(), customer.getAmount(), null));
+    }
+    var version = costVersions.createRunning(key, item, key, month, month, finance.financePrepareNo(), "COMMERCIAL");
+    version.setOaPricePrepareNo(saved.getPrepareNo()); version.setFinancePricePrepareNo(finance.financePrepareNo()); versionRows.updateById(version);
+    var ordinary = new MonthlyProductCost.Ordinary(lines, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+    var cost = monthlyCosts.calculateAndSave("COMMERCIAL", version.getId(), new MonthlyAdoptionPlan(selections, uses, Set.of()),
+        ordinary, null, new BigDecimal("80000"), bindings);
+    assertThat(cost.parts()).hasSize(2);
+    assertThat(cost.version().getFinalQuoteAmount()).isEqualByComparingTo("27.5");
+    assertThat(jdbc.queryForList("SELECT material_code FROM lp_material_monthly_price WHERE material_code LIKE ?", String.class, key + "%"))
+        .containsExactlyInAnyOrder(fee, material);
+  }
+
+  @org.junit.jupiter.api.Test
   void householdBelowAnOrdinaryWholePackageChildIsOutsideTheExistingCalculatorInputs() throws Exception {
     String key = "MPP12D-" + UUID.randomUUID().toString().substring(0, 10), pack = key + "-PACK";
     String direct = key + "-DIRECT", household = key + "-HH";
@@ -232,7 +298,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
     if (!allHousehold) jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) "
         + "VALUES('210',?,?,'件',7,0,'MPP12-NESTED',?,'2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())", rawCode, rawCode, date.toLocalDate().withDayOfMonth(1));
     String build = freeze(form, item, key, month, date, rows);
-    // Saved original package structure, including both existing denominator levels.
+    // Preserve source denominators; current packaging uses the package parent base only.
     for (int index = 0; index < 2; index++) {
       if (sameParent && index == 1) continue;
       String parent = key + "-PACK" + (sameParent ? "" : index);
@@ -267,13 +333,15 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
     request.setOaNo(key); request.setOaFormItemId(item); request.setTopProductCode(key); request.setPeriodMonth(month);
     request.setPriceAsOfTime(date); request.setBusinessUnitType("COMMERCIAL");
     if (!allHousehold && !sameParent) {
-      jdbc.update("UPDATE lp_price_fixed_item SET effective_to=? WHERE material_code=?", date.toLocalDate().minusDays(1), rawCode);
+      // Expired fixed prices can still supply the latest-price fallback; remove this owned
+      // fixture from the requested material instead to exercise an actual missing source.
+      jdbc.update("UPDATE lp_price_fixed_item SET material_code=? WHERE material_code=?", rawCode + "-UNAVAILABLE", rawCode);
       try {
         var missing = preparations.calculate(request);
         assertThat(missing.getSummary().getStatus()).isEqualTo("PARTIAL");
         assertThat(missing.getGaps()).isNotEmpty().allSatisfy(gap -> assertThat(gap.getGapMaterialCode()).isEqualTo(rawCode));
       } finally {
-        jdbc.update("UPDATE lp_price_fixed_item SET effective_to='2099-01-01' WHERE material_code=?", rawCode);
+        jdbc.update("UPDATE lp_price_fixed_item SET material_code=? WHERE material_code=?", rawCode, rawCode + "-UNAVAILABLE");
       }
     }
     var preview = preparations.calculate(request);
@@ -308,7 +376,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
         assertThat(captured.uses()).hasSize(1).allSatisfy(use -> assertThat(use.request().family().materialCode()).isEqualTo(rawCode));
         assertThat(captured.suppressedPaths()).isEmpty();
         assertThat(customer.getInputSnapshotJson()).contains("HOUSEHOLD_EXCLUDED", "sourcePath", "householdUse");
-        assertThat(customer.getAmount()).isEqualByComparingTo(root.endsWith("PACK0") ? "14" : "7");
+        assertThat(customer.getAmount()).isEqualByComparingTo(root.endsWith("PACK0") ? "42" : "21");
         ordinaryLines.add(new MonthlyProductCost.MaterialLine(root, customer.getMaterialCode(), customer.getQuantity(),
             captured.prices().stream().map(price -> price.selection().monthlyPriceId()).distinct().toList(),
             financial.getAmount(), customer.getAmount(), null));
@@ -336,11 +404,11 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
     }
     var cost = monthlyCosts.calculateAndSave("COMMERCIAL", version.getId(), adoptedPlan,
         ordinary, null, new BigDecimal("80000"), bindings);
-    assertThat(cost.snapshot().calculation().financeMaterialCost()).isEqualByComparingTo(allHousehold ? "0" : "21");
+    assertThat(cost.snapshot().calculation().financeMaterialCost()).isEqualByComparingTo(allHousehold ? "0" : "63");
     assertThat(cost.snapshot().calculation().householdSubtotal()).isEqualByComparingTo("41.9706");
     assertThat(cost.snapshot().calculation().household()).hasSize(1);
     assertThat(cost.snapshot().calculation().household().getFirst().paths()).hasSize(2);
-    assertThat(cost.version().getFinalQuoteAmount()).isEqualByComparingTo(allHousehold ? "41.9706" : "62.9706");
+    assertThat(cost.version().getFinalQuoteAmount()).isEqualByComparingTo(allHousehold ? "41.9706" : "104.9706");
     assertThat(cost.parts()).hasSize(allHousehold ? 1 : 3);
   }
 
@@ -350,6 +418,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
     raw.setParentCode(parent); raw.setPath(path); raw.setLevel(level); raw.setSortSeq(level);
     raw.setQtyPerParent(new BigDecimal(quantity)); raw.setQtyPerTop(new BigDecimal(cumulative)); raw.setShapeAttr(shape);
     raw.setBomPurpose("主制造"); raw.setBomVersion("MPP12N"); raw.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1));
+    raw.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1));
     raw.setBomStatus("已核准"); raw.setIsLeaf(leaf ? 1 : 0); raw.setU9IsCostFlag(1); raw.setSourceType("U9");
     raw.setSourceImportBatchId(top); raw.setBuildBatchId(top); raw.setBuiltAt(date); raw.setPriceOrgCode("210");
     raw.setBusinessUnitType("COMMERCIAL"); return raw;

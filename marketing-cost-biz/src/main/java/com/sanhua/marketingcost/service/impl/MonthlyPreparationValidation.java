@@ -22,7 +22,7 @@ public final class MonthlyPreparationValidation {
   public void validate(PricePrepareItem row, boolean financial, MonthlyAdoptionPlan plan,
       Map<Long, MonthlyPriceScenarios.Pair> scenarios, String root) {
     var inputs = evidence.read(row);
-    if (inputs == null || !inputs.equals(MonthlyPreparationInputs.capture(plan, root)))
+    if (inputs == null || !inputs.equals(evidence.capture(row, plan, root)))
       throw new IllegalArgumentException("准备底稿与本次月价范围不一致");
     var expected = new HashMap<MonthlyPriceRequest, BigDecimal>();
     if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType())) {

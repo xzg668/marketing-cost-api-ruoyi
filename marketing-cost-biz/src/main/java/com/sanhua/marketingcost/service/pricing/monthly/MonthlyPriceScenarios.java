@@ -126,6 +126,27 @@ public final class MonthlyPriceScenarios {
       case "ODS_ORDER", "ODS_TIER" -> {
         financial = new BigDecimal(root.path("source").path("selected").path("price").asText()); customer = financial;
       }
+      case "INVOICE" -> {
+        financial = new BigDecimal(root.path("source").path("selected").path("unit_price").asText()); customer = financial;
+      }
+      case "INQUIRY" -> {
+        var source = root.path("source").path("selected");
+        financial = new BigDecimal(source.path("price").asText()); customer = financial;
+        var calculation = source.path("calculation");
+        if ("联动价".equals(calculation.path("priceType").asText())) {
+          var inputs = new java.util.LinkedHashMap<String,BigDecimal>();
+          calculation.path("inputs").fields().forEachRemaining(entry -> inputs.put(entry.getKey(),new BigDecimal(entry.getValue().asText())));
+          financial = com.sanhua.marketingcost.formula.registry.ExpressionEvaluator.evaluate(calculation.path("expression").asText(),inputs).setScale(18,RoundingMode.HALF_UP);
+          if (copper != null) calculation.path("factors").fields().forEachRemaining(entry -> {
+            if (PriceFactorContext.COPPER.equals(entry.getValue().asText())) {
+              String unit = calculation.path("financeFactors").path(PriceFactorContext.COPPER).path("unit").asText();
+              inputs.put(entry.getKey(),com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_TON.convert(copper,
+                  com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(unit)));
+            }
+          });
+          customer = com.sanhua.marketingcost.formula.registry.ExpressionEvaluator.evaluate(calculation.path("expression").asText(),inputs).setScale(18,RoundingMode.HALF_UP);
+        }
+      }
       case "RANGE_QTY" -> {
         var source = read(fact.evidence().json(), MonthlyQuantityRangeSource.Snapshot.class);
         financial = "price_incl_tax".equals(source.financialBasis().priceColumn())

@@ -21,6 +21,30 @@ class MonthlyPreparationFinanceProjectionTest {
   final MonthlyPreparationEvidence evidence = new MonthlyPreparationEvidence(codec);
   final MonthlyPreparationFinanceProjection projection = new MonthlyPreparationFinanceProjection(json, codec);
 
+  @Test void directFeeExcludesSeparatelyPricedDescendantButRetainsItsFormulaDependencies() {
+    var source = direct(false);
+    var original = codec.decode(source.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+    var child = request("CHILD", "210"); var dependency = request("DEPENDENCY", "210");
+    var fact = PriceFact.normal(d("10"), original.selection().fact().evidence(), Set.of(dependency));
+    var feePrice = new Selection(original.selection().monthlyPriceId(), original.selection().applicability(), fact);
+    var plan = new MonthlyAdoptionPlan(Map.of(original.request(), feePrice,
+        child, selected(2L, false, "3"), dependency, selected(3L, false, "1")),
+        List.of(new Use("P/NORMAL", original.request(), d("2.5")),
+            new Use("P/NORMAL/CHILD", child, d("7.5"))), Set.of());
+    source.setInputSnapshotJson(codec.encode(MonthlyPreparationPrice.of(
+        new QuotationPriceSession.Value(original.request(), feePrice, d("10"), d("12")), "P/NORMAL", d("2.5"))));
+    var captured = evidence.capture(source, plan, "P/NORMAL");
+    source.setInputSnapshotJson(evidence.attach(source, captured));
+    assertThat(captured.uses()).containsExactly(plan.uses().getFirst());
+    assertThat(captured.plan().selections()).containsOnlyKeys(original.request(), dependency);
+    assertThat(projection.project(source).getAmount()).isEqualByComparingTo("25");
+    assertThat(evidence.capture(source, plan, "P/NORMAL/CHILD").uses()).containsExactly(plan.uses().get(1));
+    assertThat(plan.uses()).hasSize(2);
+    // An actual extra physical use remains invalid; the fix narrows capture, not validation.
+    source.setInputSnapshotJson(evidence.attach(source, MonthlyPreparationInputs.capture(plan, "P/NORMAL")));
+    assertThatThrownBy(() -> projection.project(source)).hasMessageContaining("月价实际范围不一致");
+  }
+
   @Test void ordinaryProjectionUsesOnlySavedP0AndRetainsTheCompleteAdoptedEvidence() {
     var source = direct(false); String original = source.getInputSnapshotJson();
     var finance = projection.project(source);

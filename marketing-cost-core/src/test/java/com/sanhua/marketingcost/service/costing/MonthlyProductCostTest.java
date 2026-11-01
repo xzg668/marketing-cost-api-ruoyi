@@ -87,6 +87,22 @@ class MonthlyProductCostTest {
     assertThat(result.financeMaterialCost()).isEqualByComparingTo("20");assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("-8");
     assertThatThrownBy(()->MonthlyProductCost.calculate(plan,zero(List.of(settlement,new MaterialLine(explanation.path(),"B",BigDecimal.ONE,List.of(1L),d("10"),d("2"),null))),null)).hasMessageContaining("twice");
   }
+  @Test void directlyPricedProcessingFeeAndChildMaterialBothContributeOnce() {
+    var fee = request("FEE"); var material = request("MAT");
+    var evidence = SourceEvidence.ofJson("{\"source\":\"fixed\"}");
+    var plan = new MonthlyAdoptionPlan(Map.of(
+        fee, selection(1, PriceFact.normal(d("2"), evidence, Set.of())),
+        material, selection(2, PriceFact.normal(d("3"), evidence, Set.of()))),
+        List.of(new Use("root/FEE", fee, d("2.5")), new Use("root/FEE/MAT", material, d("7.5"))), Set.of());
+    var parent = new MaterialLine("root/FEE", "FEE", d("2.5"), List.of(1L), d("5"), d("6"), null);
+    var child = new MaterialLine("root/FEE/MAT", "MAT", d("7.5"), List.of(2L), d("22.5"), d("30"), null);
+    var result = MonthlyProductCost.calculate(plan, zero(List.of(parent, child)), null);
+    assertThat(result.financeMaterialCost()).isEqualByComparingTo("27.5");
+    assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("8.5");
+    var wrongFee = new MaterialLine(parent.path(), "FEE", d("3"), List.of(1L), d("5"), d("6"), null);
+    assertThatThrownBy(() -> MonthlyProductCost.calculate(plan, zero(List.of(wrongFee, child)), null))
+        .hasMessageContaining("Direct ordinary settlement");
+  }
   @Test void emptyFeesRemainNullAndFinalProfileAmountsAreNeitherUpliftedNorDistributed() {
     var plan=new MonthlyAdoptionPlan(Map.of(),List.of(),Set.of());
     var blank=MonthlyProductCost.calculate(plan,zero(List.of()),null);

@@ -7,9 +7,12 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.HexFormat;
 import org.springframework.stereotype.Component;
 
@@ -17,6 +20,13 @@ import org.springframework.stereotype.Component;
 @Component
 public final class MonthlyPriceDocumentCodec {
   private record Document(int schemaVersion, String document) {}
+  private record DecodedKey(String encoded, Class<?> type) {}
+  // These records defensively copy every collection. Mutable JSON trees/DTOs are never shared.
+  // The exact document is the key: a changed snapshot must be parsed and validated again.
+  private final Cache<DecodedKey, Object> decoded = Caffeine.newBuilder()
+          .maximumWeight(64L * 1024 * 1024)
+          .weigher((DecodedKey key, Object value) -> (int) Math.min(Integer.MAX_VALUE, 128L + 6L * key.encoded().length()))
+          .expireAfterAccess(Duration.ofMinutes(5)).build();
   private final ObjectMapper json;
 
   public MonthlyPriceDocumentCodec(ObjectMapper mapper) {
@@ -37,6 +47,14 @@ public final class MonthlyPriceDocumentCodec {
   }
 
   public <T> T decode(String encoded, Class<T> type) {
+    if (type == MonthlyPreparationPrice.class || type == MonthlyPreparationInputs.class
+        || type == MonthlyPriceApplicability.class) {
+      return type.cast(decoded.get(new DecodedKey(encoded, type), key -> decodeUncached(key.encoded(), type)));
+    }
+    return decodeUncached(encoded, type);
+  }
+
+  private <T> T decodeUncached(String encoded, Class<T> type) {
     try { return json.readValue(unwrap(encoded), type); }
     catch (java.io.IOException failure) { throw new IllegalArgumentException("Invalid monthly price document", failure); }
   }

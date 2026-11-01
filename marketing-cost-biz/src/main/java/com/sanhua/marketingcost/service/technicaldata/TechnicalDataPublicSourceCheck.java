@@ -117,7 +117,8 @@ public class TechnicalDataPublicSourceCheck {
             context.priceOrgCode(), context.accountingMonth());
         if (drawing != null && drawing.active() && drawing.sourceVersionId() != null) {
           boolean ready = StringUtils.hasText(drawing.compositionFingerprint())
-              && (ElectronicDrawingWorkflowStage.COMPOSED.equals(drawing.workflowStage())
+              && (drawing.published()
+                  || ElectronicDrawingWorkflowStage.COMPOSED.equals(drawing.workflowStage())
                   || ElectronicDrawingWorkflowStage.PUBLISHED.equals(drawing.workflowStage()));
           String reference = codec.write(Map.of(
               "sourceVersionId", drawing.sourceVersionId(),

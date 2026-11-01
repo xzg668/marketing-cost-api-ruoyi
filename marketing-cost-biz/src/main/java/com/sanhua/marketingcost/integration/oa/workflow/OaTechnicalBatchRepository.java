@@ -181,6 +181,20 @@ public class OaTechnicalBatchRepository {
     );
   }
 
+  /** OA先到达技术节点时确认正在发送的I02；未发送及明确失败批次不得由回调激活。 */
+  public void confirmDispatchNotification(Batch batch, String requestId) {
+    if (!"I02".equals(batch.operation()) || !requestId.equals(batch.request().path("requestId").asText())
+        || !java.util.Set.of("SENDING", "UNKNOWN", "OA_ACCEPTED").contains(batch.status())) {
+      throw new IllegalStateException("本次分派尚未发送、已失败或原流程不匹配，不能由技术节点通知确认");
+    }
+    var result = new OaWorkflowResult("OA-I02-NOTIFY:" + batch.id(), OaWorkflowResult.Status.SUCCESS,
+        null, "0", "OA技术节点通知已确认分派", requestId, null, 0);
+    requireOne(jdbc.update("""
+        UPDATE lp_oa_technical_batch SET status='OA_ACCEPTED',result_json=?,updated_at=NOW(3)
+        WHERE id=? AND operation='I02' AND status IN ('SENDING','UNKNOWN','OA_ACCEPTED')
+        """, codec.write(result), batch.id()));
+  }
+
   /** 全部产品冻结提交已由通知确认后，解除本人的 I03 结果未确认状态。 */
   public void confirmSubmissionNotification(String id, long notificationId) {
     var batch = find(id, true);

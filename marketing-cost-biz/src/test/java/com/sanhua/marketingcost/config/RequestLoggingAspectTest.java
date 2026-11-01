@@ -17,6 +17,29 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 class RequestLoggingAspectTest {
 
   @Test
+  void quoteReadsDoNotSerializeLargeEvidenceAgainForAccessLog() throws Throwable {
+    var request = new org.springframework.mock.web.MockHttpServletRequest("GET",
+        "/api/v1/quote-requests/OA-07/items/7/price-prepare");
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(request));
+    try {
+      var point = mock(ProceedingJoinPoint.class);
+      when(point.getArgs()).thenReturn(new Object[]{"OA-07", 7L});
+      var response = new LargeEvidence();
+      when(point.proceed()).thenReturn(response);
+      assertThat(new RequestLoggingAspect(new ObjectMapper()).logRequest(point)).isSameAs(response);
+      assertThat(response.reads).isZero();
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+    }
+  }
+
+  public static class LargeEvidence {
+    int reads;
+    public String getSnapshot() { reads++; return "evidence".repeat(100_000); }
+  }
+
+  @Test
   void drawingHistoryLogsReferencesWithoutSignedPlmOrEditUrls() throws Throwable {
     var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RequestLoggingAspect.class);
     var appender = new ListAppender<ILoggingEvent>(); appender.start(); logger.addAppender(appender);

@@ -29,14 +29,17 @@ public class MonthlyRepriceContractService {
   private final ObjectMapper json;
   private final MonthlyPriceDocumentCodec codec;
   private final MonthlyRepriceProperties properties;
+  private final com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices;
 
   public MonthlyRepriceContractService(MonthlyRepriceContractMapper mapper,
       PlatformTransactionManager manager, ObjectMapper json, MonthlyPriceDocumentCodec codec,
-      MonthlyRepriceProperties properties) {
+      MonthlyRepriceProperties properties,
+      com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices) {
     this.mapper = mapper;
     this.json = json;
     this.codec = codec;
     this.properties = properties;
+    this.inquiryPrices = inquiryPrices;
     transaction = new TransactionTemplate(manager);
     transaction.setTimeout(30);
   }
@@ -84,6 +87,7 @@ public class MonthlyRepriceContractService {
       if (!no.equals(batch.getRepriceNo())) return batch;
       var inputs = discover.get();
       if (inputs.isEmpty()) throw new IllegalArgumentException("上线以来没有可调价的成功报价");
+      inquiryPrices.refreshInTransaction(unit, month.toString(), "MONTHLY_REPRICE", actor);
       var targets=new java.util.ArrayList<MonthlyRepriceContractMapper.Target>();
       Set<String> keys = new HashSet<>();
       for (var source : inputs) {
@@ -148,6 +152,7 @@ public class MonthlyRepriceContractService {
       var tasks = mapper.tasks(no);
       if (tasks.stream().anyMatch(t -> "RUNNING".equals(t.getStatus())))
         throw new IllegalStateException("等待已领取任务结束后重试");
+      inquiryPrices.refreshInTransaction(batch.getBusinessUnitType(), batch.getPricingMonth(), "MONTHLY_REPRICE_RETRY", requireOperator(batch.getBusinessUnitType()));
       mapper.retry(no);
       State next = tasks.stream().allMatch(t -> "SUCCESS".equals(t.getStatus())) ? State.CHECKING : State.QUEUED;
       state(batch).requireTransition(next);

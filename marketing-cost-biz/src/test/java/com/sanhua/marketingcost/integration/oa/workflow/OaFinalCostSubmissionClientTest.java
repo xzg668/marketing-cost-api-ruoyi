@@ -17,27 +17,50 @@ class OaFinalCostSubmissionClientTest {
   private final OaFinalCostSubmissionClient client = new OaFinalCostSubmissionClient(json, mock(OaWorkflowClient.class), properties);
 
   @ParameterizedTest
-  @CsvSource({"FI-SC-005,zcbbhyf,1315730937451335132", "FI-SC-006,zcb1bhs,1317497487388790985", "FI-SC-020,bhysfzcbbhs,1315726685492431674"})
-  void commercialRowsUseTheConfiguredTableAndOriginalRowIndexes(String process, String field, String tableId) throws Exception {
+  @CsvSource({"FI-SC-005,zcbbhyf,hyfzcbbhs,1315730937451335132", "FI-SC-006,zcb1bhs,zcbbhs,1317497487388790985", "FI-SC-020,bhysfzcbbhs,hysfzcbbhs,1315726685492431674"})
+  void commercialRowsUseTheConfiguredTableAndOriginalRowIndexes(String process, String field, String withShipping, String tableId) throws Exception {
     properties.getFinalCostSubFormIds().put(process, tableId);
     var body = client.preview("1137224760702033922", "001001", process,
-        List.of(row(7, "152.503400"), row(3, "0.000000")));
+        List.of(new OaFinalCostSubmissionClient.Row(7, "152.503400", "0.7534"), row(3, "0.000000")));
     // 核验真实 JSON 序列化后的 19 位 ID，避免经浮点数而失真。
     var sent = json.readTree(json.writeValueAsBytes(body));
     assertThat(sent.path("userid").asText()).isEqualTo("001001");
     assertThat(sent.path("requestId").asText()).isEqualTo("1137224760702033922");
     assertThat(sent.at("/otherParams/src").asText()).isEqualTo("submit");
     var details = sent.at("/formData/dataDetails");
-    assertThat(details.size()).isEqualTo(2);
+    assertThat(details.size()).isEqualTo(4);
     for (var detail : details) {
-      assertThat(detail.path("dataKey").asText()).isEqualTo(field);
+      assertThat(detail.path("dataKey").asText()).isIn(field, withShipping);
       assertThat(detail.path("subFormId").isIntegralNumber()).isTrue();
       assertThat(detail.path("subFormId").asText()).isEqualTo(tableId);
     }
     assertThat(details.get(0).path("dataIndex").intValue()).isEqualTo(7);
-    assertThat(details.get(1).path("dataIndex").intValue()).isEqualTo(3);
+    assertThat(details.get(1).path("dataIndex").intValue()).isEqualTo(7);
+    assertThat(details.get(2).path("dataIndex").intValue()).isEqualTo(3);
+    assertThat(details.get(3).path("dataIndex").intValue()).isEqualTo(3);
+    assertThat(details.get(0).path("dataKey").asText()).isEqualTo(field);
+    assertThat(details.get(1).path("dataKey").asText()).isEqualTo(withShipping);
     assertThat(details.get(0).path("content").asText()).isEqualTo("152.503400");
-    assertThat(details.get(1).path("content").asText()).isEqualTo("0.000000");
+    assertThat(details.get(1).path("content").asText()).isEqualTo("153.256800");
+    assertThat(details.get(2).path("content").asText()).isEqualTo("0.000000");
+    assertThat(details.get(3).path("content").asText()).isEqualTo("0.000000");
+  }
+
+  @Test void emptyFreightAndExplicitZeroAddNoChargeWithoutRoundingTheCost() {
+    properties.getFinalCostSubFormIds().put("FI-SC-006", "1317497487388790985");
+    var body = client.preview("REQ", "001", "FI-SC-006", List.of(
+        new OaFinalCostSubmissionClient.Row(1, "292.15974237", null),
+        new OaFinalCostSubmissionClient.Row(2, "292.15974237", "0.000000")));
+    assertThat(body.at("/formData/dataDetails/1/content").asText()).isEqualTo("292.15974237");
+    assertThat(body.at("/formData/dataDetails/3/content").asText()).isEqualTo("292.15974237");
+  }
+
+  @Test void invalidOrNegativeFreightCannotBeWrittenToOa() {
+    properties.getFinalCostSubFormIds().put("FI-SC-006", "1317497487388790985");
+    for (String shipping : new String[]{"-1", "not-money", ""}) {
+      assertThatThrownBy(() -> client.preview("REQ", "001", "FI-SC-006",
+          List.of(new OaFinalCostSubmissionClient.Row(1, "100", shipping)))).hasMessageContaining("运费");
+    }
   }
 
   @Test void deploymentConfigurationCanChangeTheTableWithoutChangingRows() {
@@ -79,6 +102,6 @@ class OaFinalCostSubmissionClientTest {
   }
 
   private OaFinalCostSubmissionClient.Row row(Integer index, String cost) {
-    return new OaFinalCostSubmissionClient.Row(index, cost);
+    return new OaFinalCostSubmissionClient.Row(index, cost, null);
   }
 }

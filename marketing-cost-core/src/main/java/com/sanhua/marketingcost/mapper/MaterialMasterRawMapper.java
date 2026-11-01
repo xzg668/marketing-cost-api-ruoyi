@@ -27,7 +27,7 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       "AND (main_category_code LIKE '10%' OR main_category_code LIKE '11%')",
       "<choose>",
       "<when test='searchBy == \"CODE\"'>AND material_code=#{keyword}</when>",
-      "<when test='exactModel'>AND TRIM(material_model)=#{keyword}</when>",
+      "<when test='exactModel'>AND LEFT(TRIM(material_model),8)=LEFT(#{keyword},8) AND TRIM(material_model)=#{keyword}</when>",
       "<otherwise>AND LOCATE(#{keyword},material_model)>0</otherwise>",
       "</choose>",
       "ORDER BY material_code LIMIT #{limit}",

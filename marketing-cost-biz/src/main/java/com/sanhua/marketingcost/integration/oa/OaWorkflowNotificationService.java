@@ -32,6 +32,16 @@ public class OaWorkflowNotificationService {
         if (!peer.businessUnits().contains(document.businessUnit())) throw conflict("FORBIDDEN_BUSINESS_UNIT", "调用方无权处理该报价单");
         repository.lockForm(document.id());
         var flow = repository.lock(peer, event.requestId());
+        event = handler.resolveTechnicians(event, document);
+        if (event.technical()) {
+          var initialScope = handler.initialScope(event, document);
+          String initialHash = codec.canonicalHash(Map.of("notice", event, "scope", initialScope));
+          var initial = messages.find(peer, "NOTIFY:" + initialHash);
+          if (initial != null && "PROCESSED".equals(initial.status())) {
+            call.result("IDEMPOTENT_REPLAY", null, "0");
+            return codec.read(initial.resultJson());
+          }
+        }
         var scope = handler.scope(event, document);
         // 原流程 ID 不是通知 ID。按本地本轮提交范围去重，避免 I01/I04/I08 互相占用 requestId。
         String hash = codec.canonicalHash(Map.of("notice", event, "scope", scope));

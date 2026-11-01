@@ -196,7 +196,18 @@ public class TechnicalDataOaDispatchService {
 
   public OaTechnicalBatchRepository.Batch deliver(String batchId) {
     delivery.send(batchId);
+    return transaction.execute(status -> applyResult(batchId));
+  }
+
+  public OaTechnicalBatchRepository.Batch confirmFromNotification(String batchId, String requestId) {
     return transaction.execute(status -> {
+      var batch = batches.find(batchId, true);
+      batches.confirmDispatchNotification(batch, requestId);
+      return applyResult(batchId);
+    });
+  }
+
+  private OaTechnicalBatchRepository.Batch applyResult(String batchId) {
       var batch = batches.find(batchId, true);
       if (batch.result() == null || "SUCCESS".equals(batch.status())) return batch;
       var rows = batches.messageIds(batchId).stream().map(recipients::findByMessage).toList();
@@ -233,7 +244,6 @@ public class TechnicalDataOaDispatchService {
       batches.finishMessages(batch);
       if (accepted) batches.completed(batchId);
       return batches.find(batchId, false);
-    });
   }
 
   private IllegalStateException conflict(String message) {

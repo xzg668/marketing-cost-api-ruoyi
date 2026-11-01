@@ -90,6 +90,7 @@ class MonthlyMaterialPriceServiceIntegrationTest {
             "MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4"
                 + " mpp_module_test < /tmp/monthly-use.sql");
     assertThat(scopePatch.getExitCode()).withFailMessage(scopePatch.getStderr()).isZero();
+    new ResourceDatabasePopulator(new ClassPathResource("db/V354__invoice_price_import.sql")).execute(ds);
     var config = new org.apache.ibatis.session.Configuration();
     config.setMapUnderscoreToCamelCase(true);
     config.addMapper(MonthlyPriceStorageMapper.class);

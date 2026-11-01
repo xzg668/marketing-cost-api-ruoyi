@@ -31,7 +31,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class QuoteFinalSubmissionService {
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record CostLine(long itemId, String productCode, Long costVersionId, String versionNo,
-      String totalCost, String sourceRevision, String technicalSourcesJson,
+      String totalCost, String shippingFee, String sourceRevision, String technicalSourcesJson,
       String businessType, String sourceRowId, Integer sourceRowIndex, String status, String message) {}
   public record Status(Long submissionId, String status, String periodMonth, List<CostLine> costs,
       int totalProducts, int readyProducts, String fingerprint, String error, String returnReason, boolean canConfirm) {}
@@ -147,7 +147,7 @@ public class QuoteFinalSubmissionService {
     return oa.preview(document.requestId(), employee, document.processCode(), oaRows(costs));
   }
   private List<OaFinalCostSubmissionClient.Row> oaRows(List<CostLine> costs) {
-    return costs.stream().map(c -> new OaFinalCostSubmissionClient.Row(c.sourceRowIndex(), c.totalCost())).toList();
+    return costs.stream().map(c -> new OaFinalCostSubmissionClient.Row(c.sourceRowIndex(), c.totalCost(), c.shippingFee())).toList();
   }
   private List<CostLine> currentCosts(OaForm form, String period, String operator) {
     var products = items.selectList(Wrappers.<OaFormItem>lambdaQuery().eq(OaFormItem::getOaFormId, form.getId())
@@ -158,6 +158,7 @@ public class QuoteFinalSubmissionService {
     Set<Long> returnedVersions = returnedVersions(returned);
     for (var item : products) {
       String product = item.getMaterialNo() == null ? item.getSunlModel() : item.getMaterialNo();
+      String shipping = item.getShippingFee() == null ? null : item.getShippingFee().toPlainString();
       try {
         var context = contexts.resolveRevision(contexts.resolve(new ProductCostingRequest(form.getOaNo(), item.getId(), period, operator, false)));
         var match = successes.find(context);
@@ -165,11 +166,12 @@ public class QuoteFinalSubmissionService {
         var version = match.get().version();
         if (returnedVersions.contains(version.getId())) throw invalid("领导已退回，请重新核算");
         if (version.getFinalQuoteAmount() == null || version.getFinalQuoteAmount().signum() < 0) throw invalid("最终成本缺失或为负数，请重新核算");
+        if (item.getShippingFee() != null && item.getShippingFee().signum() < 0) throw invalid("产品运费不能为负数，请核对报价需求单");
         // 最终成本已包含一次材料费差额；TOTAL 仅为财务正常成本，不作为对外提交金额。
         result.add(new CostLine(item.getId(), product, version.getId(), version.getVersionNo(), version.getFinalQuoteAmount().toPlainString(),
-            version.getSourceRevision(), version.getTechDataInputJson(), item.getBusinessType(), rowIds.get(item.getId()), item.getSeq(), "READY", null));
+            shipping, version.getSourceRevision(), version.getTechDataInputJson(), item.getBusinessType(), rowIds.get(item.getId()), item.getSeq(), "READY", null));
       } catch (IllegalArgumentException | IllegalStateException | EffectiveTechnicalDataException failure) {
-        result.add(new CostLine(item.getId(), product, null, null, null, null, null, item.getBusinessType(),
+        result.add(new CostLine(item.getId(), product, null, null, null, shipping, null, null, item.getBusinessType(),
             rowIds.get(item.getId()), item.getSeq(), item.getConfirmedCostVersionId() != null ? "STALE" : "NOT_READY", failure.getMessage()));
       }
     }

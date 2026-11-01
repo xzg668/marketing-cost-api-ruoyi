@@ -4,6 +4,7 @@ import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.entity.QuoteTechModule;
 import com.sanhua.marketingcost.mapper.QuoteTechModuleMapper;
 import com.sanhua.marketingcost.mapper.QuoteTechTaskMapper;
+import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -20,14 +21,17 @@ public class TechnicalDataRequirementRefreshService {
   private final JdbcTemplate jdbc;
   private final QuoteTechTaskMapper tasks;
   private final com.sanhua.marketingcost.integration.oa.OaMessageCodec codec;
+  private final TechnicalDataOaRecipientRepository recipients;
 
   public TechnicalDataRequirementRefreshService(QuoteTechModuleMapper modules, JdbcTemplate jdbc,
       QuoteTechTaskMapper tasks,
-      com.sanhua.marketingcost.integration.oa.OaMessageCodec codec) {
+      com.sanhua.marketingcost.integration.oa.OaMessageCodec codec,
+      TechnicalDataOaRecipientRepository recipients) {
     this.modules = modules;
     this.jdbc = jdbc;
     this.tasks = tasks;
     this.codec = codec;
+    this.recipients = recipients;
   }
 
   /** 核算与财务复查共用。已送审和来源未确认的模块保持原状，不能静默取消审批。 */
@@ -172,6 +176,10 @@ public class TechnicalDataRequirementRefreshService {
       if (modules.refreshRequirement(module.getId(), module.getRowVersion(), next,
           next.required() ? "PENDING" : "NOT_REQUIRED") != 1) throw conflict("新增缺口已变化，请刷新后再分派");
       jdbc.update("UPDATE lp_quote_tech_module SET oa_edit_allowed=0 WHERE id=?", module.getId());
+    }
+    // 未分派的新增缺口消失后，按真实办理人待办恢复任务汇总；不能让已提交资料永久停在 PENDING。
+    if (additions == 0 && !updates.isEmpty() && "PENDING".equals(task.getTaskStatus())) {
+      recipients.refreshTask(task.getId());
     }
     return additions;
   }

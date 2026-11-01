@@ -123,6 +123,19 @@ class SupplierPriceSelectionServiceTest {
         price == null ? null : new BigDecimal(price), null, null);
   }
 
+  @Test void nameOnlyInquirySuppliersCanBeReviewedAndConfirmedWithAStableFingerprint() {
+    var a=new SupplierPriceCandidate("A",null,"甲方",new BigDecimal("10"),null,null);
+    var b=new SupplierPriceCandidate("B",null,"乙方",new BigDecimal("20"),null,null);
+    var first=service.selectPrepared(scope,List.of(a,b),List.of(),null);
+    assertThat(first.review().status()).isEqualTo("PENDING");
+    assertThat(service.selectPrepared(scope,List.of(b,a),List.of(),null).review().fingerprint()).isEqualTo(first.review().fingerprint());
+    var decision=new SupplierPriceDecision();decision.setScopeKey(SupplierPriceSelectionService.scopeKey(scope));
+    decision.setDecision("FALLBACK_HIGH");decision.setFingerprint(first.review().fingerprint());
+    assertThat(service.selectPrepared(scope,List.of(a,b),List.of(),decision).candidate()).isEqualTo(b);
+    var changed=new SupplierPriceCandidate("B",null,"另一供方",new BigDecimal("20"),null,null);
+    assertThat(service.selectPrepared(scope,List.of(a,changed),List.of(),decision).candidate()).isNull();
+  }
+
   private SupplierSupplyRatio ratio(String supplier, String value) {
     var ratio = new SupplierSupplyRatio(); ratio.setSupplierCode(supplier);
     ratio.setSupplyRatio(value == null ? null : new BigDecimal(value));

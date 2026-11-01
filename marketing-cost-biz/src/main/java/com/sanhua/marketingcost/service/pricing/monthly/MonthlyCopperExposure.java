@@ -29,8 +29,9 @@ public final class MonthlyCopperExposure {
       throw new IllegalArgumentException("Unknown price evidence version");
     var source = root.path("source");
     boolean copper = switch (root.path("sourceKind").asText()) {
-      case "HOUSEHOLD_INQUIRY", "PURCHASE_FIXED", "TECH_FIXED", "RANGE_QTY", "SETTLE_FIXED", "ODS_ORDER", "ODS_TIER" -> false;
+      case "HOUSEHOLD_INQUIRY", "PURCHASE_FIXED", "TECH_FIXED", "RANGE_QTY", "SETTLE_FIXED", "ODS_ORDER", "ODS_TIER", "INVOICE" -> false;
       case "LINKED" -> originalLinked(json(source.path("calculationJson").asText()));
+      case "INQUIRY" -> source.path("selected").path("calculation").path("financeFactors").has(PriceFactorContext.COPPER);
       case "RANGE_FACTOR" -> isCopper(json(source.path("calculationJson").asText()).path("factorKey"));
       case "RANGE_LEGACY_FACTOR" -> isCopper(source.path("factorBinding").path("canonicalKey"));
       case "SETTLE_LINKED" -> source.path("rule").path("copperWeightG").decimalValue().signum() != 0;

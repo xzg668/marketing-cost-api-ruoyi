@@ -18,7 +18,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** 一张 OA 单的一次定向退回：关联原负责人，两步 OA 调用都确认成功后恢复所选板块编辑。 */
+/** 一张 OA 单按产品退回：关联各原负责人，两步 OA 调用都确认成功后恢复该产品全部补录。 */
 @Service
 public class TechnicalDataReturnService {
   public record Target(long taskId, int expectedTaskVersion, List<String> modules, String reason) {
@@ -125,6 +125,10 @@ public class TechnicalDataReturnService {
       String returnReason = null;
       var currentPeople = recipients.current(id);
       boolean pending = currentPeople.stream().anyMatch(person -> "RETURN_PENDING".equals(person.todoStatus()));
+      var productModules = modules.selectByTaskId(id);
+      boolean completeProduct = productModules.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag()))
+          .allMatch(module -> TechnicalDataSubmissionState.submitted(module.getModuleStatus())
+              && module.getAssigneeUserId() != null);
       for (var person : currentPeople) {
         Set<String> pendingModules = new HashSet<>();
         if (pending) {
@@ -132,8 +136,8 @@ public class TechnicalDataReturnService {
           var scope = payload(person.returnMessageId());
           scope.path("moduleTypes").forEach(type -> pendingModules.add(type.asText()));
           returnReason = scope.path("reason").asText();
-        } else if (!allowed || !submitted(person)) continue;
-        for (var module : modules.selectByTaskId(id)) {
+        } else if (!allowed || !completeProduct || !submitted(person)) continue;
+        for (var module : productModules) {
           if (Objects.equals(module.getAssigneeUserId(), person.userId())
               && (pending ? pendingModules.contains(module.getModuleType()) : TechnicalDataSubmissionState.submitted(module.getModuleStatus()))) {
             choices.add(
@@ -327,7 +331,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     return id;
   }
 
-  /** 一个产品可选多个板块；按原负责人归组后保存各自的退回范围。 */
+  /** 退回范围是整个产品；按原负责人归组发送，不能遗漏该产品的补录模块。 */
   private List<OaTechnicalReturnClient.Target> prepareProductReturn(
       Target target,
       String batchId,
@@ -341,6 +345,10 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     if (!Objects.equals(task.getTaskVersion(), target.expectedTaskVersion()))
       throw invalid("产品任务已变化，请刷新后再退回");
     var all = modules.selectByTaskId(task.getId());
+    var required = all.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag()))
+        .map(com.sanhua.marketingcost.entity.QuoteTechModule::getModuleType).collect(java.util.stream.Collectors.toSet());
+    if (!required.equals(new HashSet<>(target.modules())))
+      throw invalid("请按产品退回全部补录模块，不能只选择部分板块");
     Map<Long, List<String>> groups = new TreeMap<>();
     for (String code : target.modules()) {
       var module =

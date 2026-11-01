@@ -64,6 +64,9 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
     if (rows.values().stream().allMatch(Objects::isNull)) return Scope.unprepared();
     var saved = ids.isEmpty() ? Map.<Long, MonthlyAdoptionPlan.Selection>of()
         : prices.readByIds(item.getBusinessUnitType(), ids);
+    var observedRequests=rows.values().stream().filter(Objects::nonNull).flatMap(input->input.prices().stream())
+        .map(MonthlyPreparationInputs.Price::request).toList();
+    var currentPrices=prices.lookup(observedRequests).values();
     boolean needsAnnual = saved.values().stream().flatMap(value->value.applicability().fragments().stream())
         .anyMatch(fragment->!fragment.annualUsage().equals(AnnualUsageDomain.any()));
     var currentAnnual = needsAnnual ? new AnnualUsageInput(item.getAnnualVolume(), item.getAnnualVolume()==null?null:
@@ -93,6 +96,8 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
         var stored = saved.get(price.selection().monthlyPriceId());
         if (!price.selection().equals(stored)) throw new IllegalStateException("价格准备与保存月价依据不一致");
         var request = price.request();
+        var latest=currentPrices.get(request);
+        if(latest==null || !Objects.equals(latest.monthlyPriceId(),price.selection().monthlyPriceId())) applicable=false;
         var annual = request.annualUsagePieces();
         if (stored.applicability().fragments().stream().anyMatch(fragment -> !fragment.annualUsage().equals(AnnualUsageDomain.any())))
           annual = currentAnnual;

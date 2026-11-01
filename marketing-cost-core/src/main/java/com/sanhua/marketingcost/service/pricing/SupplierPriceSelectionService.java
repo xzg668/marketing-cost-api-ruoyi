@@ -180,14 +180,14 @@ public class SupplierPriceSelectionService {
       List<SupplierPriceCandidate> candidates, List<SupplierSupplyRatio> ratios) {
     List<String> values = new ArrayList<>();
     candidates.stream()
-        .sorted(Comparator.comparing(SupplierPriceCandidate::supplierCode))
+        .sorted(Comparator.comparing(SupplierPriceSelectionService::candidateIdentity).thenComparing(SupplierPriceCandidate::key))
         .forEach(
             c ->
                 values.add(
                     digest(
                         List.of(
                             c.key(),
-                            c.supplierCode(),
+                            candidateIdentity(c),
                             number(c.unitPrice()),
                             text(c.effectiveFrom()),
                             text(c.effectiveTo())))));
@@ -201,6 +201,11 @@ public class SupplierPriceSelectionService {
   private static String ratioIdentity(SupplierSupplyRatio ratio) {
     return org.springframework.util.StringUtils.hasText(ratio.getSupplierCode()) ? ratio.getSupplierCode()
         : com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.supplierIdentity(null, ratio.getSupplierName());
+  }
+
+  private static String candidateIdentity(SupplierPriceCandidate candidate) {
+    return org.springframework.util.StringUtils.hasText(candidate.supplierCode()) ? candidate.supplierCode()
+        : text(com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.supplierIdentity(null, candidate.supplierName()));
   }
 
   private static String digest(List<String> parts) {

@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard;
 import com.sanhua.marketingcost.service.ProductCostingPipeline;
 import com.sanhua.marketingcost.service.QuoteBatchCostRunService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingProductQuery;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataGapStatusQuery;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,7 +32,8 @@ public class QuoteCostingPreparationService {
       boolean canCost,
       boolean hasSupplement,
       int totalProducts,
-      String message) {}
+      String message,
+      List<TechnicalDataGapStatusQuery.Status> supplements) {}
 
   public record Outcome(
       State preparation,
@@ -49,13 +51,16 @@ public class QuoteCostingPreparationService {
   private final BusinessUnitRepriceLockGuard repriceLock;
   private final QuoteCostingSubmissionService technicalSubmissions;
   private final TechnicalDataPendingProductQuery pendingProducts;
+  private final TechnicalDataGapStatusQuery gaps;
   private final TransactionTemplate transaction;
 
   public QuoteCostingPreparationService(JdbcTemplate jdbc, OaWorkflowAccessPolicy access,
       ProductCostingPipeline pipeline, ProductCostingContextResolver contexts, QuoteBatchCostRunService batches,
       BusinessUnitRepriceLockGuard repriceLock, QuoteCostingSubmissionService technicalSubmissions,
       TechnicalDataPendingProductQuery pendingProducts, PlatformTransactionManager manager,
-      com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle lifecycle) {
+      com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle lifecycle,
+      TechnicalDataGapStatusQuery gaps) {
+    this.gaps = gaps;
     this.lifecycle = lifecycle;
     this.jdbc = jdbc;
     this.access = access;
@@ -104,7 +109,8 @@ public class QuoteCostingPreparationService {
                 ? pendingProducts.count("ALL", null, null, null, oaNo) > 0
                 : pendingProducts.hasPendingItem(oaNo, itemId)),
         itemId == null ? items.size() : 1,
-        message);
+        message,
+        gaps.forForm(formId, itemId, CostPricingPeriodUtils.currentPricingMonth()));
   }
 
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
@@ -156,7 +162,7 @@ public class QuoteCostingPreparationService {
                                   && check.getTechnicalDataCheck().modules().stream()
                                       .anyMatch(module -> module.required())),
               selectedItems.size(),
-              message),
+              message, current.supplements()),
           checks,
           null,
           null);

@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
-/** I04/I08：requestId 始终是 I01 的流程 ID，employeeNos 始终指技术员。 */
+/** I04/I08：requestId 为 I01 流程 ID；未传 employeeNos 时由本单唯一有效分派确定技术员。 */
 public record OaWorkflowNotification(String requestId, String eventType, List<String> employeeNos,
     String reason) {
   public boolean technical() { return "TECHNICAL".equals(eventType); }
@@ -24,9 +24,6 @@ public record OaWorkflowNotification(String requestId, String eventType, List<St
     boolean technical = "TECHNICAL".equals(type);
     var numbers = new TreeSet<String>();
     var employees = root.get("employeeNos");
-    if (technical && (employees == null || !employees.isArray() || employees.isEmpty())) {
-      throw invalid(type + " 必须提供非空的技术员工号数组 employeeNos");
-    }
     if (employees != null && !employees.isNull()) {
       if (!employees.isArray() || employees.size() > 1000) throw invalid("employeeNos 必须为数组，最多 1000 项");
       for (var employee : employees) {

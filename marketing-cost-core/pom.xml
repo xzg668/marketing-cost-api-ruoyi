@@ -15,6 +15,10 @@
 
   <dependencies>
     <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+    </dependency>
+    <dependency>
       <groupId>cn.iocoder.boot</groupId>
       <artifactId>yudao-common</artifactId>
     </dependency>

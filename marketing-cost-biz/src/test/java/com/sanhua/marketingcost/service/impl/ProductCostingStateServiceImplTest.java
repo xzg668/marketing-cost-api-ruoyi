@@ -27,7 +27,9 @@ class ProductCostingStateServiceImplTest {
     var price = new PricePrepareItem(); price.setSettlementKey("P/A"); price.setMaterialCode("A");
     price.setQuantity(new BigDecimal("2.5")); price.setUnitPrice(BigDecimal.TEN);
     when(forms.selectOne(any())).thenReturn(form); when(items.selectById(2L)).thenReturn(item);
-    when(prices.selectList(any())).thenReturn(List.of(price));
+    var second = new PricePrepareItem(); second.setSettlementKey("P/B"); second.setMaterialCode("B");
+    second.setQuantity(BigDecimal.ONE); second.setUnitPrice(BigDecimal.ONE);
+    when(prices.selectList(any())).thenReturn(List.of(second, price), List.of(price, second));
     when(workspaces.lockOrCreate("OA", 2L, "P", "2026-10", "COMMERCIAL")).thenReturn(workspace);
     var service = new ProductCostingStateServiceImpl(forms, items, prices, workspaces,
         new QuoteCostingInputFingerprintServiceImpl(), new MonthlyPriceDocumentCodec(new ObjectMapper()));

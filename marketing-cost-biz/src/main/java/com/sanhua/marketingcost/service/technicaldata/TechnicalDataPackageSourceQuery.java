@@ -4,6 +4,7 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPackageReferenceR
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPackageReferenceResponse.*;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
+import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
@@ -21,6 +22,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
+import java.util.stream.Collectors;
 
 /** 搜索与保存都读取正式有效 BOM；不复制其他技术草稿，不修改参考 BOM。 */
 @Service
@@ -39,21 +41,46 @@ public class TechnicalDataPackageSourceQuery {
   }
 
   public TechnicalDataPackageReferenceResponse references(QuoteTechTask task, QuoteTechProduct product, String keyword) {
-    var grouped = new LinkedHashMap<String, List<Source>>();
+    var selected = new ArrayList<Source>();
     String query = keyword(keyword);
     for (String code : productCodes(task, product, query)) {
       for (Source source : forProduct(task, product, code)) {
         var e = source.evidence();
         if (!matches(query, e.topProductCode(), e.topProductName(), e.topProductModel(), e.topProductSpecification(),
             e.parentMaterialNo(), e.parentName(), e.parentModel(), e.parentSpecification())) continue;
-        grouped.computeIfAbsent(e.structureFingerprint(), ignored -> new ArrayList<>()).add(source);
+        selected.add(source);
       }
+    }
+    if (selected.isEmpty()) return new TechnicalDataPackageReferenceResponse(List.of());
+    var childIds = selected.stream().flatMap(source -> source.children().stream())
+        .map(Child::sourceNodeId).distinct().toList();
+    var childNodes = hierarchy.selectBatchIds(childIds).stream()
+        .collect(Collectors.toMap(BomRawHierarchy::getId, node -> node));
+    var grouped = new LinkedHashMap<String, List<Source>>();
+    for (Source source : selected) {
+      grouped.computeIfAbsent(componentKey(source, childNodes), ignored -> new ArrayList<>()).add(source);
     }
     return new TechnicalDataPackageReferenceResponse(grouped.entrySet().stream().map(entry -> {
       var first = entry.getValue().getFirst(); var e = first.evidence();
       return new Component(entry.getKey(), e.parentMaterialNo(), e.parentName(), e.parentModel(),
           e.parentSpecification(), first.children().size(), List.copyOf(entry.getValue()));
     }).toList());
+  }
+
+  /** 展示按组件自身的有效 BOM 归组；每个成品的保存来源证据仍独立保留。 */
+  private String componentKey(Source source, Map<Long, BomRawHierarchy> childNodes) {
+    var evidence = source.evidence();
+    var structure = source.children().stream().map(child -> {
+      var node = childNodes.get(child.sourceNodeId());
+      if (node == null) throw new IllegalStateException("包装子件来源已变化，请重新查询");
+      // 包装节点自身的 bomVersion 属于上层成品，组件版本应取直接子件行。
+      return List.of(Objects.toString(node.getBomVersion(), ""), Objects.toString(node.getBomPurpose(), ""),
+          Objects.toString(child.materialNo(), ""), Objects.toString(child.model(), ""),
+          Objects.toString(child.name(), ""), Objects.toString(child.specification(), ""),
+          Objects.toString(child.quantity(), ""), Objects.toString(child.unit(), ""));
+    }).toList();
+    return json.canonicalHash(List.of(evidence.priceOrgCode(), evidence.materialOrganizationCode(),
+        evidence.parentMaterialNo(), structure));
   }
 
   public List<ChildOption> children(QuoteTechTask task, QuoteTechProduct product, String keyword) {

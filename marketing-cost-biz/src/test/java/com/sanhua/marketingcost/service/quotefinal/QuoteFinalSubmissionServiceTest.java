@@ -84,7 +84,7 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
     assertThat(body.getValue().at("/formData/dataDetails/0/subFormId").asText()).isEqualTo("1317497487388790985");
     assertThat(body.getValue().at("/formData/dataDetails/1/subFormId").asText()).isEqualTo("1317497487388790985");
     assertThat(body.getValue().at("/formData/dataDetails/0/dataIndex").asInt()).isEqualTo(1);
-    assertThat(body.getValue().at("/formData/dataDetails/1/dataIndex").asInt()).isEqualTo(2);
+    assertThat(body.getValue().at("/formData/dataDetails/2/dataIndex").asInt()).isEqualTo(2);
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_final_submission WHERE oa_form_id=?",Integer.class,formId)).isEqualTo(1);
   }
   @Test void incompleteQuoteStillShowsSuccessfulProductButCannotSubmit() {
@@ -105,7 +105,7 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
     var body = ArgumentCaptor.forClass(ObjectNode.class);
     verify(oa).submit(body.capture());
     assertThat(body.getValue().at("/formData/dataDetails/0/content").asText()).isEqualTo("292.15974237");
-    assertThat(body.getValue().at("/formData/dataDetails/1/content").asText()).isEqualTo("151.57419573");
+    assertThat(body.getValue().at("/formData/dataDetails/2/content").asText()).isEqualTo("151.57419573");
     first.setFinalQuoteAmount(new BigDecimal("999"));
     assertThat(read().costs()).isEqualTo(submitted.costs());
   }
@@ -125,6 +125,62 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
   @Test void changedCostOrPositionIsRejectedBeforeSending() {
     var before=read();versions.get(items.getFirst()).setFinalQuoteAmount(new BigDecimal("100"));
     assertThatThrownBy(()->send(before.fingerprint(),key())).hasMessageContaining("已变化");verifyNoInteractions(oa);
+  }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "FI-SC-005,zcbbhyf,hyfzcbbhs", "FI-SC-006,zcb1bhs,zcbbhs", "FI-SC-020,bhysfzcbbhs,hysfzcbbhs"})
+  void finalWritebackAddsEachOriginalRowsFreightOnce(String process, String without, String with) {
+    jdbc.update("UPDATE oa_form SET process_code=? WHERE id=?", process, formId);
+    when(oaContext.document(formId)).thenReturn(new TechnicalDataOaContext.Document(formId,requestId,process,
+        new OaPeer("I07","TEST",Set.of("COMMERCIAL")),null));
+    jdbc.update("UPDATE oa_form_item SET shipping_fee=1.2345,seq=7 WHERE id=?", items.getFirst());
+    jdbc.update("UPDATE oa_form_item SET shipping_fee=2.500000,seq=3 WHERE id=?", items.getLast());
+    versions.get(items.getFirst()).setFinalQuoteAmount(new BigDecimal("292.15974237"));
+    versions.get(items.getLast()).setFinalQuoteAmount(new BigDecimal("151.57419573"));
+    var before = read();
+    var submitted = send(before.fingerprint(), key());
+    assertThat(submitted.status()).isEqualTo("SUBMITTED");
+    var captured = ArgumentCaptor.forClass(ObjectNode.class); verify(oa).submit(captured.capture());
+    var details = captured.getValue().at("/formData/dataDetails");
+    assertThat(details.size()).isEqualTo(4);
+    var actual = new HashMap<String, String>();
+    details.forEach(field -> actual.put(field.path("dataIndex").asText()+":"+field.path("dataKey").asText(), field.path("content").asText()));
+    assertThat(actual).containsExactlyInAnyOrderEntriesOf(Map.of(
+        "7:"+without, "292.15974237", "7:"+with, "293.39424237",
+        "3:"+without, "151.57419573", "3:"+with, "154.07419573"));
+    jdbc.update("UPDATE oa_form_item SET shipping_fee=999 WHERE oa_form_id=?", formId);
+    assertThat(read().costs()).isEqualTo(submitted.costs());
+    send(before.fingerprint(), key()); verify(oa, times(1)).submit(any());
+  }
+
+  @Test void changedFreightInvalidatesTheConfirmedPreviewBeforeSending() {
+    jdbc.update("UPDATE oa_form_item SET shipping_fee=1 WHERE oa_form_id=?", formId);
+    var before = read();
+    jdbc.update("UPDATE oa_form_item SET shipping_fee=2 WHERE id=?", items.getFirst());
+    assertThat(read().fingerprint()).isNotEqualTo(before.fingerprint());
+    assertThatThrownBy(() -> send(before.fingerprint(), key())).hasMessageContaining("已变化");
+    verifyNoInteractions(oa);
+  }
+
+  @Test void negativeFreightBlocksTheProductBeforeAnySubmissionIsFrozen() {
+    jdbc.update("UPDATE oa_form_item SET shipping_fee=-1 WHERE id=?", items.getFirst());
+    var state = read();
+    assertThat(state.canConfirm()).isFalse();
+    assertThat(state.costs().getFirst().message()).contains("运费不能为负数");
+    assertThatThrownBy(() -> send(state.fingerprint(), key())).hasMessageContaining("尚未完成");
+    assertThat(repository.latest(formId)).isNull(); verifyNoInteractions(oa);
+  }
+
+  @Test void historicalSubmissionWithoutFreightKeepsItsOriginalSnapshot() throws Exception {
+    var submitted = send(read().fingerprint(), key());
+    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+    var rows = json.readTree(repository.find(submitted.submissionId()).snapshotJson());
+    rows.forEach(row -> ((ObjectNode) row).remove("shippingFee"));
+    jdbc.update("UPDATE lp_quote_final_submission SET cost_snapshot_json=? WHERE id=?", json.writeValueAsString(rows), submitted.submissionId());
+    jdbc.update("UPDATE oa_form_item SET shipping_fee=999 WHERE oa_form_id=?", formId);
+    assertThat(read().costs()).allSatisfy(row -> assertThat(row.shippingFee()).isNull());
+    assertThat(repository.find(submitted.submissionId()).snapshotJson()).doesNotContain("shippingFee");
+    verify(oa, times(1)).submit(any());
   }
   @Test void sourceRowChangeAfterReadIsRejected() {
     var before=read();jdbc.update("UPDATE lp_oa_form_item_extra_field SET field_value='999' WHERE oa_form_item_id=? AND field_code='OA_ROW_ID'",items.getFirst());
@@ -161,13 +217,22 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
     when(oa.submit(any())).thenReturn(receipt(OaWorkflowResult.Status.SUCCESS));assertThat(send(before.fingerprint(),key()).status()).isEqualTo("SUBMITTED");verify(oa,times(2)).submit(any());
   }
   @Test void doubleClickConcurrentRequestsOnlySendOnce() throws Exception {
-    var ready=read();var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+    var ready=read();var entered=new CountDownLatch(1);var release=new CountDownLatch(1);var secondStarted=new CountDownLatch(1);
     when(oa.submit(any())).thenAnswer(call->{entered.countDown();assertThat(release.await(10,TimeUnit.SECONDS)).isTrue();return receipt(OaWorkflowResult.Status.SUCCESS);});
     try(var pool=Executors.newVirtualThreadPerTaskExecutor()) {
       var first=pool.submit(()->{identity();try{return send(ready.fingerprint(),key());}finally{clear();}});
-      assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
-      assertThat(send(ready.fingerprint(),key()).status()).isEqualTo("PENDING");release.countDown();assertThat(first.get(10,TimeUnit.SECONDS).status()).isEqualTo("SUBMITTED");
-    } finally {release.countDown();}
+      try {
+        assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
+        var second=pool.submit(()->{identity();secondStarted.countDown();try{return send(ready.fingerprint(),key());}finally{clear();}});
+        assertThat(secondStarted.await(10,TimeUnit.SECONDS)).isTrue();
+        release.countDown();
+        var submitted=first.get(10,TimeUnit.SECONDS);
+        var repeated=second.get(10,TimeUnit.SECONDS);
+        assertThat(submitted.status()).isEqualTo("SUBMITTED");
+        assertThat(repeated.submissionId()).isEqualTo(submitted.submissionId());
+        assertThat(repeated.status()).isIn("PENDING", "SUBMITTED");
+      } finally {release.countDown();}
+    }
     verify(oa,times(1)).submit(any());
   }
   @Test void returnRequiresNewCostVersionsAndOldSnapshotIsImmutable() {

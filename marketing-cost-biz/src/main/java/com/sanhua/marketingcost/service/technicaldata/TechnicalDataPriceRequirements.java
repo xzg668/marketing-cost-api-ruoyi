@@ -198,7 +198,7 @@ public class TechnicalDataPriceRequirements {
       if (prepared == null || prepared.getSummary() == null || "FAILED".equals(prepared.getSummary().getStatus())) {
         issues.add("BOM 价格检查失败，请核对后重新检查"); return;
       }
-      for (var gap : prepared.getGaps()) {
+      for (var gap : technicalGaps(prepared)) {
         if (!"MISSING_PRICE".equals(gap.getGapType())
             || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT")) {
           issues.add(Objects.toString(gap.getMessage(), "尚有结构或价格来源问题"));
@@ -211,6 +211,17 @@ public class TechnicalDataPriceRequirements {
       log.warn("technical BOM price requirements failed: product={}", product.getId(), exception);
       issues.add("BOM 价格检查失败，请重试");
     }
+  }
+
+  static List<PricePrepareGap> technicalGaps(
+      com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult prepared) {
+    // Supplier review remains in the finance pricing workflow; it is not a missing price
+    // for the technician to enter and must not prevent dispatching other missing materials.
+    var reviews = prepared.getSupplierPriceReviews();
+    return prepared.getGaps().stream().filter(gap -> !("MISSING_PRICE".equals(gap.getGapType())
+        && "WAITING".equals(gap.getReasonCode()) && reviews != null && reviews.stream().anyMatch(review ->
+            Set.of("PENDING", "WAIT_IMPORT").contains(review.status())
+                && Objects.equals(gap.getGapMaterialCode(), review.scope().materialCode())))).toList();
   }
 
   private static void add(Map<String, Set<String>> demands, String code, String role) {

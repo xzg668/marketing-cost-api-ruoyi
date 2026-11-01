@@ -15,7 +15,7 @@ import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-/** 将 OA 的人员/整单通知落到当前提交；按已提交的冻结版本处理退回。 */
+/** 技术节点通知支持首次进入补录；已有提交按冻结版本处理退回。 */
 @Service
 public class OaWorkflowNotificationHandler {
   public record Scope(List<Long> recipientIds, List<Long> submissionIds, Long resultId, boolean localReturn) {}
@@ -30,17 +30,20 @@ public class OaWorkflowNotificationHandler {
   private final OaWorkflowNotificationRepository notifications;
   private final com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalBatchRepository batches;
   private final TechnicalDataReturnService returns;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaDispatchService dispatch;
 
   public OaWorkflowNotificationHandler(JdbcTemplate jdbc, OaMessageCodec codec, QuoteTechTaskMapper tasks,
       QuoteTechSubmissionMapper submissions, TechnicalDataOaRecipientRepository recipients,
       TechnicalDataOaSubmissionLifecycle lifecycle, TechnicalDataOaWorkflowRepository workflow,
       QuoteFinalSubmissionRepository results, OaWorkflowNotificationRepository notifications,
       com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalBatchRepository batches,
-      TechnicalDataReturnService returns) {
+      TechnicalDataReturnService returns,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaDispatchService dispatch) {
     this.jdbc=jdbc; this.codec=codec; this.tasks=tasks; this.submissions=submissions;
     this.recipients=recipients; this.lifecycle=lifecycle; this.workflow=workflow;
     this.results=results; this.notifications=notifications; this.batches=batches;
     this.returns=returns;
+    this.dispatch=dispatch;
   }
 
   public Scope scope(OaWorkflowNotification event, OaWorkflowNotificationRepository.Document document) {
@@ -67,10 +70,79 @@ public class OaWorkflowNotificationHandler {
     List<Long> submitted = new ArrayList<>();
     for (long id : selected) {
       var person = recipients.findById(id);
-      if (person.latestSubmissionId() == null) throw conflict("TECH_SUBMISSION_NOT_FOUND", "技术员尚未提交本单任务，不能退回：" + person.externalUserId());
-      submitted.add(person.latestSubmissionId());
+      if (person.latestSubmissionId() != null) submitted.add(person.latestSubmissionId());
+    }
+    if (!submitted.isEmpty() && submitted.size() != selected.size()) {
+      throw conflict("TECH_STAGE_AMBIGUOUS", "本单技术员的产品办理阶段不一致，不能将首次补录和已提交资料一起退回");
     }
     return new Scope(List.copyOf(selected), List.copyOf(submitted), null, localReturn);
+  }
+
+  public OaWorkflowNotification resolveTechnicians(OaWorkflowNotification event,
+      OaWorkflowNotificationRepository.Document document) {
+    if (!event.technical()) return event;
+    confirmPendingDispatch(event, document);
+    if (!event.employeeNos().isEmpty()) return event;
+    var people = jdbc.queryForList("""
+        SELECT DISTINCT r.assignee_user_id,r.external_user_id
+        FROM lp_quote_tech_oa_recipient r JOIN lp_quote_tech_task t ON t.id=r.task_id
+        WHERE t.oa_form_id=? AND t.active_flag=1 AND r.active_flag=1
+        """, document.id());
+    if (people.isEmpty()) throw conflict("TECHNICIAN_NOT_FOUND", "本单没有已生效的技术员分派，请先完成分派");
+    if (people.size() != 1) throw conflict("TECHNICIAN_AMBIGUOUS", "本单存在多位技术员，无法自动确定本次通知的办理人");
+    Object number = people.getFirst().get("external_user_id");
+    if (!(number instanceof String employee) || employee.isBlank()) {
+      throw conflict("TECHNICIAN_NOT_FOUND", "本单已分派技术员缺少工号");
+    }
+    return new OaWorkflowNotification(event.requestId(), event.eventType(), List.of(employee), event.reason());
+  }
+
+  private void confirmPendingDispatch(OaWorkflowNotification event,
+      OaWorkflowNotificationRepository.Document document) {
+    var pending = jdbc.queryForList("""
+        SELECT DISTINCT b.id FROM lp_oa_technical_batch b
+        JOIN lp_oa_integration_message m ON m.technical_batch_id=b.id
+        JOIN lp_quote_tech_oa_recipient r ON r.outbound_message_id=m.id
+        JOIN lp_quote_tech_task t ON t.id=r.task_id
+        WHERE b.oa_form_id=? AND b.operation='I02' AND b.status IN ('SENDING','UNKNOWN','OA_ACCEPTED')
+          AND t.oa_form_id=b.oa_form_id AND t.active_flag=1 AND t.oa_assignment_version=r.assignment_version
+          AND r.active_flag=0 AND r.todo_status='WAITING' AND r.action='ASSIGN'
+        ORDER BY b.id
+        """, String.class, document.id());
+    if (pending.isEmpty()) return;
+    if (pending.size() != 1) throw conflict("TECH_DISPATCH_AMBIGUOUS", "本单存在多批未确认分派，无法确定本次技术通知的范围");
+    String batchId = pending.getFirst();
+    // 与同步HTTP回执采用相同的批次→任务锁顺序；回执先完成时直接使用已激活分派。
+    if ("SUCCESS".equals(batches.find(batchId, true).status())) return;
+    var rows = batches.messageIds(batchId).stream().map(recipients::findByMessage).toList();
+    var employees = rows.stream().map(TechnicalDataOaRecipientRepository.Recipient::externalUserId)
+        .collect(java.util.stream.Collectors.toSet());
+    if (event.employeeNos().isEmpty() && employees.size() != 1) {
+      throw conflict("TECHNICIAN_AMBIGUOUS", "本次分派存在多位技术员，无法自动确定办理人");
+    }
+    if (!event.employeeNos().isEmpty() && !event.employeeNos().containsAll(employees)) {
+      throw conflict("TECH_DISPATCH_SCOPE_MISMATCH", "技术通知未覆盖正在发送的分派人员");
+    }
+    for (var row : rows) {
+      var task = tasks.selectByIdForUpdate(row.taskId());
+      if (task.getOaFormId() != document.id() || !Objects.equals(task.getOaAssignmentVersion(), row.assignmentVersion())
+          || !"ASSIGN".equals(row.action()) || row.latestSubmissionId() != null) {
+        throw conflict("TECH_DISPATCH_SCOPE_MISMATCH", "本次分派范围已变化，不能由通知确认");
+      }
+    }
+    dispatch.confirmFromNotification(batchId, event.requestId());
+  }
+
+  /** 首次通知去重绑定分派身份；后续资料提交不应把迟到重发解释成退回。 */
+  public Scope initialScope(OaWorkflowNotification event, OaWorkflowNotificationRepository.Document document) {
+    List<Long> ids = new ArrayList<>();
+    for (String employee : event.employeeNos()) {
+      ids.addAll(jdbc.queryForList("""
+          SELECT r.id FROM lp_quote_tech_oa_recipient r JOIN lp_quote_tech_task t ON t.id=r.task_id
+          WHERE t.oa_form_id=? AND t.active_flag=1 AND r.active_flag=1 AND r.external_user_id=? ORDER BY t.id,r.id
+          """, Long.class, document.id(), employee));
+    }
+    return new Scope(List.copyOf(ids), List.of(), null, false);
   }
 
   private boolean pendingLocalReturn(long id) {
@@ -110,6 +182,7 @@ public class OaWorkflowNotificationHandler {
 
   private boolean technical(OaMessageRepository.Message message, OaWorkflowNotification event,
       OaWorkflowNotificationRepository.Document document, OaWorkflowNotificationRepository.Flow flow, Scope scope) {
+    if (scope.submissionIds().isEmpty()) return enterTechnical(flow, scope);
     boolean changed = false;
     var operator = new TechnicalDataActor(0L, "OA状态通知", Set.of());
     for (long recipientId : scope.recipientIds()) {
@@ -151,6 +224,22 @@ public class OaWorkflowNotificationHandler {
     }
     // I05 已恢复精确范围时，通知只同步流程状态，不能再恢复整个人员的板块。
     return changed || scope.localReturn() && !"TECHNICAL".equals(flow.state());
+  }
+
+  private boolean enterTechnical(OaWorkflowNotificationRepository.Flow flow, Scope scope) {
+    for (long recipientId : scope.recipientIds()) {
+      var person = recipients.findById(recipientId);
+      if (!"CONFIRMED".equals(person.dispatchStatus())) {
+        throw conflict("TECH_DISPATCH_NOT_CONFIRMED", "技术员分派尚未确认，请先完成分派");
+      }
+      if (!"OPEN".equals(person.todoStatus()) || person.latestSubmissionId() != null) {
+        throw conflict("TECH_ASSIGNMENT_STATE_CONFLICT", "技术员当前不是首次补录待办，不能按首次进入处理");
+      }
+      tasks.selectByIdForUpdate(person.taskId());
+      setEditable(person.taskId(), person.userId(), true);
+      recipients.sequence(person.id(), flow.appliedVersion() + 1);
+    }
+    return !scope.recipientIds().isEmpty();
   }
 
   private void setEditable(long taskId, long userId, boolean allowed) {

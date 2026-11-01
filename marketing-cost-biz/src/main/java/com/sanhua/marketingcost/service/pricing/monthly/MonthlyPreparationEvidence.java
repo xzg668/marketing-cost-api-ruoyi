@@ -13,6 +13,12 @@ public final class MonthlyPreparationEvidence {
 
   public MonthlyPreparationEvidence(MonthlyPriceDocumentCodec codec) { this.codec = codec; }
 
+  public MonthlyPreparationInputs capture(PricePrepareItem row, MonthlyAdoptionPlan plan, String path) {
+    return MonthlyPreparationPrice.KIND.equals(row.getResultRefType())
+        ? MonthlyPreparationInputs.captureDirect(plan, path)
+        : MonthlyPreparationInputs.capture(plan, path);
+  }
+
   public String attach(PricePrepareItem row, MonthlyPreparationInputs inputs) {
     if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType())) {
       return codec.encode(codec.decode(row.getInputSnapshotJson(), MonthlyPreparationPrice.class).withInputs(inputs));

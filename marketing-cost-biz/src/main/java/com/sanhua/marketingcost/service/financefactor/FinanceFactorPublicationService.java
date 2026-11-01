@@ -45,6 +45,7 @@ public class FinanceFactorPublicationService {
   private final com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService
       effectivePrices;
   private final com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices;
+  private final com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices;
 
   public FinanceFactorPublicationService(
       FinanceFactorWorkbookParser parser,
@@ -57,7 +58,9 @@ public class FinanceFactorPublicationService {
       PlatformTransactionManager transactions,
       com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService effectivePrices,
       com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices,
-      com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceService settlementPrices) {
+      com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceService settlementPrices,
+      com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices) {
+    this.inquiryPrices = inquiryPrices;
     this.settlementPrices = settlementPrices;
     this.parser = parser;
     this.canonicalKeys = canonicalKeys;
@@ -178,6 +181,8 @@ public class FinanceFactorPublicationService {
     if ("210".equals(context.priceOrgCode()))
       scrapPrices.refreshInTransaction(context.businessUnitType(), context.priceMonth(), operator);
     if ("210".equals(context.priceOrgCode())) settlementPrices.generate(context.businessUnitType(), operator);
+    if ("210".equals(context.priceOrgCode()))
+      inquiryPrices.refreshInTransaction(context.businessUnitType(), context.priceMonth(), "FINANCE_PUBLICATION", operator);
     return new Publication(
         publication.batchId(),
         publication.revision(),

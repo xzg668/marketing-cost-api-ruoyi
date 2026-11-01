@@ -259,6 +259,12 @@ class CostRunCostItemServiceImplTest {
     var manufactureRate = new com.sanhua.marketingcost.entity.ManufactureRate();
     manufactureRate.setFeeRate(new BigDecimal("0.10"));
     when(manufactureMapper.selectOne(any())).thenReturn(manufactureRate);
+    // This fixture isolates optional PROFILE fees; required department subjects are
+    // explicitly configured at zero, rather than relying on missing rates becoming zero.
+    form.setSourceBusinessDivision("商用部品事业部");
+    var departmentMapper = (DepartmentFundRateMapper)
+        org.springframework.test.util.ReflectionTestUtils.getField(svc, "departmentFundRateMapper");
+    when(departmentMapper.selectOne(any())).thenReturn(departmentRate("0", "1"));
     var withoutFees = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
         Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
     var original = context.getEffectiveTechnicalData();

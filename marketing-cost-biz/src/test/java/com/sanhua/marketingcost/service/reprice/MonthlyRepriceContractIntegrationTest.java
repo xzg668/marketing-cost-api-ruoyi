@@ -75,7 +75,9 @@ class MonthlyRepriceContractIntegrationTest {
     history=sql.getMapper(MonthlyRepriceBatchMapper.class); historicalResults=sql.getMapper(MonthlyRepriceResultMapper.class);
     var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
     properties=new com.sanhua.marketingcost.config.MonthlyRepriceProperties();
-    service=new MonthlyRepriceContractService(mapper,manager,new ObjectMapper(),codec,properties);
+    service=new MonthlyRepriceContractService(mapper,manager,new ObjectMapper(),codec,properties,
+        org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService.class,
+            org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)));
     control=new MonthlyQuotationControl(ds);workflow=sql.getMapper(MonthlyRepriceWorkflowMapper.class);
     dispatch=new MonthlyRepriceDispatchService(mapper,workflow,service,
         org.mockito.Mockito.mock(MonthlyRepriceCheckService.class),manager);
