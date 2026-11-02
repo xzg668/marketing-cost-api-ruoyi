@@ -120,7 +120,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
     }
     requireSubmittedProduct(product, accountingMonth, requiredModules);
     QuoteTechTask task = taskMapper.selectById(product.getTaskId());
-    if (task == null || !TechnicalDataSubmissionState.submitted(task.getTaskStatus())) {
+    if (task == null || !TechnicalDataSubmissionState.retainsSubmittedMaterials(task.getTaskStatus())) {
       throw error(
           "TECH_DATA_TASK_NOT_SUBMITTED",
           oaFormItemId,

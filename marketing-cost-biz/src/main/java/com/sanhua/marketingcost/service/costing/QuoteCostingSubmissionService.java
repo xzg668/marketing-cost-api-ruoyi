@@ -31,12 +31,12 @@ public class QuoteCostingSubmissionService {
           LEFT JOIN lp_oa_quote_document d ON d.oa_form_id=t.oa_form_id
           WHERE t.oa_form_id=? AND (? IS NULL OR t.oa_form_item_id=?)
             AND t.active_flag=1 AND t.task_status<>'UNASSIGNED' AND (
-            t.task_status NOT IN ('SUBMITTED','APPROVED')
+            t.task_status NOT IN ('SUBMITTED','APPROVED','RETURN_PENDING')
             OR NOT EXISTS(SELECT 1 FROM lp_quote_tech_oa_recipient r WHERE r.task_id=t.id AND r.active_flag=1)
             OR EXISTS(SELECT 1 FROM lp_quote_tech_oa_recipient r
               LEFT JOIN lp_quote_tech_submission s ON s.id=r.latest_submission_id
               WHERE r.task_id=t.id AND r.active_flag=1
-                AND (r.todo_status NOT IN ('SUBMITTED','DONE') OR s.submission_status IS NULL
+                AND (r.todo_status NOT IN ('SUBMITTED','DONE','RETURN_PENDING') OR s.submission_status IS NULL
                   OR s.submission_status NOT IN ('SENT','APPROVED')
                   OR COALESCE(s.source_form_version,0)<>COALESCE(d.source_version,0)))
             OR EXISTS(SELECT 1 FROM lp_quote_tech_product p JOIN lp_quote_tech_module m ON m.product_id=p.id
@@ -94,6 +94,17 @@ public class QuoteCostingSubmissionService {
 
   public void requireAccepted(long formId, Long itemId) {
     requireSubmitted(formId, itemId);
+    // 明确退回失败仍可使用原结果；发送中/回执未知时不能同时推动成本提交流程。
+    if (Boolean.TRUE.equals(jdbc.queryForObject("""
+        SELECT EXISTS(SELECT 1 FROM lp_quote_tech_task t
+          JOIN lp_quote_tech_oa_recipient r ON r.task_id=t.id AND r.active_flag=1
+          LEFT JOIN lp_oa_integration_message m ON m.id=r.return_message_id
+          LEFT JOIN lp_oa_technical_batch b ON b.id=m.technical_batch_id AND b.operation='I05'
+          WHERE t.oa_form_id=? AND (? IS NULL OR t.oa_form_item_id=?) AND t.active_flag=1
+            AND r.todo_status='RETURN_PENDING' AND (b.status IS NULL OR b.status<>'RETURN_FAILED'))
+        """, Boolean.class, formId, itemId, itemId))) {
+      throw new IllegalArgumentException("退回结果尚未确认，请核实 OA 退回结果后再提交成本");
+    }
     for (long flowId : assignedFlows(formId, itemId)) {
       var flow = workflows.findFlow(flowId);
       String fingerprint = codec.canonicalHash(workflows.submissionBasis(flowId));

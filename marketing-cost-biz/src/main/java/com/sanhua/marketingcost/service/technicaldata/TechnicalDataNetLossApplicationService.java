@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 净损失率草稿、来源核验及本人提交边界，复用现有产品版本与审批。 */
 @Service
 public class TechnicalDataNetLossApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
@@ -31,7 +32,8 @@ public class TechnicalDataNetLossApplicationService {
 
   public TechnicalDataNetLossApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataVersionContentCodec codec,
-      TechnicalDataSourceSnapshotFactory snapshots, NetLossRateQuery sources, OaMessageCodec json, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+      TechnicalDataSourceSnapshotFactory snapshots, NetLossRateQuery sources, OaMessageCodec json, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.snapshots = snapshots;
@@ -77,6 +79,7 @@ public class TechnicalDataNetLossApplicationService {
     if (!Integer.valueOf(2).equals(scope.product().getContentSchemaVersion()) || !Integer.valueOf(1).equals(scope.product().getActiveFlag())
         || !actor.canEditModule(scope.task(), scope.module())) throw forbidden("当前净损失率模块未分派给本人或已送审");
     sharedModules.requireOwnership(productId, "NET_LOSS");
+    if (reuse.save(scope.product(), scope.module(), request, actor.userId())) return get(productId, null, actor);
     if (!"MISSING".equals(scope.module().getSourceAvailability())) throw invalid("请先核实本产品的净损失率缺口");
     requireMissing(scope.task(), scope.product());
     boolean reference = "REFERENCE".equals(request.getEntryMode());
@@ -115,6 +118,7 @@ public class TechnicalDataNetLossApplicationService {
     var content = codec.netLoss(version);
     var issues = new ArrayList<>(TechnicalDataNetLossRules.validate(content));
     if (!issues.isEmpty()) return List.copyOf(issues);
+    if (reuse.unchanged(product, version, "NET_LOSS")) return List.copyOf(issues);
     try {
       var task = repository.findTask(product.getTaskId()).orElseThrow();
       requireMissing(task, product);

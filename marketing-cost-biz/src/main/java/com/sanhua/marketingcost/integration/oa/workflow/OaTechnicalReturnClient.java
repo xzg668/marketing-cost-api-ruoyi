@@ -91,11 +91,11 @@ public class OaTechnicalReturnClient {
 
   public ObjectNode previewRejection(String requestId, String employeeNo, String rejectToNodeId) {
     if (rejectToNodeId == null || !rejectToNodeId.matches("[A-Za-z0-9._:-]{1,128}")) {
-      throw new IllegalArgumentException("原 OA 报价需求未提供有效的 RejectToNodeid，不能退回，请先核实需求推送");
+      throw new IllegalArgumentException("原 OA 报价需求未提供有效的 rejectNodeid，不能退回，请先核实需求推送");
     }
     return json.createObjectNode().put("userid", line(employeeNo, "报价员工号"))
         .put("requestId", line(requestId, "原OA流程ID"))
-        .put("RejectToType", "0").put("RejectToNodeid", rejectToNodeId);
+        .put("RejectToType", "0").put("rejectNodeid", rejectToNodeId);
   }
 
   public OaWorkflowResult updateTechnicians(ObjectNode body) {

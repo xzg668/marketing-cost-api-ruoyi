@@ -115,6 +115,31 @@ public class TechnicalDataPackageSourceQuery {
     return source;
   }
 
+  /** 已保存的来源按业务身份核对；U9 重建可更换行号和批次，但不能改变包装内容。 */
+  public Source requireSaved(QuoteTechTask task, QuoteTechProduct product, Evidence saved) {
+    if (saved == null || saved.topProductCode() == null || saved.parentPath() == null
+        || saved.structureFingerprint() == null || !Objects.equals(saved.priceOrgCode(), task.getApplicableOrgCode())) {
+      throw new IllegalArgumentException("已保存的包装来源不完整或不属于本次组织");
+    }
+    var candidates = forProduct(task, product, saved.topProductCode()).stream()
+        .filter(row -> Objects.equals(row.evidence().parentPath(), saved.parentPath())
+            && Objects.equals(row.evidence().parentMaterialNo(), saved.parentMaterialNo())).toList();
+    if (candidates.size() != 1) throw new IllegalArgumentException("包装来源已失效或无法唯一确认，请重新选择");
+    var current = candidates.getFirst();
+    if (!businessEvidence(saved).equals(businessEvidence(current.evidence()))) {
+      throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.VERSION_CONFLICT, "来源 BOM 或料品资料已变化，请重新查询；本次输入仍保留");
+    }
+    return current;
+  }
+
+  private Evidence businessEvidence(Evidence e) {
+    return new Evidence(null, e.topProductCode(), e.topProductName(), e.topProductModel(), e.topProductSpecification(),
+        e.parentMaterialNo(), e.parentName(), e.parentModel(), e.parentSpecification(),
+        e.parentQuantity() == null ? null : e.parentQuantity().stripTrailingZeros(), e.priceOrgCode(),
+        e.materialOrganizationCode(), e.bomVersion(), e.bomPurpose(), null, e.parentPath(), e.structureFingerprint(), null,
+        e.parentBaseQuantity() == null ? null : e.parentBaseQuantity().stripTrailingZeros());
+  }
+
   public List<Source> forProduct(QuoteTechTask task, QuoteTechProduct product, String code) {
     return forProduct(code, product.getAccountingMonth(), task.getBusinessUnitType(), task.getApplicableOrgCode());
   }

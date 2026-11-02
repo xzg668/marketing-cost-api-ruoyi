@@ -123,6 +123,15 @@ public class OaTechnicalBatchRepository {
         """, batch.id(), batch.status(), batch.returnStep(), batch.returnAttempt()) == 1;
   }
 
+  public void reviseReturnRemark(Batch batch, ObjectNode request) {
+    requireOne(jdbc.update("""
+        UPDATE lp_oa_technical_batch SET request_json=?,people_result_json=NULL,result_json=NULL,
+          status='PREPARED',return_step='PEOPLE',updated_at=NOW(3)
+        WHERE id=? AND operation='I05' AND status IN ('RETURN_FAILED','REJECT_READY')
+          AND return_step='REJECT' AND return_attempt=?
+        """, codec.write(request), batch.id(), batch.returnAttempt()));
+  }
+
   public void receiveReturnStep(Batch sending, OaWorkflowResult result) {
     boolean people = "PEOPLE".equals(sending.returnStep());
     boolean success = result.status() == OaWorkflowResult.Status.SUCCESS;

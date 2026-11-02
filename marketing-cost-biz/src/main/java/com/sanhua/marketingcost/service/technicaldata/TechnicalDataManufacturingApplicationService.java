@@ -37,6 +37,7 @@ import org.slf4j.LoggerFactory;
 /** 只保存本人制造件模块；原始图库、正式 U9 及其他人的已填内容不回写。 */
 @Service
 public class TechnicalDataManufacturingApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private static final Logger log = LoggerFactory.getLogger(TechnicalDataManufacturingApplicationService.class);
   private final TechnicalDataSharedModules sharedModules;
@@ -62,7 +63,8 @@ public class TechnicalDataManufacturingApplicationService {
       MakePartScrapMappingService scraps, MakePartNoScrapConfirmationService noScrap,
       ElectronicDrawingHybridBomService hybridBom, ElectronicDrawingWorkflowOrchestrator workflow,
       PlatformTransactionManager transactionManager, TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy,
-      ElectronicDrawingManufacturingRevision revisions) {
+      ElectronicDrawingManufacturingRevision revisions, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.revisions = revisions;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
@@ -86,7 +88,8 @@ public class TechnicalDataManufacturingApplicationService {
     Assessment source = historical || formalAvailable ? null : sources.inspect(context);
     var issues = !historical && !Objects.equals(scope.module().getRequiredFlag(), 1) ? List.<String>of()
         : saved == null ? List.<String>of("请先保存原材料或下级关系检查结果")
-        : historical ? TechnicalDataManufacturingRules.validate(saved, scope.product()) : validate(scope.product(), saved, source);
+        : historical || reuse.unchanged(scope.product(), version, "MANUFACTURING")
+            ? TechnicalDataManufacturingRules.validate(saved, scope.product()) : validate(scope.product(), saved, source);
     var inputs = saved == null || !TechnicalDataManufacturingRules.validate(saved, scope.product()).isEmpty()
         ? List.<TechnicalDataManufacturingResponse.CalculationInput>of()
         : saved.items().stream().map(TechnicalDataManufacturingRules::calculationInput).toList();
@@ -118,9 +121,9 @@ public class TechnicalDataManufacturingApplicationService {
   }
 
   public TechnicalDataManufacturingResponse save(Long productId, TechnicalDataManufacturingSaveRequest request, TechnicalDataActor actor) {
-    transaction.executeWithoutResult(status -> saveDraft(productId, request, actor));
+    boolean changed = Boolean.TRUE.equals(transaction.execute(status -> saveDraft(productId, request, actor)));
     var saved = read(productId, null, actor);
-    if (saved.issues().isEmpty()) {
+    if (changed && saved.issues().isEmpty()) {
       var context = context(scope(productId, actor, null));
       try {
         workflow.resumeAfterMaterialSelection(context.workflowId(), context.businessUnitType(),
@@ -134,13 +137,14 @@ public class TechnicalDataManufacturingApplicationService {
     return read(productId, null, actor);
   }
 
-  private void saveDraft(Long productId, TechnicalDataManufacturingSaveRequest request, TechnicalDataActor actor) {
+  private boolean saveDraft(Long productId, TechnicalDataManufacturingSaveRequest request, TechnicalDataActor actor) {
     if (request == null || !request.getUnknownFields().isEmpty() || request.getExpectedVersion() == null
         || request.getExpectedVersion() < 0 || request.getItems() == null) throw invalid("制造件输入或并发版本不完整，不能修改来源字段");
     var scope = scope(productId, actor, request.getExpectedVersion());
     if (!Objects.equals(scope.product().getActiveFlag(), 1) || !Objects.equals(scope.product().getContentSchemaVersion(), 2)
         || !actor.canEditModule(scope.task(), scope.module())) throw forbidden("当前制造件模块未分派给本人或已提交审批");
     sharedModules.requireOwnership(productId, "MANUFACTURING");
+    if (reuse.save(scope.product(), scope.module(), request, actor.userId())) return false;
     if (!"MISSING".equals(scope.module().getSourceAvailability())) throw invalid("制造件缺口尚未确认，请先检查来源并分派");
     var context = context(scope);
     var assessment = sources.inspect(context);
@@ -207,10 +211,14 @@ public class TechnicalDataManufacturingApplicationService {
     scope.product().setCurrentEditVersionId(draft.getId()); scope.product().setProductStatus("EDITING");
     if (repository.updateProductPointers(scope.product(), scope.product().getRowVersion(), now) != 1) throw conflict("产品资料已变化");
     if ("PENDING".equals(scope.task().getTaskStatus())) repository.markTaskInProgress(scope.task().getId(), actor.userId(), now);
+    return true;
   }
 
   /** 送 OA 前按当前来源再次核查，不能只信上次保存时的 READY 标志。 */
   public List<String> validateCurrent(QuoteTechProduct product, Manufacturing content) {
+    var saved = product.getCurrentEditVersionId() == null ? null : repository.findVersion(product.getCurrentEditVersionId()).orElse(null);
+    if (saved != null && codec.sameSourceEvidence(content, codec.manufacturing(saved))
+        && reuse.unchanged(product, saved, "MANUFACTURING")) return TechnicalDataManufacturingRules.validate(content, product);
     var task = repository.findTask(product.getTaskId()).orElseThrow(() -> invalid("制造件任务不存在"));
     var context = contexts.load(product.getOaFormItemId(), task.getBusinessUnitType(),
         task.getApplicableOrgCode(), product.getAccountingMonth());

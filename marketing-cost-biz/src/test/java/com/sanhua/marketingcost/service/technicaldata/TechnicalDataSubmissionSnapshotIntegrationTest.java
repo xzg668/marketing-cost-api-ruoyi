@@ -37,6 +37,7 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
   @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients;
   @Autowired private TechnicalDataParticipantVersions participantVersions;
   @Autowired private TechnicalDataDependencies dependencies;
+  @Autowired private TechnicalDataUnchangedModuleReuse reuse;
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechModuleMapper moduleMapper;
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechTaskMapper taskMapper;
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechSubmissionMapper submissionMapper;
@@ -119,15 +120,20 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     var submitted = snapshots.prepare(fixture.taskId(), "LI-DEPS", 0, 0, li, new TechnicalDataActor(102L, "技术员102", Set.of("technical:data:task:edit", "technical:data:task:list")));
     var frozen = versionMapper.selectById(submitted.getTechnicalVersionId());
     assertThat(codec.supplementContent(frozen).sources().dependencies()).hasSize(4);
+    participantVersions.restore(productMapper.selectById(fixture.productId()), li, frozen.getId(), 102L);
+    var returnedProduct = productMapper.selectById(fixture.productId());
+    assertThat(reuse.unchanged(returnedProduct, versionMapper.selectById(returnedProduct.getCurrentEditVersionId()), "PRICE")).isTrue();
     var changed = versionMapper.selectById(fixture.versionId());
     changed.setDrawingBomJson(changed.getDrawingBomJson().replace("\"quantityPerParent\": 2", "\"quantityPerParent\": 7").replace("\"quantityPerParent\":2", "\"quantityPerParent\":7"));
     persistence.updateDraft(changed, changed.getRowVersion());
     assertThat(dependencies.stale(frozen, moduleMapper.selectByTaskId(fixture.taskId()))).isEmpty();
+    assertThat(reuse.unchanged(returnedProduct, versionMapper.selectById(returnedProduct.getCurrentEditVersionId()), "PRICE")).isTrue();
     changed = versionMapper.selectById(fixture.versionId());
     changed.setDrawingBomJson(changed.getDrawingBomJson().replace("MAT", "DIFFERENT"));
     persistence.updateDraft(changed, changed.getRowVersion());
     assertThat(dependencies.stale(frozen, moduleMapper.selectByTaskId(fixture.taskId())))
         .extracting(TechnicalDataDependencies.Issue::sourceModuleType).containsExactly("DRAWING_BOM");
+    assertThat(reuse.unchanged(returnedProduct, versionMapper.selectById(returnedProduct.getCurrentEditVersionId()), "PRICE")).isFalse();
     assertThat(versionMapper.selectById(frozen.getId()).getContentFingerprint()).isEqualTo(submitted.getContentFingerprint());
   }
 

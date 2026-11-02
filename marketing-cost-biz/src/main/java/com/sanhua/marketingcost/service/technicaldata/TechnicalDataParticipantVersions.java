@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 /** 个人冻结、定向恢复和提交版本汇总。调用方先锁任务，随后按产品、版本、模块顺序加锁。 */
 @Service
 public class TechnicalDataParticipantVersions {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataVersionContentCodec codec;
@@ -37,7 +38,8 @@ public class TechnicalDataParticipantVersions {
       TechnicalDataPackageApplicationService packaging, TechnicalDataAuxiliaryApplicationService auxiliary,
       TechnicalDataSolderApplicationService solder, TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataSharedModules sharedModules, TechnicalDataPriceApplicationService prices,
       TechnicalDataPlateMaterialProfile plateMaterials,
-      TechnicalDataPlateMaterialPublication plateMaterialPublication) {
+      TechnicalDataPlateMaterialPublication plateMaterialPublication, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.plateMaterials = plateMaterials;
     this.plateMaterialPublication = plateMaterialPublication;
     this.sharedModules = sharedModules;
@@ -69,7 +71,7 @@ public class TechnicalDataParticipantVersions {
     if (types.contains("PROFILE") && !TechnicalDataProductFeeRules.validate(codec.productFees(draft)).isEmpty()) {
       throw conflict("本人负责模块的产品费用尚未填写完整，不能冻结提交");
     }
-    if (types.contains("PROFILE")) {
+    if (types.contains("PROFILE") && !reuse.unchanged(product, draft, "PROFILE")) {
       var issues = plateMaterials.validateCurrent(product, draft);
       if (!issues.isEmpty()) throw conflict(String.join("；", issues));
     }

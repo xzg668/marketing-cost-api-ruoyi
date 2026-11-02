@@ -19,6 +19,7 @@ import org.springframework.util.StringUtils;
 /** 共用提交校验；只读草稿/冻结内容，不继承旧逐模块审核状态，也不执行 OA 发送。 */
 @Service
 public class TechnicalDataSubmissionValidationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
 
   private final com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients;
   private final QuoteTechnicalDataRepository repository;
@@ -40,7 +41,8 @@ public class TechnicalDataSubmissionValidationService {
       TechnicalDataAuxiliaryApplicationService auxiliary, TechnicalDataSolderApplicationService solder,
       TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataPriceApplicationService prices,
       com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients,
-      TechnicalDataPlateMaterialProfile plateMaterials) {
+      TechnicalDataPlateMaterialProfile plateMaterials, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.plateMaterials = plateMaterials;
     this.recipients = recipients;
     this.repository = repository; this.taskRepository = taskRepository; this.codec = codec;
@@ -196,7 +198,7 @@ public class TechnicalDataSubmissionValidationService {
     for (var issue : TechnicalDataProductFeeRules.validate(codec.productFees(version))) {
       add(issues, product, "PROFILE", issue.field(), null, "FIELD_INVALID", issue.message(), anchor(product, "PROFILE"));
     }
-    if (!frozen) {
+    if (!frozen && !reuse.unchanged(product, version, "PROFILE")) {
       for (String message : plateMaterials.validateCurrent(product, version)) {
         add(issues, product, "PROFILE", "plateMaterial", null, "PLATE_MATERIAL_INVALID", message, anchor(product, "PROFILE"));
       }

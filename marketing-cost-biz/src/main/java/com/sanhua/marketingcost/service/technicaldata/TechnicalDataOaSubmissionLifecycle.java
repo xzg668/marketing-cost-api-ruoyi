@@ -79,6 +79,8 @@ public class TechnicalDataOaSubmissionLifecycle {
       var task = tasks.selectByIdForUpdate(taskId);
       for (var person : recipients.current(taskId)) {
         if (person.latestSubmissionId() == null) throw conflict("技术员尚未提交资料");
+        // 退回待确认的冻结资料已发布，不重复激活或改变其办理状态。
+        if ("RETURN_PENDING".equals(person.todoStatus())) continue;
         publishSubmitted(task, submissions.selectById(person.latestSubmissionId()), person.userId());
       }
     }

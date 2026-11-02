@@ -28,6 +28,23 @@ public class TechnicalDataPriceOwnership {
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
+  public void requireExisting(long moduleId, String businessUnit,
+      List<com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.PriceItem> items) {
+    for (var item : items.stream().sorted(java.util.Comparator.comparing(
+        com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.PriceItem::materialNo)).toList()) {
+      var owners = jdbc.queryForList("SELECT owner_module_id FROM lp_quote_tech_price_claim WHERE material_code=? FOR UPDATE", Long.class, item.materialNo());
+      var owner = find(item.materialNo());
+      if (owners.size() != 1 || owners.getFirst() != moduleId || owner == null
+          || !Objects.equals(owner.organizationCode(), item.organizationCode())
+          || !Objects.equals(owner.businessUnit(), businessUnit) || !Objects.equals(owner.unit(), item.unit())
+          || !Objects.equals(owner.currency(), item.currency())) {
+        throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.SHARED_MODULE_CONFLICT,
+            item.materialNo() + " 的原补价归属或适用范围已变化，请核实后保存");
+      }
+    }
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
   public void require(long moduleId, String businessUnit, List<TechnicalDataPriceRequirement> requirements) {
     // 所有入口按料号排序加锁，两个产品含多项相同料号时保持同一锁序。
     for (var item : requirements.stream().filter(TechnicalDataPriceRequirement::requiresEntry)

@@ -128,6 +128,25 @@ class TechnicalDataAuxiliaryApplicationIntegrationTest extends BomMapperTestBase
     assertThatThrownBy(() -> service.preview(productId, "again.xlsx", bytes, LI)).hasMessageContaining("未分派给本人");
   }
 
+  @Test void returnedUnchangedAuxiliaryKeepsSubmittedAmountsAfterPublicSourceChanges() {
+    var source = service.references(productId, key + "-REF", WANG).getFirst();
+    var input = reference(source, "12", 0);
+    var saved = service.save(productId, input, WANG);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
+    String original = content(frozen);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), recipient(), frozen.getId(), 101L);
+    var changed = cms.selectById(source.items().getFirst().sourceId()); changed.setAmountYuan(new BigDecimal("20")); cms.updateById(changed);
+    input.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
+    input.getItems().getFirst().setAmount(new BigDecimal("13"));
+    assertThatThrownBy(() -> service.save(productId, input, WANG)).hasMessageContaining("已变化");
+    input.getItems().getFirst().setAmount(new BigDecimal("12"));
+    var unchanged = service.save(productId, input, WANG);
+    assertThat(unchanged.totalAmount()).isEqualByComparingTo(saved.totalAmount());
+    assertThat(validation.validate(taskId, 101L, WANG).issues()).isEmpty();
+    versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), unchanged.expectedVersion(), 101L);
+    assertThat(content(repository.findVersion(frozen.getId()).orElseThrow())).isEqualTo(original);
+  }
+
   private TechnicalDataAuxiliarySaveRequest reference(TechnicalDataAuxiliaryCmsSource source, String amount, int expected) {
     var request = new TechnicalDataAuxiliarySaveRequest(); request.setExpectedVersion(expected); request.setEntryMode("REFERENCE");
     request.setReferenceMaterialNo(source.materialNo()); request.setReferenceFingerprint(source.fingerprint());

@@ -15,15 +15,19 @@ class OaQuotationRequestMapperTest {
 
   @Test
   void rejectionNodeIsAnOpaqueSourceIdentifier() throws Exception {
-    var root = sample(1).put("RejectToNodeid", "001327000000123456789");
+    var root = sample(1).put("rejectNodeid", "001327000000123456789");
     assertThat(mapper.map(root, PEER).quote().rejectToNodeId()).isEqualTo("001327000000123456789");
     assertThat(mapper.map(sample(1), PEER).quote().rejectToNodeId()).isNull();
     for (String value : new String[] {"", "node with space", "x".repeat(129)}) {
-      assertThatThrownBy(() -> mapper.map(root.deepCopy().put("RejectToNodeid", value), PEER))
+      assertThatThrownBy(() -> mapper.map(root.deepCopy().put("rejectNodeid", value), PEER))
           .isInstanceOf(OaQuotationValidationException.class);
     }
-    assertThatThrownBy(() -> mapper.map(root.deepCopy().put("RejectToNodeid", 123), PEER))
+    assertThatThrownBy(() -> mapper.map(root.deepCopy().put("rejectNodeid", 123), PEER))
         .isInstanceOf(OaQuotationValidationException.class);
+    for (String wrongCase : new String[] {"RejectToNodeid", "rejecttonodeid", "rejectNodeId"}) {
+      assertThatThrownBy(() -> mapper.map(sample(1).put(wrongCase, "001327000000123456789"), PEER))
+          .isInstanceOf(OaQuotationValidationException.class);
+    }
   }
 
   @Test

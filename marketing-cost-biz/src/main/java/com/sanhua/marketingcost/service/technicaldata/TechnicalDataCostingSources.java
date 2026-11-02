@@ -233,7 +233,9 @@ public class TechnicalDataCostingSources {
         || !Objects.equals(product.getAccountingMonth(),owner.accountingMonth())))
       throw error(context,type,"TECH_DATA_SOURCE_SCOPE_MISMATCH","捕获的原任务业务单元、组织或原产品月份与办理来源不一致");
     if (!Integer.valueOf(1).equals(product.getActiveFlag()) || !Integer.valueOf(1).equals(task.getActiveFlag())
-        || !TechnicalDataSubmissionState.submitted(task.getTaskStatus())
+        || !(TechnicalDataSubmissionState.submitted(task.getTaskStatus())
+            || Objects.equals(task.getOaFormId(), context.oaFormId())
+                && TechnicalDataSubmissionState.retainsSubmittedMaterials(task.getTaskStatus()))
         || !TechnicalDataSubmissionState.submitted(product.getProductStatus()) || product.getEffectiveVersionId() == null
         || !TechnicalDataSubmissionState.submitted(owner.moduleStatus()) || !TechnicalDataSubmissionState.submitted(owner.versionStatus())) {
       throw error(context, type, "TECH_DATA_TASK_NOT_SUBMITTED", "原补录尚未全部提交：" + label);

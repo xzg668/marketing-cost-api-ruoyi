@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.*;
 @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute','technical:data:admin:operate')")
 public class TechnicalDataReturnController {
   public record Selection(List<Long> taskIds) {}
-  public record Retry(int expectedAttempt) {}
+  public record Retry(int expectedAttempt, List<TechnicalDataReturnService.Reason> reasons) {}
   public record PeopleConfirmation(int expectedAttempt, String note) {}
 
   private final TechnicalDataReturnService returns;
@@ -46,7 +46,7 @@ public class TechnicalDataReturnController {
 
   @PostMapping("/{batchId}/retry")
   public CommonResult<TechnicalDataReturnService.Result> retry(@PathVariable String batchId, @RequestBody Retry request) {
-    return execute(() -> returns.retryRejection(batchId, request.expectedAttempt(), actors.current()));
+    return execute(() -> returns.retryRejection(batchId, request.expectedAttempt(), request.reasons(), actors.current()));
   }
 
   @PostMapping("/{batchId}/confirm-people")

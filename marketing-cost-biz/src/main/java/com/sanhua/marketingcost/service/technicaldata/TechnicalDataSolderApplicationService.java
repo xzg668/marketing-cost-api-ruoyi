@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 焊料模块的草稿和本人审批边界。保存既有版本 JSON，不新增明细表或独立流程。 */
 @Service
 public class TechnicalDataSolderApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
@@ -30,7 +31,8 @@ public class TechnicalDataSolderApplicationService {
   public TechnicalDataSolderApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataVersionContentCodec codec,
       TechnicalDataSourceSnapshotFactory snapshots, TechnicalDataSolderSourceQuery sources,
-      TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+      TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.snapshots = snapshots;
@@ -73,6 +75,7 @@ public class TechnicalDataSolderApplicationService {
     if (!Integer.valueOf(2).equals(scope.product().getContentSchemaVersion()) || !Integer.valueOf(1).equals(scope.product().getActiveFlag())
         || !actor.canEditModule(scope.task(), scope.module())) throw forbidden("当前焊料模块未分派给本人或已送审");
     sharedModules.requireOwnership(productId, "SOLDER");
+    if (reuse.save(scope.product(), scope.module(), request, actor.userId())) return get(productId, null, actor);
     if (!"MISSING".equals(scope.module().getSourceAvailability())) throw invalid("请先核实本产品的焊料缺口");
     boolean reference = "REFERENCE".equals(request.getEntryMode());
     var source = reference ? sources.require(scope.task(), scope.product(), request.getReferenceMaterialNo(), request.getReferenceFingerprint()) : null;
@@ -123,6 +126,7 @@ public class TechnicalDataSolderApplicationService {
     var content = codec.solder(version);
     var issues = new ArrayList<>(TechnicalDataSolderRules.validate(content));
     if (!issues.isEmpty()) return List.copyOf(issues);
+    if (reuse.unchanged(product, version, "SOLDER")) return List.copyOf(issues);
     try {
       var task = repository.findTask(product.getTaskId()).orElseThrow();
       if ("REFERENCE".equals(content.entryMode())) {

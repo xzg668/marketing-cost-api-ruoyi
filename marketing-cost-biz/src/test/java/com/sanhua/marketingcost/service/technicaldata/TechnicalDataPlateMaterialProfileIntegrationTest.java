@@ -326,7 +326,7 @@ class TechnicalDataPlateMaterialProfileIntegrationTest extends BomMapperTestBase
     assertThat(view(other).profile().plateMaterial().saved().material()).isNull();
   }
 
-  @Test void historyRemainsImmutableAndReturnedDraftRequiresCurrentSourceConfirmation() throws Exception {
+  @Test void historyRemainsImmutableAndReturnedDraftCanKeepItsSnapshotOrSelectCurrentSource() throws Exception {
     var f = fixture();
     var mapping = mappings.create("COMMERCIAL", f.model(), "水氟316L", 1);
     assertCode(sendPatch(f, request(view(f), null), TECH), 0, null);
@@ -343,7 +343,7 @@ class TechnicalDataPlateMaterialProfileIntegrationTest extends BomMapperTestBase
     var restored = view(f);
     assertThat(restored.profile().plateMaterial().saved().material().value()).isEqualTo("水氟316L");
     assertThat(restored.profile().plateMaterial().sourceChanged()).isTrue();
-    assertThatThrownBy(() -> freeze(f)).hasMessageContaining("来源已变化");
+    assertThat(validation.validate(f.task(), TECH.userId(), TECH).valid()).isTrue();
     assertCode(sendPatch(f, request(restored, null), TECH), 0, null);
     var second = freeze(f);
     assertThat(second.getTechnicalVersionId()).isNotEqualTo(first.getTechnicalVersionId());

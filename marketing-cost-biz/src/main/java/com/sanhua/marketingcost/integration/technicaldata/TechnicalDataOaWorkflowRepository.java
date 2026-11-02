@@ -136,7 +136,7 @@ public class TechnicalDataOaWorkflowRepository {
           AND NOT EXISTS(SELECT 1 FROM lp_quote_tech_task t
             JOIN lp_quote_tech_product p ON p.task_id=t.id AND p.active_flag=1
             WHERE t.oa_flow_id=? AND t.active_flag=1 AND
-              (t.task_status NOT IN ('SUBMITTED','APPROVED') OR t.external_task_status<>'PUBLISHED'
+              (t.task_status NOT IN ('SUBMITTED','APPROVED','RETURN_PENDING') OR t.external_task_status<>'PUBLISHED'
                 OR p.effective_version_id IS NULL))
         """, Boolean.class, flowId, flowId));
     jdbc.update("UPDATE lp_oa_technical_flow SET finance_ready=?,updated_at=NOW(3) WHERE id=?", ready ? 1 : 0, flowId);
@@ -153,7 +153,7 @@ public class TechnicalDataOaWorkflowRepository {
         SELECT r.id,s.id submission_id,s.technical_version_id,s.content_fingerprint
         FROM lp_quote_tech_task t JOIN lp_quote_tech_oa_recipient r ON r.task_id=t.id AND r.active_flag=1
         JOIN lp_quote_tech_submission s ON s.id=r.latest_submission_id
-        WHERE t.oa_flow_id=? AND t.active_flag=1 AND r.todo_status IN ('SUBMITTED','DONE') AND s.submission_status IN ('SENT','APPROVED')
+        WHERE t.oa_flow_id=? AND t.active_flag=1 AND r.todo_status IN ('SUBMITTED','DONE','RETURN_PENDING') AND s.submission_status IN ('SENT','APPROVED')
         ORDER BY t.id,r.id
         """, (rs, index) -> rs.getLong("id") + ":" + rs.getLong("submission_id") + ":"
             + rs.getLong("technical_version_id") + ":" + rs.getString("content_fingerprint"), flowId).toString();

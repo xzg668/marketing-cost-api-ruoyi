@@ -68,9 +68,9 @@ public class OaWorkflowClient {
 
   public OaWorkflowResult reject(ObjectNode request) {
     if (request == null || !"0".equals(request.path("RejectToType").asText())
-        || !request.path("RejectToNodeid").isTextual()
-        || !request.path("RejectToNodeid").asText().matches("[A-Za-z0-9._:-]{1,128}")) {
-      throw new IllegalArgumentException("退回接口须提供 RejectToType=0 和有效的 RejectToNodeid");
+        || !request.path("rejectNodeid").isTextual()
+        || !request.path("rejectNodeid").asText().matches("[A-Za-z0-9._:-]{1,128}")) {
+      throw new IllegalArgumentException("退回接口须提供 RejectToType=0 和有效的 rejectNodeid");
     }
     return send(request, REJECT_PATH);
   }
@@ -78,7 +78,7 @@ public class OaWorkflowClient {
   private OaWorkflowResult send(ObjectNode request, String endpoint) {
     try (var call = OaInterfaceLog.start(REJECT_PATH.equals(endpoint) ? "OA_REJECT_REQUEST" : "OA_SUBMIT_REQUEST")) {
       call.field("direction", "OUTBOUND").field("method", "POST").field("endpoint", endpoint).business(request);
-      if (REJECT_PATH.equals(endpoint)) call.field("rejectToNodeId", request.path("RejectToNodeid").asText());
+      if (REJECT_PATH.equals(endpoint)) call.field("rejectToNodeId", request.path("rejectNodeid").asText());
       if (request != null) call.field("remarkChars", request.path("remark").asText().length())
           .field("dataKey", request.at("/formData/dataDetails/0/dataKey").asText());
       try {

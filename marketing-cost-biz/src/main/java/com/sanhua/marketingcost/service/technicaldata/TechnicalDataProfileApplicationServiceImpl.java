@@ -18,6 +18,7 @@ import com.sanhua.marketingcost.service.platematerial.PlateMaterialSnapshot;
 @Service
 public class TechnicalDataProfileApplicationServiceImpl
     implements TechnicalDataProfileApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
 
   private final TechnicalDataSharedModules sharedModules;
   private final TechnicalDataProfileRepository repository;
@@ -28,7 +29,8 @@ public class TechnicalDataProfileApplicationServiceImpl
   public TechnicalDataProfileApplicationServiceImpl(
       TechnicalDataProfileRepository repository, TechnicalDataSourceSnapshotFactory snapshotFactory,
       TechnicalDataVersionContentCodec contentCodec, TechnicalDataSharedModules sharedModules,
-      TechnicalDataPlateMaterialProfile plateMaterials) {
+      TechnicalDataPlateMaterialProfile plateMaterials, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.plateMaterials = plateMaterials;
     this.sharedModules = sharedModules;
     this.repository = repository;
@@ -67,6 +69,10 @@ public class TechnicalDataProfileApplicationServiceImpl
       throw forbidden("当前产品资料模块未分派给本人，或 OA 分派尚未确认");
     }
     sharedModules.requireOwnership(productId, "PROFILE");
+    if (reuse.save(product, profileModule, request, actor.userId())) {
+      var saved = repository.lockVersion(product.getCurrentEditVersionId()).orElseThrow();
+      return response(product, saved, command.expectedVersion() + 1, saved.getUpdatedAt());
+    }
     PlateMaterialSnapshot plateMaterial = plateMaterials.save(product, request.getPlateMaterial(),
         request.getExpectedPlateMaterialRevision());
     LocalDateTime now = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);

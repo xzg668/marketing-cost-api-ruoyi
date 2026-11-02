@@ -149,6 +149,30 @@ class TechnicalDataSolderApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(service.references(productId, key + "-TOP", WANG)).isEmpty();
   }
 
+  @Test void returnedUnchangedSolderSavesAndSubmitsUsingItsOriginalEvidence() {
+    var input = reference(source(), 0);
+    var saved = service.save(productId, input, WANG);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
+    String frozenContent = content(frozen);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), recipient(), frozen.getId(), 101L);
+    // 公共同步同时刷新 BOM 批次与档案；退回后用户没有修改本模块。
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET build_batch_id=? WHERE top_product_code=?", key + "-NEXT", key + "-TOP");
+    var master = materials.selectById(weldId); master.setImportBatchId(key + "-NEXT"); materials.updateById(master);
+    input.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
+    assertThatThrownBy(() -> service.save(productId, input, LI)).hasMessageContaining("未分派");
+    var oldQuantity = input.getItems().getFirst().getQuantityPerProduct();
+    input.getItems().getFirst().setQuantityPerProduct(oldQuantity.add(BigDecimal.ONE));
+    assertThatThrownBy(() -> service.save(productId, input, WANG)).hasMessageContaining("已变化");
+    input.getItems().getFirst().setQuantityPerProduct(oldQuantity);
+    var unchanged = service.save(productId, input, WANG);
+    assertThat(unchanged.content()).isEqualTo(saved.content());
+    assertThat(unchanged.moduleStatus()).isEqualTo("READY");
+    assertThatThrownBy(() -> service.save(productId, input, WANG)).hasMessageContaining("其他会话");
+    assertThat(validation.validate(taskId, 101L, WANG).issues()).isEmpty();
+    assertThat(versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), unchanged.expectedVersion(), 101L)).isNotNull();
+    assertThat(content(repository.findVersion(frozen.getId()).orElseThrow())).isEqualTo(frozenContent);
+  }
+
   private Reference source() { return service.references(productId, key + "-TOP", WANG).getFirst(); }
   private TechnicalDataSolderSaveRequest reference(Reference source, int expected) {
     var input = new TechnicalDataSolderSaveRequest(); input.setExpectedVersion(expected); input.setEntryMode("REFERENCE");

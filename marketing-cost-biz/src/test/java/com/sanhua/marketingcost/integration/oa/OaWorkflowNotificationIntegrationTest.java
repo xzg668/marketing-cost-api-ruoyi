@@ -138,6 +138,9 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  record FinalFixture(String flow,long formId,String requestId,long submissionId,String snapshot) {}
  private FinalFixture finalSubmission() throws Exception {
    String f=flow();quote(f);
+   return finalSubmission(f);
+ }
+ private FinalFixture finalSubmission(String f) {
    long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_oa_quote_document WHERE external_document_id=?",Long.class,f);
    String request="RS-"+f;long message=outgoing(request,"QUOTE_COST_SUBMIT");
    String snapshot="[{\"costVersionId\":123}]";
@@ -167,6 +170,80 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_state WHERE workflow_request_id=?",Long.class,a.flow())).isZero();
  }
  @Autowired com.sanhua.marketingcost.service.costing.QuoteCostingSubmissionService costingSubmissions;
+ @Test void costingNodeAfterTechnicalAgreementDoesNotRequireAPreviousCostSubmission() throws Exception {
+   var f=technical();accepted(f);
+   var notice=event(f.flow(),"COSTING").put("reason","同意");
+   http.perform(post(URL).header("Authorization",TOKEN).contentType("application/json").content(notice.toString()))
+     .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED"));
+   assertThat(flowState(f.flow())).isEqualTo("COSTING");
+   assertThat(submissionState(f)).isEqualTo("SENT");
+   assertThat(people.findById(f.personId()).todoStatus()).isEqualTo("SUBMITTED");
+   assertThat(jdbc.queryForObject("SELECT JSON_UNQUOTE(JSON_EXTRACT(active_work_items_json,'$[0].employeeNo')) FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,f.flow())).isEqualTo("001001");
+   long version=flowVersion(f.flow());
+   assertThat(receive(notice)).isEqualTo("SUCCEEDED");
+   assertThat(flowVersion(f.flow())).isEqualTo(version);
+ }
+ @Test void sameCostingEventReturnsTheCostOnlyAfterACostWasSubmitted() throws Exception {
+   var technical=technical();accepted(technical);
+   var notice=event(technical.flow(),"COSTING").put("reason","同意");
+   receive(notice);
+   var cost=finalSubmission(technical.flow());
+   long version=flowVersion(cost.flow());
+   assertThat(receive(notice)).isEqualTo("SUCCEEDED");
+   assertThat(flowState(cost.flow())).isEqualTo("RECOSTING");
+   assertThat(flowVersion(cost.flow())).isEqualTo(version+1);
+   assertThat(jdbc.queryForObject("SELECT status FROM lp_quote_final_submission WHERE id=?",String.class,cost.submissionId())).isEqualTo("RETURNED");
+   assertThat(jdbc.queryForObject("SELECT cost_snapshot_json FROM lp_quote_final_submission WHERE id=?",String.class,cost.submissionId())).isEqualTo(cost.snapshot());
+   receive(notice);assertThat(flowVersion(cost.flow())).isEqualTo(version+1);
+ }
+ @Test void anotherTechnicalRoundReentersCostingWithoutRewritingThePreviousCostReturn() throws Exception {
+   var a=technical();accepted(a);
+   var cost=finalSubmission(a.flow());
+   var notice=event(a.flow(),"COSTING").put("reason","同意");
+   receive(notice);
+   var original=jdbc.queryForMap("SELECT * FROM lp_quote_final_submission WHERE id=?",cost.submissionId());
+   receive(event(a.flow(),"TECHNICAL","001001"));
+   assertThat(flowState(a.flow())).isEqualTo("TECHNICAL");
+   var next=technical(a.flow(),1,"001001");accepted(next);
+   long sequence=flowVersion(a.flow());
+   receive(notice);
+   assertThat(flowState(a.flow())).isEqualTo("RECOSTING");
+   assertThat(flowVersion(a.flow())).isEqualTo(sequence+1);
+   assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_final_submission WHERE id=?",cost.submissionId())).isEqualTo(original);
+   receive(notice);assertThat(flowVersion(a.flow())).isEqualTo(sequence+1);
+ }
+ @ParameterizedTest @ValueSource(strings={"REJECTED","NOT_SENT"})
+ void costingNodeDoesNotInventAReturnForUnsuccessfulCostDelivery(String status) throws Exception {
+   var f=finalSubmission();
+   jdbc.update("UPDATE sys_user SET employee_no='001001' WHERE user_id=1");
+   jdbc.update("UPDATE lp_quote_final_submission SET status=? WHERE id=?",status,f.submissionId());
+   var before=jdbc.queryForMap("SELECT * FROM lp_quote_final_submission WHERE id=?",f.submissionId());
+   receive(event(f.flow(),"COSTING"));
+   assertThat(flowState(f.flow())).isEqualTo("COSTING");
+   assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_final_submission WHERE id=?",f.submissionId())).isEqualTo(before);
+ }
+ @Test void costingNodeDoesNotApproveUnsubmittedTechnicalData() throws Exception {
+   var f=technical(null,1,"001001",false);
+   receive(event(f.flow(),"COSTING"));
+   assertThat(flowState(f.flow())).isEqualTo("COSTING");
+   assertThat(submissionState(f)).isEqualTo("PREPARED");
+   long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_quote_tech_task WHERE id=?",Long.class,f.taskId());
+   assertThat(costingSubmissions.hasPendingSubmissions(form)).isTrue();
+   assertThatThrownBy(()->costingSubmissions.requireSubmitted(form)).hasMessageContaining("尚未全部成功提交");
+ }
+ @Test void costingNodeWithoutAKnownQuoterRollsBack() throws Exception {
+   String f=flow();quote(f);
+   assertThatThrownBy(()->receive(event(f,"COSTING"))).hasMessageContaining("缺少明确的报价员");
+   assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_state WHERE workflow_request_id=?",Long.class,f)).isZero();
+ }
+ @Test void concurrentCostingNodeNotificationsApplyOnce() throws Exception {
+   var f=technical();accepted(f);var notice=event(f.flow(),"COSTING");
+   try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)) {
+     var jobs=executor.invokeAll(List.of((java.util.concurrent.Callable<String>)()->receive(notice),()->receive(notice)));
+     for(var job:jobs) assertThat(job.get()).isEqualTo("SUCCEEDED");
+   }
+   assertThat(flowVersion(f.flow())).isEqualTo(1);
+ }
  private void accepted(TechnicalFixture f) {
    new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(tx->{
      var task=taskMapper.selectByIdForUpdate(f.taskId());

@@ -35,6 +35,8 @@ public class TechnicalDataReturnService {
     }
   }
 
+  public record Reason(long taskId, String reason) {}
+
   public record Module(String moduleType, String label, String assigneeName, String employeeNo) {}
 
   public record Candidate(
@@ -135,7 +137,7 @@ public class TechnicalDataReturnService {
           if (!"RETURN_PENDING".equals(person.todoStatus()) || person.returnMessageId() == null) continue;
           var scope = payload(person.returnMessageId());
           scope.path("moduleTypes").forEach(type -> pendingModules.add(type.asText()));
-          returnReason = scope.path("reason").asText();
+          returnReason = currentReason(person, scope);
         } else if (!allowed || !completeProduct || !submitted(person)) continue;
         for (var module : productModules) {
           if (Objects.equals(module.getAssigneeUserId(), person.userId())
@@ -196,16 +198,87 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
         });
   }
 
-  public Result retryRejection(String id, int expectedAttempt, TechnicalDataActor actor) {
+  public Result retryRejection(String id, int expectedAttempt, List<Reason> reasons, TechnicalDataActor actor) {
     if (expectedAttempt < 1) throw invalid("退回重试次数无效");
-    transaction.executeWithoutResult(tx -> {
-      var batch = batches.find(id, false);
-      if (batch == null || !"I05".equals(batch.operation()) || batch.actorId() != actor.userId())
+    boolean revised = Boolean.TRUE.equals(transaction.execute(tx -> {
+      var original = batches.find(id, false);
+      if (original == null || !"I05".equals(original.operation()) || actor == null || original.actorId() != actor.userId())
         throw invalid("只能由原报价员继续本次退回");
+      jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, original.formId());
+      var batch = batches.find(id, true);
       for (long message : batches.messageIds(id)) requireTask(payload(message).path("taskId").asLong(), actor, false);
-    });
-    delivery.retryRejection(id, expectedAttempt, this::validateBeforeSending);
+      if (batch.returnAttempt() != expectedAttempt || !"REJECT".equals(batch.returnStep())
+          || !Set.of("RETURN_FAILED", "REJECT_READY").contains(batch.status())) return false;
+      return reviseReasons(batch, reasons, actor);
+    }));
+    if (revised) delivery.send(id, this::validateBeforeSending);
+    else delivery.retryRejection(id, expectedAttempt, this::validateBeforeSending);
     return Objects.requireNonNull(transaction.execute(tx -> complete(id)));
+  }
+
+  /** 修改原因后先用原 submitRequest 的 remark 同步，再办理退回；原消息与修改审计保留。 */
+  private boolean reviseReasons(OaTechnicalBatchRepository.Batch batch, List<Reason> reasons, TechnicalDataActor actor) {
+    if (reasons == null) return false;
+    Map<Long, String> byTask = new TreeMap<>();
+    for (var reason : reasons) {
+      if (reason == null || reason.taskId() <= 0 || reason.reason() == null || reason.reason().isBlank()
+          || reason.reason().length() > 500 || byTask.putIfAbsent(reason.taskId(), reason.reason().trim()) != null)
+        throw invalid("请填写每个退回产品的原因（1—500字），不能重复产品");
+    }
+    var linked = batches.messageIds(batch.id());
+    Set<Long> expected = new HashSet<>();
+    boolean changed = false;
+    for (long message : linked) {
+      var scope = payload(message);
+      long taskId = scope.path("taskId").asLong();
+      expected.add(taskId);
+      var person = recipients.findById(scope.path("recipientId").asLong());
+      if (person == null) throw invalid("原退回负责人不存在，请核实原任务");
+      changed |= !Objects.equals(byTask.get(taskId), currentReason(person, scope));
+    }
+    if (expected.isEmpty() || !expected.equals(byTask.keySet())) throw invalid("只能修改本次退回产品的原因，不能更换产品范围");
+    if (!changed) return false;
+    validateBeforeSending(batch);
+    var document = context.document(batch.formId());
+    List<OaTechnicalReturnClient.Target> targets = new ArrayList<>();
+    for (long message : linked) {
+      var scope = payload(message);
+      var task = requireTask(scope.path("taskId").asLong(), actor, true);
+      var person = recipients.findById(scope.path("recipientId").asLong());
+      var product = products.lockActiveProducts(task.getId()).getFirst();
+      List<String> selected = new ArrayList<>();
+      scope.path("moduleTypes").forEach(type -> selected.add(type.asText()));
+      targets.add(new OaTechnicalReturnClient.Target(product.getMaterialNo(), selected,
+          person.externalUserId(), person.name(), byTask.get(task.getId())));
+    }
+    var request = batch.request().deepCopy();
+    request.set("remark", client.preview(new OaTechnicalReturnClient.Request(document.requestId(), document.processCode(),
+        batch.request().path("userid").asText(), targets, context.workbenchUrl(document.formId()))).get("remark"));
+    // 全部验证通过后才覆盖待发送意见；当前发送次数用于并发与重复点击去重。
+    for (long message : linked) {
+      var scope = payload(message);
+      var task = tasks.selectByIdForUpdate(scope.path("taskId").asLong());
+      var person = recipients.findById(scope.path("recipientId").asLong());
+      String before = currentReason(person, scope), after = byTask.get(task.getId());
+      if (!Objects.equals(before, after)) {
+        recipients.state(person.id(), person.latestSubmissionId(), "RETURN_PENDING", "RETURN_PENDING", after);
+        audit.record(task, products.lockActiveProducts(task.getId()).getFirst(), person.latestSubmissionId(),
+            "RETURN_REASON_CHANGED", before, after, "报价员修改退回原因", actor, batch.id(),
+            "I05-REASON:" + batch.id() + ":" + batch.returnAttempt() + ":" + message);
+      }
+    }
+    var firstScope = payload(linked.getFirst());
+    var task = tasks.selectByIdForUpdate(firstScope.path("taskId").asLong());
+    audit.record(task, products.lockActiveProducts(task.getId()).getFirst(), firstScope.path("submissionId").asLong(),
+        "RETURN_REMARK_REVISED", codec.write(Map.of("request", batch.request(), "receipt", batch.peopleResult())),
+        codec.write(request), "重新同步修改后的退回说明", actor, batch.id(),
+        "I05-REMARK:" + batch.id() + ":" + batch.returnAttempt());
+    batches.reviseReturnRemark(batch, request);
+    return true;
+  }
+
+  private String currentReason(Recipient person, JsonNode scope) {
+    return person.returnReason() == null ? scope.path("reason").asText() : person.returnReason();
   }
 
   /** OA 没有人员修改结果查询接口；只有原报价员实际核实成功后，才能续办第二步。 */
@@ -397,8 +470,6 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
                   selected,
                   "reason",
                   target.reason().trim(),
-                  "materialWorkItemId",
-                  node.workItemId(),
                   "formVersion",
                   node.formVersion()));
       recipients.requestReturn(
@@ -416,7 +487,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
           "I05-REQUEST:" + message);
     }
     recipients.refreshTask(task.getId());
-    workflow.invalidateFinance(task.getOaFlowId());
+    // 这里只发起退回；OA 确认成功后由 financeReturned 作废资料确认。
     return commands;
   }
 
@@ -425,9 +496,8 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     var node = access.quoterNode(batch.formId());
     for (long message : batches.messageIds(batch.id())) {
       var scope = payload(message);
-      if (node.actorId() != batch.actorId()
-          || node.formVersion() != scope.path("formVersion").asLong()
-          || !node.workItemId().equals(scope.path("materialWorkItemId").asText())) {
+      if (!sameReturnIdentity(batch, node)
+          || node.formVersion() != scope.path("formVersion").asLong()) {
         throw invalid("OA 报价员办理状态或需求版本已变化，本次退回未发送");
       }
       var person = recipients.findById(scope.path("recipientId").asLong());
@@ -440,6 +510,13 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     }
   }
 
+  /** COSTING 通知会更新本地办理编号；退回始终绑定原报价员及原 OA 流程。 */
+  private boolean sameReturnIdentity(OaTechnicalBatchRepository.Batch batch, OaWorkflowAccessPolicy.QuoterNode node) {
+    return node.actorId() == batch.actorId()
+        && node.requestId().equals(batch.request().path("requestId").asText())
+        && node.employeeNo().equals(batch.request().path("userid").asText());
+  }
+
   private void requireApplicableReceipt(OaTechnicalBatchRepository.Batch batch, JsonNode scope, boolean notifiedByOa) {
     var view = access.view(batch.formId());
     long version =
@@ -448,13 +525,13 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
             Long.class,
             batch.formId());
     // OA 通知已核验原流程和退回范围，回调身份无需具备报价员的浏览器办理权限。
-    boolean sameQuoterNode = notifiedByOa || view != null && view.canCost()
-        && access.quoterNode(batch.formId()).workItemId().equals(scope.path("materialWorkItemId").asText());
+    boolean sameQuoter = notifiedByOa || view != null && view.canCost()
+        && sameReturnIdentity(batch, access.quoterNode(batch.formId()));
     if (view == null
         || view.syncError() != null
         || !Set.of("COSTING", "RECOSTING", "TECHNICAL").contains(view.state())
         || version != scope.path("formVersion").asLong()
-        || Set.of("COSTING", "RECOSTING").contains(view.state()) && !sameQuoterNode) {
+        || Set.of("COSTING", "RECOSTING").contains(view.state()) && !sameQuoter) {
       throw invalid("OA 已接收退回，但当前流程或需求版本已变化，尚未开放编辑，请核实原请求");
     }
   }
@@ -506,13 +583,13 @@ SET m.oa_edit_allowed=1 WHERE p.task_id=? AND p.active_flag=1 AND m.module_type=
             task,
             submissions.selectById(person.latestSubmissionId()),
             batch.actorId(),
-            scope.path("reason").asText());
+            currentReason(person, scope));
         audit.recordSystem(
             task,
             "MATERIAL_RETURN_CONFIRMED",
             "RETURN_PENDING",
             "OPEN",
-            person.name() + "：" + scope.path("reason").asText(),
+            person.name() + "：" + currentReason(person, scope),
             batch.requestKey(),
             "I05-CONFIRMED:" + message);
       } else {

@@ -161,6 +161,8 @@ class TechnicalDataPackageApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(service.get(productId, frozen.getId(), WANG).items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
     assertThatThrownBy(() -> sources.require(repository.findTask(taskId).orElseThrow(),
         repository.findProduct(productId).orElseThrow(), parent1, source.evidence().fingerprint())).hasMessageContaining("已变化");
+    assertThatThrownBy(() -> sources.requireSaved(repository.findTask(taskId).orElseThrow(),
+        repository.findProduct(productId).orElseThrow(), source.evidence())).hasMessageContaining("已变化");
   }
 
   @Test void baseAndChildAreSavedSeparatelyAndSubmittedSnapshotSurvivesBaseOnlyReturn() throws Exception {
@@ -222,6 +224,83 @@ class TechnicalDataPackageApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(complete.issues()).isEmpty();
     assertThat(complete.items().getFirst().quantityPerProduct()).isEqualByComparingTo("0.33333333");
     assertThat(repository.findPackageItems(complete.draftVersionId()).getFirst().getQuantity()).isEqualByComparingTo("2");
+  }
+
+  @Test void returnedPackageKeepsItsQuantitiesWhenBomRebuildReusesTheOldNodeIds() {
+    var source = service.references(productId, key + "-T1", WANG).components().getFirst().sources().getFirst();
+    var saved = service.save(productId, reference(source, "150"), WANG);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
+    String frozenContent = content(frozen);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), recipient(), frozen.getId(), 101L);
+    rebuildReferenceSource();
+
+    var reopened = service.get(productId, null, WANG);
+    var draft = repository.findVersion(reopened.draftVersionId()).orElseThrow();
+    assertThat(service.validateCurrent(repository.findProduct(productId).orElseThrow(), draft))
+        .as("unchanged returned packaging remains valid after a source-node rebuild").isEmpty();
+    var unchanged = reference(source, "150"); unchanged.setExpectedVersion(reopened.expectedVersion());
+    var resaved = service.save(productId, unchanged, WANG);
+    assertThat(resaved.issues()).isEmpty();
+    assertThat(resaved.packaging().parentBaseQuantity()).isEqualByComparingTo(saved.packaging().parentBaseQuantity());
+    assertThat(resaved.items().getFirst().quantity()).isEqualByComparingTo(saved.items().getFirst().quantity());
+    assertThat(resaved.items().getFirst().quantityPerProduct()).isEqualByComparingTo(saved.items().getFirst().quantityPerProduct());
+    assertThat(resaved.packaging().source().parentNodeId()).isEqualTo(source.evidence().parentNodeId());
+    assertThat(resaved.items().getFirst().evidence().sourceNodeId()).isEqualTo(source.children().getFirst().sourceNodeId());
+    assertThat(resaved.items().getFirst().evidence().parentNodeId()).isEqualTo(resaved.packaging().source().parentNodeId());
+    assertThat(content(repository.findVersion(frozen.getId()).orElseThrow())).isEqualTo(frozenContent);
+    assertThat(validation.validate(taskId, 101L, WANG).valid()).isTrue();
+    assertThat(versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), resaved.expectedVersion(), 101L)).isNotNull();
+  }
+
+  @Test void rebuiltReferenceStillRejectsAnActualPackageQuantityChange() {
+    var source = service.references(productId, key + "-T1", WANG).components().getFirst().sources().getFirst();
+    var saved = service.save(productId, reference(source, "150"), WANG);
+    rebuildReferenceSource();
+    var current = service.references(productId, key + "-T1", WANG).components().getFirst().sources().getFirst();
+    var child = hierarchy.selectById(current.children().getFirst().sourceNodeId());
+    child.setQtyPerParent(new BigDecimal("0.75")); hierarchy.updateById(child);
+    var unchanged = reference(source, "150"); unchanged.setExpectedVersion(saved.expectedVersion());
+    assertThatThrownBy(() -> service.save(productId, unchanged, WANG)).hasMessageContaining("已变化");
+    assertThat(service.validateCurrent(repository.findProduct(productId).orElseThrow(),
+        repository.findVersion(saved.draftVersionId()).orElseThrow())).anyMatch(issue -> issue.contains("已变化"));
+    assertThat(service.get(productId, null, WANG).items().getFirst().quantity()).isEqualByComparingTo("0.5");
+  }
+
+  @Test void rebuiltReferenceCannotAcceptAnUnrelatedChildOrForgedFingerprint() {
+    var source = service.references(productId, key + "-T1", WANG).components().getFirst().sources().getFirst();
+    var saved = service.save(productId, reference(source, "150"), WANG);
+    rebuildReferenceSource();
+    var forgedChild = reference(source, "150"); forgedChild.setExpectedVersion(saved.expectedVersion());
+    forgedChild.getItems().getFirst().setSourceNodeId(child2);
+    assertThatThrownBy(() -> service.save(productId, forgedChild, WANG)).hasMessageContaining("已变化");
+    var forgedFingerprint = reference(source, "150"); forgedFingerprint.setExpectedVersion(saved.expectedVersion());
+    forgedFingerprint.setReferenceFingerprint("f".repeat(64));
+    assertThatThrownBy(() -> service.save(productId, forgedFingerprint, WANG)).hasMessageContaining("失效");
+    var actual = service.get(productId, null, WANG);
+    assertThat(actual.expectedVersion()).isEqualTo(saved.expectedVersion());
+    assertThat(actual.packaging().source()).isEqualTo(saved.packaging().source());
+  }
+
+  @Test void savedReferenceCanStillAddChildrenAfterAnIncompleteDraft() {
+    var source = service.references(productId, key + "-T1", WANG).components().getFirst().sources().getFirst();
+    var empty = reference(source, "150"); empty.setItems(List.of());
+    var draft = service.save(productId, empty, WANG);
+    var complete = reference(source, "150"); complete.setExpectedVersion(draft.expectedVersion());
+    assertThat(service.save(productId, complete, WANG).issues()).isEmpty();
+  }
+
+  /** An owned fixture simulates a U9 rebuild; no formal database is touched. */
+  protected void rebuildReferenceSource() {
+    var parent = hierarchy.selectById(parent1);
+    var child = hierarchy.selectById(child1);
+    var oldParent = new BomRawHierarchy();
+    org.springframework.beans.BeanUtils.copyProperties(parent, oldParent);
+    oldParent.setTopProductCode(key + "-T2"); oldParent.setMaterialCode(key + "-C");
+    oldParent.setParentCode(key + "-T2"); oldParent.setPath("/" + key + "-T2/REUSED/");
+    hierarchy.updateById(oldParent);
+    hierarchy.deleteById(child1);
+    parent.setId(null); parent.setBuildBatchId(key + "-REBUILT"); hierarchy.insert(parent);
+    child.setId(null); child.setBuildBatchId(key + "-REBUILT"); hierarchy.insert(child);
   }
 
   @Test void sourcesAndPermissionsAreCheckedAgainAtSaveAndSubmission() {

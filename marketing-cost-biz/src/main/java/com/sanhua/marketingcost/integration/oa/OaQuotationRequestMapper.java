@@ -33,12 +33,12 @@ public class OaQuotationRequestMapper {
     object(
         root,
         "$",
-        Set.of("requestId", "RejectToNodeid", "formNo", "processCode", "mainData", "detailData"));
+        Set.of("requestId", "rejectNodeid", "formNo", "processCode", "mainData", "detailData"));
     String requestId = text(root, "requestId", 128);
     String rejectToNodeId = null;
-    if (root.hasNonNull("RejectToNodeid")) {
-      rejectToNodeId = text(root, "RejectToNodeid", 128);
-      if (!rejectToNodeId.matches("[A-Za-z0-9._:-]+")) fail("RejectToNodeid", "退回节点ID格式不正确");
+    if (root.hasNonNull("rejectNodeid")) {
+      rejectToNodeId = text(root, "rejectNodeid", 128);
+      if (!rejectToNodeId.matches("[A-Za-z0-9._:-]+")) fail("rejectNodeid", "退回节点ID格式不正确");
     }
     String formNo = text(root, "formNo", 64);
     String process = text(root, "processCode", 20);

@@ -78,9 +78,7 @@ class TechnicalDataSalaryApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(repository.findVersion(first.getId()).orElseThrow().getSalaryTotalAmount()).isEqualByComparingTo("4.150477");
     versions.restore(repository.lockProduct(productId).orElseThrow(), recipient(), first.getId(), 101L);
     var current = service.get(productId, null, WANG);
-    assertThat(validation.validate(taskId, 101L, WANG).valid()).isFalse();
-    assertThatThrownBy(() -> versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), current.expectedVersion(), 101L))
-        .hasMessageContaining("工资金额或来源");
+    assertThat(validation.validate(taskId, 101L, WANG).valid()).isTrue();
     var updated = service.save(productId, request(current.expectedVersion()), WANG);
     assertThat(updated.totalAmount()).isEqualByComparingTo("7.099600");
     var second = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), updated.expectedVersion(), 101L);
@@ -156,6 +154,21 @@ class TechnicalDataSalaryApplicationIntegrationTest extends BomMapperTestBase {
     var reference = request(0); reference.setFileSha256(uploaded.fileSha256());
     assertThatThrownBy(() -> service.save(productId, reference, WANG)).hasMessageContaining("不能带入上传");
     assertThat(repository.findProduct(productId).orElseThrow().getCurrentEditVersionId()).isNull();
+  }
+
+  @Test void returnedUnchangedSalaryPreservesOriginalAmountsEvenWhenReferenceIsRemoved() {
+    var input = request(0);
+    var saved = service.save(productId, input, WANG);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
+    String original = content(frozen);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), recipient(), frozen.getId(), 101L);
+    cms.deleteById(direct.getId());
+    input.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
+    var unchanged = service.save(productId, input, WANG);
+    assertThat(unchanged.totalAmount()).isEqualByComparingTo(saved.totalAmount());
+    assertThat(validation.validate(taskId, 101L, WANG).issues()).isEmpty();
+    versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), unchanged.expectedVersion(), 101L);
+    assertThat(content(repository.findVersion(frozen.getId()).orElseThrow())).isEqualTo(original);
   }
 
   private TechnicalDataSalarySaveRequest uploadRequest(int expected, String hash) {

@@ -15,7 +15,7 @@ import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-/** 技术节点通知支持首次进入补录；已有提交按冻结版本处理退回。 */
+/** 通知描述 OA 到达的办理节点；只有已有在审成本时，进入核算节点才同时退回该成本。 */
 @Service
 public class OaWorkflowNotificationHandler {
   public record Scope(List<Long> recipientIds, List<Long> submissionIds, Long resultId, boolean localReturn) {}
@@ -47,9 +47,10 @@ public class OaWorkflowNotificationHandler {
   }
 
   public Scope scope(OaWorkflowNotification event, OaWorkflowNotificationRepository.Document document) {
+    if ("COSTING".equals(event.eventType())) return costingScope(document);
     if (!event.technical()) {
       var ids = jdbc.queryForList("SELECT id FROM lp_quote_final_submission WHERE oa_form_id=? ORDER BY id DESC LIMIT 1", Long.class, document.id());
-      if (ids.isEmpty()) throw conflict("RESULT_NOT_FOUND", "本单尚无成本提交记录，不能退回核算或确认整单完成");
+      if (ids.isEmpty()) throw conflict("RESULT_NOT_FOUND", "本单尚无成本提交记录，不能确认整单完成");
       return new Scope(List.of(), List.of(), ids.getFirst(), false);
     }
     List<Long> selected = new ArrayList<>();
@@ -76,6 +77,23 @@ public class OaWorkflowNotificationHandler {
       throw conflict("TECH_STAGE_AMBIGUOUS", "本单技术员的产品办理阶段不一致，不能将首次补录和已提交资料一起退回");
     }
     return new Scope(List.copyOf(selected), List.copyOf(submitted), null, localReturn);
+  }
+
+  private Scope costingScope(OaWorkflowNotificationRepository.Document document) {
+    var result = results.latest(document.id());
+    // 同一原流程可以多次补录、重提；去重绑定当前分派及提交版本，不把下一轮同意当成旧通知。
+    var rows = jdbc.queryForList("""
+        SELECT r.id,r.latest_submission_id FROM lp_quote_tech_oa_recipient r
+        JOIN lp_quote_tech_task t ON t.id=r.task_id
+        WHERE t.oa_form_id=? AND t.active_flag=1 AND r.active_flag=1 ORDER BY t.id,r.id
+        """, document.id());
+    var recipientIds = new ArrayList<Long>();
+    var submissionIds = new ArrayList<Long>();
+    for (var row : rows) {
+      recipientIds.add(((Number) row.get("id")).longValue());
+      if (row.get("latest_submission_id") instanceof Number id) submissionIds.add(id.longValue());
+    }
+    return new Scope(List.copyOf(recipientIds), List.copyOf(submissionIds), result == null ? null : result.id(), false);
   }
 
   public OaWorkflowNotification resolveTechnicians(OaWorkflowNotification event,
@@ -156,16 +174,13 @@ public class OaWorkflowNotificationHandler {
 
   public boolean apply(OaMessageRepository.Message message, OaWorkflowNotification event,
       OaWorkflowNotificationRepository.Document document, OaWorkflowNotificationRepository.Flow flow, Scope scope) {
-    boolean changed = event.technical()
-        ? technical(message, event, document, flow, scope)
-        : result(message, event, document, flow, scope);
-    if (!changed) return false;
     String state = switch (event.eventType()) {
-      case "TECHNICAL" -> "TECHNICAL";
-      case "COSTING" -> "RECOSTING";
-      case "COMPLETED" -> "COMPLETED";
+      case "TECHNICAL" -> technical(message, event, document, flow, scope) ? "TECHNICAL" : null;
+      case "COSTING" -> costing(message, event, document, flow, scope);
+      case "COMPLETED" -> result(message, event, document, flow, scope) ? "COMPLETED" : null;
       default -> throw new IllegalStateException("通知类型未校验");
     };
+    if (state == null) return false;
     OaWorkflowNotificationRepository.Quoter quoter = null;
     if (Set.of("COSTING", "RECOSTING").contains(state)) {
       quoter = notifications.quoter(document.id(), scope.resultId() == null ? null : results.find(scope.resultId()).operatorId());
@@ -178,6 +193,20 @@ public class OaWorkflowNotificationHandler {
     }
     if ("COMPLETED".equals(state)) close(document.id(), message);
     return true;
+  }
+
+  private String costing(OaMessageRepository.Message message, OaWorkflowNotification event,
+      OaWorkflowNotificationRepository.Document document, OaWorkflowNotificationRepository.Flow flow, Scope scope) {
+    var previous = scope.resultId() == null ? null : results.find(scope.resultId());
+    // COSTING 是节点，不是审批动作；未提交过成本（含明确发送失败）也可以进入待核算。
+    // 此处不审批技术资料，资料是否齐全仍由既有核算检查判断。
+    if (previous == null || Set.of("NOT_SENT", "REJECTED").contains(previous.status())) return "COSTING";
+    if ("RETURNED".equals(previous.status())) {
+      // 已退回后又经历技术补录，只恢复核算节点，保留原成本退回原因、序号和冻结快照。
+      return "RECOSTING".equals(flow.state()) ? null : "RECOSTING";
+    }
+    result(message, event, document, flow, scope);
+    return "RECOSTING";
   }
 
   private boolean technical(OaMessageRepository.Message message, OaWorkflowNotification event,
@@ -262,7 +291,6 @@ public class OaWorkflowNotificationHandler {
     requireVersion(result.id(), document.sourceVersion(), "lp_quote_final_submission");
     if (result.messageId() == null || !codec.read(result.snapshotJson()).isArray()
         || codec.read(result.snapshotJson()).isEmpty()) throw conflict("RESULT_NOT_SUBMITTED", "本单尚无已冻结并发送的成本提交");
-    if ("COSTING".equals(event.eventType()) && "RETURNED".equals(result.status())) return false;
     if (!Set.of("PENDING", "UNKNOWN", "SUBMITTED").contains(result.status())) {
       throw conflict("RESULT_STATE_CONFLICT", "本轮成本提交已经退回或结束，须重新提交后再审批");
     }

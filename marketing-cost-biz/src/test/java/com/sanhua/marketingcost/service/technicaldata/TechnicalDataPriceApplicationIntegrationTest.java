@@ -143,6 +143,29 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     assertThat(repository.findVersion(saved.versionId()).orElseThrow().getVersionStatus()).isEqualTo("DRAFT");
   }
 
+  @Test void returnedUnchangedPricesKeepTheirSnapshotButStillRequireOwnershipAndValidateEdits() {
+    var input = input("FIXED", 0); input.getItems().getFirst().setUnitPrice(new BigDecimal("12"));
+    var saved = service.save(productId, input, WANG);
+    var product = repository.lockProduct(productId).orElseThrow();
+    var person = new com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository.Recipient(1L,product.getTaskId(),1,101L,"王工","wang","FILL",List.of("PRICE"),1L,"todo","CONFIRMED","OPEN",null,"工程部","leader","王总",null,0,0,null,true,null,null,"T-TEST", null);
+    var frozen = versions.freeze(product, person, saved.expectedVersion(), 101L);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), person, frozen.getId(), 101L);
+    when(requirements.check(any(),any())).thenReturn(check("REVISION", "source-refreshed"));
+    input.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
+    input.getItems().getFirst().setUnitPrice(new BigDecimal("13"));
+    assertThatThrownBy(() -> service.save(productId, input, WANG)).hasMessageContaining("需求或来源已变化");
+    input.getItems().getFirst().setUnitPrice(new BigDecimal("12"));
+    var unchanged = service.save(productId, input, WANG);
+    assertThat(unchanged.content()).isEqualTo(saved.content());
+    assertThat(service.validateCurrent(repository.findProduct(productId).orElseThrow(), repository.findVersion(unchanged.versionId()).orElseThrow())).isEmpty();
+    versions.freeze(repository.lockProduct(productId).orElseThrow(), person, unchanged.expectedVersion(), 101L);
+    assertThat(codec.prices(repository.findVersion(frozen.getId()).orElseThrow())).isEqualTo(saved.content());
+    versions.restore(repository.lockProduct(productId).orElseThrow(), person, frozen.getId(), 101L);
+    jdbc.update("UPDATE lp_quote_tech_price_claim SET price_unit='kg' WHERE material_code=?", material);
+    input.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
+    assertThatThrownBy(() -> service.save(productId, input, WANG)).hasMessageContaining("原补价归属或适用范围");
+  }
+
   @Test void approvedFixedPriceIsSharedAcrossMonthsAndPublicFixedPriceTakesPriority() {
     var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("test", "unused", List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("*:*:*")));
     auth.setDetails(Map.of("businessUnitType","COMMERCIAL"));

@@ -39,10 +39,16 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
     catch (ClassNotFoundException failure) { throw new ExceptionInInitializerError(failure); }
   }
   @Override protected String accountingMonth() { return com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth(); }
+  @org.springframework.test.context.DynamicPropertySource
+  static void pricingPeriod(org.springframework.test.context.DynamicPropertyRegistry registry) {
+    registry.add("monthly.reprice.go-live-months.COMMERCIAL",
+        com.sanhua.marketingcost.util.CostPricingPeriodUtils::currentPricingMonth);
+  }
   @LocalServerPort int port;
   @Autowired JdbcTemplate jdbc;
   @Autowired BomRawHierarchyMapper hierarchy;
   @Autowired TechnicalDataPackageApplicationService packages;
+  @Autowired TechnicalDataSolderApplicationService solder;
   @Autowired TechnicalDataParticipantVersions versions;
   @Autowired QuoteTechnicalDataRepository repository;
   @Autowired TechnicalDataVersionContentCodec codec;
@@ -56,6 +62,8 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
     assertThat(Files.exists(state)).isFalse();
     var json = new ObjectMapper();
     var actor = new TechnicalDataActor(101L, "王工", Set.of("technical:data:task:edit"));
+    boolean includeSolder = Boolean.getBoolean("package.browser.solder");
+    List<String> moduleTypes = includeSolder ? List.of("PACKAGE", "SOLDER") : List.of("PACKAGE");
     long item = repository.findTask(taskId).orElseThrow().getOaFormItemId();
     jdbc.update("INSERT INTO oa_form(id,oa_no,business_unit_type,process_code,accounting_period_month,copper_price) VALUES(10,?,'COMMERCIAL','FI-SC-006',?,80000)", key, accountingMonth());
     jdbc.update("INSERT INTO oa_form_item(id,oa_form_id,material_no,product_name,business_unit_type) VALUES(?,10,?,'包装底数验收产品','COMMERCIAL')", item, key);
@@ -73,9 +81,35 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
           supplier,supplier,key + "-BOX",supplier.equals("BOX-A")?3:5,key,UUID.randomUUID().toString(),key);
     }
     jdbc.update("UPDATE lp_quote_tech_module SET required_flag=0,module_status='NOT_REQUIRED',source_availability='AVAILABLE' WHERE product_id=? AND module_type='PROFILE'", productId);
+    if (includeSolder) {
+      jdbc.update("UPDATE lp_quote_tech_module SET required_flag=1,module_status='PENDING',source_availability='MISSING',assignee_user_id=101,assignee_name='王工' WHERE product_id=? AND module_type='SOLDER'", productId);
+      jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,main_category_code,shape_attr) VALUES(?,'验收焊丝','kg','COMMERCIAL',?,1,'181811432','采购件')", key + "-WELD", key);
+      var weld = hierarchy.selectById(child1); weld.setId(null); weld.setMaterialCode(key + "-WELD"); weld.setMaterialName("验收焊丝");
+      weld.setSourceLineKey("BROWSER-WELD-" + UUID.randomUUID());
+      weld.setParentCode(key + "-T1"); weld.setLevel(1); weld.setPath("/" + key + "-T1/" + key + "-WELD/");
+      weld.setQtyPerParent(new BigDecimal("0.000069")); weld.setQtyPerTop(new BigDecimal("0.000069")); hierarchy.insert(weld);
+      var source = solder.references(productId, key + "-T1", actor).getFirst();
+      var input = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSolderSaveRequest();
+      input.setExpectedVersion(repository.findProduct(productId).orElseThrow().getRowVersion()); input.setEntryMode("REFERENCE");
+      input.setReferenceMaterialNo(source.evidence().materialNo()); input.setReferenceFingerprint(source.evidence().fingerprint());
+      input.setItems(source.items().stream().map(row -> { var line = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSolderSaveRequest.Item(); line.setItemKey(row.itemKey()); line.setQuantityPerProduct(row.quantityPerProduct()); return line; }).toList());
+      solder.save(productId, input, actor);
+      var packageSource = packages.references(productId, key + "-T1", actor).components().getFirst().sources().getFirst();
+      var packageInput = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPackageSaveRequest();
+      packageInput.setExpectedVersion(repository.findProduct(productId).orElseThrow().getRowVersion());
+      packageInput.setEntryMode("REFERENCE"); packageInput.setParentBaseQuantity(new BigDecimal("150"));
+      packageInput.setReferenceParentNodeId(packageSource.evidence().parentNodeId()); packageInput.setReferenceFingerprint(packageSource.evidence().fingerprint());
+      packageInput.setItems(packageSource.children().stream().map(row -> {
+        var line = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPackageItemRequest();
+        line.setSourceNodeId(row.sourceNodeId()); line.setSourceParentNodeId(packageSource.evidence().parentNodeId());
+        line.setSourceFingerprint(packageSource.evidence().fingerprint()); line.setQuantity(row.quantity()); return line;
+      }).toList());
+      packages.save(productId, packageInput, actor);
+    }
     jdbc.update("INSERT INTO lp_oa_integration_message(source_system,environment,direction,request_id,interface_type,schema_version,occurred_at,raw_payload,payload_hash,allowed_business_units) VALUES('TEST','UNIT','OUTBOUND',?,'TASK_DISPATCH',1,NOW(3),'{}',?,'COMMERCIAL')", key, "b".repeat(64));
     long messageId = jdbc.queryForObject("SELECT id FROM lp_oa_integration_message WHERE request_id=?", Long.class, key);
     jdbc.update("INSERT INTO lp_quote_tech_oa_recipient(task_id,assignment_version,assignee_user_id,assignee_name,external_user_id,module_types_json,outbound_message_id,external_task_id,dispatch_status,todo_status,active_flag,leader_external_id) VALUES(?,1,101,'王工','oa-tech-package','[\"PACKAGE\"]',?,'PACKAGE-TEST-TODO','CONFIRMED','OPEN',1,'oa-leader-package')", taskId, messageId);
+    jdbc.update("UPDATE lp_quote_tech_oa_recipient SET module_types_json=? WHERE task_id=?", json.writeValueAsString(moduleTypes), taskId);
     // A real target tree independent of the referenced packaging tree.
     BomRawHierarchy root = hierarchy.selectById(parent1);
     root.setId(null); root.setTopProductCode(key); root.setParentCode(key); root.setMaterialCode(key);
@@ -106,18 +140,18 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
         var current = packages.get(productId,null,actor);
         assertThat(current.packaging().parentBaseQuantity()).isEqualByComparingTo("150");
         assertThat(current.items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
-        var person = new Recipient(1L,taskId,1,101L,"王工","wang","FILL",List.of("PACKAGE"),1L,"todo","CONFIRMED","OPEN",null,"工程部","leader","王总",null,0,0,null,true,null,null,"PACKAGE-BROWSER",null);
+        var person = new Recipient(1L,taskId,1,101L,"王工","wang","FILL",moduleTypes,1L,"todo","CONFIRMED","OPEN",null,"工程部","leader","王总",null,0,0,null,true,null,null,"PACKAGE-BROWSER",null);
         frozen = tx.execute(status -> versions.freeze(repository.lockProduct(productId).orElseThrow(),person,current.expectedVersion(),101L).getId());
         long frozenId = frozen;
         // 本地送审可见性夹具，不发送 OA；真实传输和回调在部署环境另行验收。
         var frozenVersion = repository.findVersion(frozenId).orElseThrow();
         String snapshot = codec.versionContentJson(frozenVersion, codec.readReferenceSnapshot(frozenVersion.getReferenceSnapshotJson()),
             repository.findPackageItems(frozenId), List.of(), List.of());
-        jdbc.update("INSERT INTO lp_quote_tech_submission(task_id,product_id,technical_version_id,submission_round,request_id,expected_task_version,expected_product_version,content_schema_version,content_fingerprint,content_snapshot_json,summary_json,assignee_user_id,submitted_by,prepared_at,submission_status,module_types_json,recipient_id) VALUES(?,?,?,1,?,0,0,2,?,?,'[]',101,101,NOW(),'PREPARED','[\"PACKAGE\"]',(SELECT id FROM lp_quote_tech_oa_recipient WHERE task_id=? AND active_flag=1))",
-            taskId, productId, frozenId, "PACKAGE-LOCAL-" + frozenId, frozenVersion.getContentFingerprint(), snapshot, taskId);
+        jdbc.update("INSERT INTO lp_quote_tech_submission(task_id,product_id,technical_version_id,submission_round,request_id,expected_task_version,expected_product_version,content_schema_version,content_fingerprint,content_snapshot_json,summary_json,assignee_user_id,submitted_by,prepared_at,submission_status,module_types_json,recipient_id) VALUES(?,?,?,1,?,0,0,2,?,?,'[]',101,101,NOW(),'PREPARED',?,(SELECT id FROM lp_quote_tech_oa_recipient WHERE task_id=? AND active_flag=1))",
+            taskId, productId, frozenId, "PACKAGE-LOCAL-" + frozenId, frozenVersion.getContentFingerprint(), snapshot, json.writeValueAsString(moduleTypes), taskId);
         jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='SENDING' WHERE technical_version_id=?", frozenId);
         jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='SENT',sent_at=NOW() WHERE technical_version_id=?", frozenId);
-        jdbc.update("UPDATE lp_quote_tech_module SET module_status='SUBMITTED' WHERE product_id=? AND module_type='PACKAGE'", productId);
+        jdbc.update("UPDATE lp_quote_tech_module SET module_status='SUBMITTED' WHERE product_id=? AND required_flag=1", productId);
         jdbc.update("UPDATE lp_quote_tech_task SET task_status='SUBMITTED' WHERE id=?", taskId);
         jdbc.update("UPDATE lp_quote_tech_oa_recipient SET submission_round=1,todo_status='SUBMITTED',latest_submission_id=(SELECT id FROM lp_quote_tech_submission WHERE technical_version_id=?) WHERE task_id=?", frozenId, taskId);
         jdbc.update("UPDATE lp_quote_tech_data_version SET version_status='SUBMITTED' WHERE id=?", frozenId);
@@ -127,11 +161,13 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
       }
       if (frozen != null && !restored && Files.exists(Path.of(state + ".return"))) {
         long frozenId = frozen;
-        var person = new Recipient(1L,taskId,1,101L,"王工","wang","FILL",List.of("PACKAGE"),1L,"todo","CONFIRMED","OPEN",null,"工程部","leader","王总",null,0,0,null,true,null,null,"PACKAGE-BROWSER",null);
+        var person = new Recipient(1L,taskId,1,101L,"王工","wang","FILL",moduleTypes,1L,"todo","CONFIRMED","OPEN",null,"工程部","leader","王总",null,0,0,null,true,null,null,"PACKAGE-BROWSER",null);
         jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='RETURNED' WHERE technical_version_id=?", frozenId);
         jdbc.update("UPDATE lp_quote_tech_oa_recipient SET todo_status='OPEN' WHERE task_id=?", taskId);
         recipients.refreshTask(taskId);
         tx.executeWithoutResult(status -> versions.restore(repository.lockProduct(productId).orElseThrow(),person,frozenId,101L));
+        if (Boolean.getBoolean("package.browser.rebuild-source")) tx.executeWithoutResult(status -> rebuildReferenceSource());
+        if (includeSolder) jdbc.update("UPDATE lp_material_master_raw SET import_batch_id=? WHERE material_code=?", key + "-NEXT", key + "-WELD");
         Files.writeString(Path.of(state + ".restored"),json.writeValueAsString(java.util.Map.of("frozenVersionId",frozenId)));
         restored = true;
       }
@@ -147,6 +183,12 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
     assertThat(current.items().getFirst().quantityPerProduct()).isEqualByComparingTo("0.33333333");
     assertThat(history.packaging().parentBaseQuantity()).isEqualByComparingTo("150");
     assertThat(history.items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
+    if (includeSolder) {
+      var unchangedSolder = solder.get(productId, null, actor);
+      assertThat(unchangedSolder.moduleStatus()).isEqualTo("READY");
+      assertThat(unchangedSolder.content()).isEqualTo(solder.get(productId, frozen, actor).content());
+      assertThat(solder.validateCurrent(repository.findProduct(productId).orElseThrow(), repository.findVersion(unchangedSolder.draftVersionId()).orElseThrow())).isEmpty();
+    }
     var evidence = java.util.Map.of("draft",current,"frozen",history,"quotationItem",item,"month",accountingMonth());
     Files.writeString(Path.of(state + ".verified"),json.writeValueAsString(evidence));
   }

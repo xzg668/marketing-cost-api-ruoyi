@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 协调价格草稿、真实需求和料号占用；审批继续走原人员分支。 */
 @Service
 public class TechnicalDataPriceApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository tasks;
@@ -28,7 +29,8 @@ public class TechnicalDataPriceApplicationService {
 
   public TechnicalDataPriceApplicationService(QuoteTechnicalDataRepository repository, TechnicalDataTaskRepository tasks,
       TechnicalDataVersionContentCodec codec, TechnicalDataSourceSnapshotFactory snapshots,
-      TechnicalDataPriceRequirements requirements, TechnicalDataPriceReferences references, TechnicalDataPriceOwnership ownership, TechnicalDataPricePublication publication, TechnicalDataReadPolicy readPolicy) {
+      TechnicalDataPriceRequirements requirements, TechnicalDataPriceReferences references, TechnicalDataPriceOwnership ownership, TechnicalDataPricePublication publication, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.readPolicy=readPolicy;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.snapshots = snapshots;
     this.publication = publication;
@@ -67,6 +69,11 @@ public class TechnicalDataPriceApplicationService {
     var scope = scope(productId, actor, request.getExpectedVersion());
     if (!Integer.valueOf(2).equals(scope.product().getContentSchemaVersion()) || !Integer.valueOf(1).equals(scope.product().getActiveFlag())
         || !actor.canEditModule(scope.task(), scope.module())) throw forbidden("当前价格模块未分派给本人或已送审");
+    if (reuse.save(scope.product(), scope.module(), request, actor.userId())) {
+      var saved = repository.findVersion(scope.product().getCurrentEditVersionId()).orElseThrow();
+      ownership.requireExisting(scope.module().getId(), scope.task().getBusinessUnitType(), codec.prices(saved).items());
+      return get(productId, null, actor);
+    }
     var check = requirements.check(scope.task(), scope.product());
     if (!Objects.equals(request.getRequirementsFingerprint(), check.fingerprint())) throw conflict("价格需求或来源已变化，请重新检查；本次输入仍保留");
     if (!check.issues().isEmpty()) throw invalid(String.join("；", check.issues()));
@@ -139,6 +146,16 @@ public class TechnicalDataPriceApplicationService {
   }
 
   public List<String> validateCurrent(QuoteTechProduct product, QuoteTechDataVersion version) {
+    if (reuse.unchanged(product, version, "PRICE")) {
+      var saved = codec.prices(version);
+      var problems = new ArrayList<String>();
+      for (var row : saved.items()) {
+        problems.addAll(TechnicalDataPriceRules.validate(row));
+        var owner = ownership.find(row.materialNo());
+        if (owner == null || !Objects.equals(owner.productId(), product.getId())) problems.add(row.materialNo() + " 不属于本人原补录来源");
+      }
+      return List.copyOf(problems);
+    }
     var task = repository.findTask(product.getTaskId()).orElseThrow();
     var check = requirements.check(task, product);
     var content = codec.prices(version);

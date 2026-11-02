@@ -138,6 +138,26 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     assertThat(validation.validate(taskId, 101L, WANG).valid()).isFalse();
   }
 
+  @Test void returnedUnchangedManufacturingDoesNotRebuildTheDrawingAndKeepsItsOriginalMaterialEvidence() {
+    confirmC();
+    var input = request(service.read(productId, null, WANG), true);
+    var saved = service.save(productId, input, WANG);
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
+        "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), person, frozen.getId(), 101L);
+    jdbc.update("UPDATE lp_material_master_raw SET import_batch_id=? WHERE material_code=?", key + "-NEXT", key + "-RAW");
+    var composition = jdbc.queryForObject("SELECT composition_fingerprint FROM lp_quote_bom_supplement_version WHERE id=?", String.class, sourceId);
+    input.setExpectedVersion(repository.findProduct(productId).orElseThrow().getRowVersion());
+    var unchanged = service.save(productId, input, WANG);
+    assertThat(unchanged.saved()).isEqualTo(saved.saved());
+    assertThat(unchanged.issues()).isEmpty();
+    assertThat(jdbc.queryForObject("SELECT composition_fingerprint FROM lp_quote_bom_supplement_version WHERE id=?", String.class, sourceId)).isEqualTo(composition);
+    assertThat(validation.validate(taskId, 101L, WANG).issues()).isEmpty();
+    versions.freeze(repository.lockProduct(productId).orElseThrow(), person, unchanged.expectedVersion(), 101L);
+    assertThat(codec.manufacturing(repository.findVersion(frozen.getId()).orElseThrow())).isEqualTo(saved.saved());
+  }
+
   @Test void authorizationOriginSpoofingAndDuplicateParentAreRejectedAndAdminCannotWrite() {
     var state = service.read(productId, null, WANG);
     assertThat(service.read(productId, null, LI).editable()).isFalse();

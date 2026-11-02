@@ -95,6 +95,17 @@ class TechnicalDataCostingSourcesTest {
     service.select(10L, "2026-09").requireReady();
   }
 
+  @Test void pendingReturnKeepsOwnSubmittedInputsUntilReturnSucceeds() {
+    task.setOaFormId(1L); task.setTaskStatus("RETURN_PENDING");
+    var selection=service.select(10L,"2026-09");
+    selection.requireReady();
+    assertThat(selection.sources().get("PACKAGE").version().getId()).isEqualTo(40L);
+    task.setOaFormId(2L);
+    assertBlocked("TECH_DATA_TASK_NOT_SUBMITTED");
+    task.setOaFormId(1L); task.setTaskStatus("PARTIALLY_RETURNED");
+    assertBlocked("TECH_DATA_TASK_NOT_SUBMITTED");
+  }
+
   @Test void approvalDoesNotReplaceFinanceConfirmation() {
     when(workflow.findFlow(50L)).thenReturn(flow(true,null));
     assertBlocked("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED");

@@ -50,15 +50,24 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   @Autowired MockMvc http;
   @Autowired ObjectMapper json;
   @SpyBean OaMessageRepository repository;
+  @Autowired com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalReturnClient returnClient;
 
   @Test void rejectionNodeIsSavedWithOriginalWorkflowAndCannotBeOverwrittenByReplay() throws Exception {
-    var source = request(1).put("RejectToNodeid", "001327000000123456789");
-    var received = service.receive(PEER, source.toString());
+    var source = request(1).put("rejectNodeid", "001327000000123456789");
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+        .contentType("application/json").content(source.toString()))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+        .andReturn();
+    var received = json.readTree(response.getResponse().getContentAsByteArray());
     long formId = received.at("/data/quoteId").asLong();
-    assertThat(jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
-        String.class, formId)).isEqualTo("001327000000123456789");
+    String savedNode = jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
+        String.class, formId);
+    assertThat(savedNode).isEqualTo("001327000000123456789");
+    var rejection = returnClient.previewRejection(source.path("requestId").asText(), "001001", savedNode);
+    assertThat(rejection.path("rejectNodeid").asText()).isEqualTo("001327000000123456789");
+    assertThat(rejection.has("RejectToNodeid")).isFalse();
     assertThat(service.receive(PEER, source.toString())).isEqualTo(received);
-    assertThatThrownBy(() -> service.receive(PEER, source.deepCopy().put("RejectToNodeid", "OTHER").toString()))
+    assertThatThrownBy(() -> service.receive(PEER, source.deepCopy().put("rejectNodeid", "OTHER").toString()))
         .hasMessageContaining("不能覆盖");
     assertThat(jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
         String.class, formId)).isEqualTo("001327000000123456789");

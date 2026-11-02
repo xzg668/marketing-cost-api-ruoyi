@@ -8,6 +8,11 @@ public final class TechnicalDataSubmissionState {
     return "SUBMITTED".equals(status) || "APPROVED".equals(status);
   }
 
+  /** 退回尚未确认时，原提交内容仍可在本报价中读取；不赋予技术员编辑权限。 */
+  public static boolean retainsSubmittedMaterials(String taskStatus) {
+    return submitted(taskStatus) || "RETURN_PENDING".equals(taskStatus);
+  }
+
   public static boolean acceptedByOa(String status) {
     return "SENT".equals(status) || "APPROVED".equals(status);
   }

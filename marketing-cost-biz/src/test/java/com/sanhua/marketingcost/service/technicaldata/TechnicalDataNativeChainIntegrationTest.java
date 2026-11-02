@@ -367,6 +367,38 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_notification WHERE flow_id=(SELECT id FROM lp_oa_workflow_state WHERE workflow_request_id=?)",Long.class,"FLOW-"+f.formId())).isEqualTo(1);
   }
 
+  @Test void failedReturnKeepsSubmittedMaterialsAndOriginalCostAcceptance() {
+    var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
+    new TransactionTemplate(manager).executeWithoutResult(tx->costingSubmissions.accept(f.formId(),1L));
+    var original=jdbc.queryForMap("SELECT finance_confirmed_fingerprint,finance_confirmed_by,finance_confirmed_at FROM lp_oa_technical_flow WHERE oa_form_id=?",f.formId());
+    var versions=jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version ORDER BY id");
+    doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200308","节点不可选","FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    var failed=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
+    assertThat(failed.status()).isEqualTo("RETURN_FAILED");
+    assertThat(costingSubmissions.hasPendingSubmissions(f.formId())).isFalse();
+    access.requireCostPublication(f.formId());
+    var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode().put("requestId","FLOW-"+f.formId()).put("eventType","COSTING").put("reason","人工干预");
+    notices.receive(new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL")),notice.toString());
+    access.requireCostPublication(f.formId());
+    assertThat(jdbc.queryForMap("SELECT finance_confirmed_fingerprint,finance_confirmed_by,finance_confirmed_at FROM lp_oa_technical_flow WHERE oa_form_id=?",f.formId())).isEqualTo(original);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version ORDER BY id")).isEqualTo(versions);
+    assertThatThrownBy(()->save(task,DING,"99")).hasMessageContaining("未分派");
+    success();
+    assertThat(returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN).status()).isEqualTo("SUCCESS");
+    assertThat(costingSubmissions.hasPendingSubmissions(f.formId())).isTrue();
+    assertThatThrownBy(()->access.requireCostPublication(f.formId())).hasMessageContaining("尚未全部成功提交");
+  }
+
+  @Test void unknownReturnPreservesMaterialsButBlocksConcurrentCostPublication() {
+    var f=submittedFixture(1,false);
+    new TransactionTemplate(manager).executeWithoutResult(tx->costingSubmissions.accept(f.formId(),1L));
+    doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.UNKNOWN,null,"TIMEOUT","待核实","FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    assertThat(returns.submit(returnRequest(f.taskIds().getFirst(),"PROFILE"),ADMIN).status()).isEqualTo("UNKNOWN");
+    assertThat(costingSubmissions.hasPendingSubmissions(f.formId())).isFalse();
+    assertThatThrownBy(()->access.requireCostPublication(f.formId())).hasMessageContaining("退回结果尚未确认");
+    assertThat(jdbc.queryForObject("SELECT finance_confirmed_fingerprint FROM lp_oa_technical_flow WHERE oa_form_id=?",String.class,f.formId())).isNotBlank();
+  }
+
   @Test void locallyAcceptedDataCanStillBeReturnedBeforeFinalCostSubmission() {
     var f=submittedFixture(1,false);
     new TransactionTemplate(manager).executeWithoutResult(tx->costingSubmissions.accept(f.formId(),1L));
@@ -444,7 +476,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThatThrownBy(()->returns.submit(returnRequest(task,"PROFILE"),ADMIN)).hasMessageContaining("退回等待");
     assertThat(views.detail(task,ADMIN).taskStatus()).isEqualTo("RETURN_PENDING");
     assertThatThrownBy(()->save(task,DING,"99")).hasMessageContaining("未分派");
-    assertThatThrownBy(()->access.requireCostPublication(f.formId())).hasMessageContaining("尚未全部成功提交");
+    assertThatThrownBy(()->access.requireCostPublication(f.formId())).hasMessageContaining("退回结果尚未确认");
     var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
         .put("requestId","FLOW-"+f.formId()).put("eventType","TECHNICAL").put("reason","不能确认第一步未知结果");
     notice.putArray("employeeNos").add("12211470");
@@ -531,7 +563,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
   @Test void missingSourceRejectionNodeStopsBeforeAnyOaCallOrTaskFreeze() {
     var f=submittedFixture(1,false); long task=f.taskIds().getFirst();
     jdbc.update("UPDATE lp_oa_quote_document SET reject_to_node_id=NULL WHERE oa_form_id=?",f.formId());
-    assertThatThrownBy(()->returns.submit(returnRequest(task,"PROFILE"),ADMIN)).hasMessageContaining("RejectToNodeid");
+    assertThatThrownBy(()->returns.submit(returnRequest(task,"PROFILE"),ADMIN)).hasMessageContaining("rejectNodeid");
     verifyNoInteractions(oa);
     assertThat(people.current(task).getFirst().todoStatus()).isEqualTo("SUBMITTED");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_technical_batch WHERE oa_form_id=? AND operation='I05'",Long.class,f.formId())).isZero();
@@ -551,7 +583,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(returns.submit(req,ADMIN).status()).isEqualTo("SUCCESS");
     var order=inOrder(oa);
     order.verify(oa).submit(argThat(body->body.at("/formData/dataDetails/0/dataOptions").size()==2));
-    order.verify(oa).reject(argThat(body->body.path("RejectToNodeid").asText().equals("00034567890123456789")
+    order.verify(oa).reject(argThat(body->body.path("rejectNodeid").asText().equals("00034567890123456789")
         && body.path("userid").asText().equals("11101516") && body.path("requestId").asText().equals("FLOW-"+f.formId())));
     verifyNoMoreInteractions(oa);
     assertThat(documents.workbench(f.formId(),DING).tasks()).hasSize(2);
@@ -576,15 +608,15 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(returns.submit(req,ADMIN).status()).isEqualTo("RETURN_FAILED");
     assertThat(returns.status(failed.batchId(),ADMIN).status()).isEqualTo("RETURN_FAILED");
     verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
-    assertThatThrownBy(()->returns.retryRejection(failed.batchId(),2,DING)).hasMessageContaining("原报价员");
+    assertThatThrownBy(()->returns.retryRejection(failed.batchId(),2,null,DING)).hasMessageContaining("原报价员");
     // 第二次调用只使用发送前固定的原需求节点，不能被发送期间的配置/来源更改替换。
     jdbc.update("UPDATE lp_oa_quote_document SET reject_to_node_id='CHANGED' WHERE oa_form_id=?",f.formId());
     success();
-    var retried=returns.retryRejection(failed.batchId(),failed.attempt(),ADMIN);
+    var retried=returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN);
     assertThat(retried.status()).isEqualTo("SUCCESS"); assertThat(retried.attempt()).isEqualTo(3);
-    assertThat(returns.retryRejection(failed.batchId(),failed.attempt(),ADMIN).status()).isEqualTo("SUCCESS");
+    assertThat(returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN).status()).isEqualTo("SUCCESS");
     verify(oa,times(1)).submit(any());
-    verify(oa,times(2)).reject(argThat(body->body.path("RejectToNodeid").asText().equals("00034567890123456789")));
+    verify(oa,times(2)).reject(argThat(body->body.path("rejectNodeid").asText().equals("00034567890123456789")));
     assertThat(jdbc.queryForObject("SELECT JSON_UNQUOTE(people_result_json->'$.status') FROM lp_oa_technical_batch WHERE id=?",String.class,failed.batchId())).isEqualTo("SUCCESS");
     save(task,DING,"9");
   }
@@ -596,9 +628,126 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(result.status()).isEqualTo("UNKNOWN"); assertThat(result.step()).isEqualTo("REJECT");
     assertThat(result.canRetry()).isFalse();
     assertThat(returns.submit(req,ADMIN).status()).isEqualTo("UNKNOWN");
-    assertThat(returns.retryRejection(result.batchId(),result.attempt(),ADMIN).status()).isEqualTo("UNKNOWN");
+    assertThat(returns.retryRejection(result.batchId(),result.attempt(),null,ADMIN).status()).isEqualTo("UNKNOWN");
     assertThatThrownBy(()->save(task,DING,"99")).hasMessageContaining("未分派");
     verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
+  }
+
+  @Test void changedReasonReplacesRemarkAndSynchronizesBeforeRejectingAgain() {
+    var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
+    doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200308","节点不可选",
+        "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    var failed=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
+    String original=jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE technical_batch_id=?",String.class,failed.batchId());
+    success(); clearInvocations(oa);
+    String reason="请将净损失率修正为1%";
+    var retry=returns.retryRejection(failed.batchId(),failed.attempt(),List.of(new TechnicalDataReturnService.Reason(task,reason)),ADMIN);
+    assertThat(retry.status()).isEqualTo("SUCCESS");
+    var order=inOrder(oa);
+    order.verify(oa).submit(argThat(body->body.path("remark").asText().contains(reason)
+        && !body.path("remark").asText().contains("请调整填写金额")
+        && body.path("requestId").asText().equals("FLOW-"+f.formId())));
+    order.verify(oa).reject(any());
+    assertThat(people.current(task).getFirst().returnReason()).isEqualTo(reason);
+    assertThat(jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE technical_batch_id=?",String.class,failed.batchId())).isEqualTo(original);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_business_change_log WHERE request_id=? AND field_name='RETURN_REASON_CHANGED' AND before_value=? AND after_value=?",Integer.class,failed.batchId(),"请调整填写金额",reason)).isEqualTo(1);
+    assertThat(returns.retryRejection(failed.batchId(),failed.attempt(),List.of(new TechnicalDataReturnService.Reason(task,"过期页面的其他原因")),ADMIN).status()).isEqualTo("SUCCESS");
+    assertThat(people.current(task).getFirst().returnReason()).isEqualTo(reason);
+    verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
+  }
+
+  @Test void identicalReasonOnlyRetriesRejectionAndInvalidReasonCannotChangeScope() {
+    var f=submittedFixture(1,false); long task=f.taskIds().getFirst();
+    doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200308","节点不可选",
+        "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    var failed=returns.submit(returnRequest(task,"PROFILE"),ADMIN);clearInvocations(oa);
+    for(var reasons:List.of(List.of(new TechnicalDataReturnService.Reason(task," ")),
+        List.of(new TechnicalDataReturnService.Reason(task+100,"其他产品")),
+        List.of(new TechnicalDataReturnService.Reason(task,"字".repeat(501))))) {
+      assertThatThrownBy(()->returns.retryRejection(failed.batchId(),failed.attempt(),reasons,ADMIN)).isInstanceOf(IllegalArgumentException.class);
+    }
+    verifyNoInteractions(oa);
+    success();
+    assertThat(returns.retryRejection(failed.batchId(),failed.attempt(),List.of(new TechnicalDataReturnService.Reason(task,"请调整填写金额")),ADMIN).status()).isEqualTo("SUCCESS");
+    verify(oa,never()).submit(any());verify(oa,times(1)).reject(any());
+  }
+
+  @Test void revisedReasonWaitsForPeopleReceiptBeforeAnyNewRejection() {
+    var f=submittedFixture(1,false); long task=f.taskIds().getFirst();
+    doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200308","节点不可选",
+        "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    var failed=returns.submit(returnRequest(task,"PROFILE"),ADMIN);clearInvocations(oa);
+    doReturn(new OaWorkflowResult("unknown",OaWorkflowResult.Status.UNKNOWN,null,"TIMEOUT","待核实",
+        "FLOW-"+f.formId(),null,1)).when(oa).submit(any());
+    var revised=returns.retryRejection(failed.batchId(),failed.attempt(),List.of(new TechnicalDataReturnService.Reason(task,"重新填写的原因")),ADMIN);
+    assertThat(revised.status()).isEqualTo("UNKNOWN");assertThat(revised.step()).isEqualTo("PEOPLE");
+    assertThat(returns.candidates(List.of(task),ADMIN).getFirst().returnReason()).isEqualTo("重新填写的原因");
+    assertThat(people.current(task).getFirst().todoStatus()).isEqualTo("RETURN_PENDING");
+    verify(oa,times(1)).submit(any());verify(oa,never()).reject(any());
+  }
+
+  @Test void originalQuoterCanRetryAfterCostingNotificationRenewsLocalWorkItem() {
+    var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
+    doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200504","已操作",
+        "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    var failed=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
+    String originalNode=access.quoterNode(f.formId()).workItemId();
+    var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+        .put("requestId","FLOW-"+f.formId()).put("eventType","COSTING").put("reason","人工干预");
+    var peer=new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL"));
+    assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
+    assertThat(access.quoterNode(f.formId()).workItemId()).isNotEqualTo(originalNode);
+    success();
+    var retried=returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN);
+    assertThat(retried.status()).isEqualTo("SUCCESS");
+    assertThat(returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN).status()).isEqualTo("SUCCESS");
+    verify(oa,times(1)).submit(any());
+    verify(oa,times(2)).reject(argThat(body->body.path("requestId").asText().equals("FLOW-"+f.formId())
+        && body.path("userid").asText().equals("11101516")
+        && body.path("rejectNodeid").asText().equals("00034567890123456789")));
+    assertThat(netLoss.get(repository.findProducts(task).getFirst().getId(),null,DING).editable()).isTrue();
+    save(task,DING,"9.99");
+  }
+
+  @Test void renewedLocalWorkItemWhileOaRespondsDoesNotDiscardSuccessfulReturn() {
+    var f=submittedFixture(1,false); long task=f.taskIds().getFirst();
+    doAnswer(call->{
+      jdbc.update("UPDATE lp_oa_workflow_state SET applied_version=applied_version+1,active_work_items_json=? WHERE workflow_request_id=?",
+          "[{\"workItemId\":\"LOCAL-RENEWED\",\"nodeRole\":\"COSTING\",\"employeeNo\":\"11101516\"}]","FLOW-"+f.formId());
+      return new OaWorkflowResult("reject",OaWorkflowResult.Status.SUCCESS,200,"0","success","FLOW-"+f.formId(),null,1);
+    }).when(oa).reject(any());
+    assertThat(returns.submit(returnRequest(task,"PROFILE"),ADMIN).status()).isEqualTo("SUCCESS");
+    verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
+    save(task,DING,"9.99");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"REQUEST","EMPLOYEE","FORM_VERSION","SUBMISSION","CLOSED"})
+  void retryStillRejectsChangedReturnIdentityOrData(String change) {
+    var f=submittedFixture(1,false); long task=f.taskIds().getFirst();
+    doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200504","已操作",
+        "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    var failed=returns.submit(returnRequest(task,"PROFILE"),ADMIN);
+    switch(change) {
+      case "REQUEST" -> jdbc.update("UPDATE lp_oa_quote_document SET external_document_id=? WHERE oa_form_id=?","OTHER-"+f.formId(),f.formId());
+      case "EMPLOYEE" -> {
+        jdbc.update("UPDATE sys_user SET employee_no='OTHER' WHERE user_id=1");
+        jdbc.update("UPDATE lp_oa_workflow_state SET active_work_items_json=? WHERE workflow_request_id=?",
+            "[{\"workItemId\":\"MATERIAL-1\",\"nodeRole\":\"COSTING\",\"employeeNo\":\"OTHER\"}]","FLOW-"+f.formId());
+      }
+      case "FORM_VERSION" -> {
+        jdbc.update("UPDATE lp_oa_quote_document SET source_version=2 WHERE oa_form_id=?",f.formId());
+        jdbc.update("UPDATE lp_oa_workflow_state SET form_version=2,observed_form_version=2 WHERE workflow_request_id=?","FLOW-"+f.formId());
+      }
+      case "SUBMISSION" -> jdbc.update("UPDATE lp_quote_tech_oa_recipient SET latest_submission_id=NULL WHERE task_id=? AND active_flag=1",task);
+      case "CLOSED" -> jdbc.update("UPDATE lp_oa_workflow_state SET state='CANCELLED' WHERE workflow_request_id=?","FLOW-"+f.formId());
+    }
+    var result=returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN);
+    assertThat(result.status()).isEqualTo("RETURN_FAILED");
+    assertThat(result.oaResult().errorCode()).isEqualTo("BUSINESS_STATE_CHANGED");
+    assertThat(result.oaResult().status()).isEqualTo(OaWorkflowResult.Status.NOT_SENT);
+    verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
+    assertThat(people.current(task).getFirst().todoStatus()).isEqualTo("RETURN_PENDING");
   }
 
   @Test void technicalNoticeConfirmsUnknownSecondStepForWholeProductWithoutResending() {
@@ -630,8 +779,8 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     var f=submittedFixture(1,false);
     doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200308","退回节点不可选","FLOW-"+f.formId(),null,1)).when(oa).reject(any());
     var result=returns.submit(returnRequest(f.taskIds().getFirst(),"PROFILE"),ADMIN);
-    assertThat(returns.retryRejection(result.batchId(),result.attempt(),ADMIN).attempt()).isEqualTo(3);
-    assertThat(returns.retryRejection(result.batchId(),result.attempt(),ADMIN).attempt()).isEqualTo(3);
+    assertThat(returns.retryRejection(result.batchId(),result.attempt(),null,ADMIN).attempt()).isEqualTo(3);
+    assertThat(returns.retryRejection(result.batchId(),result.attempt(),null,ADMIN).attempt()).isEqualTo(3);
     verify(oa,times(1)).submit(any()); verify(oa,times(2)).reject(any());
   }
 

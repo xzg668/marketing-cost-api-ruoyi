@@ -11,6 +11,16 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface QuoteTechDataVersionMapper extends BaseMapper<QuoteTechDataVersion> {
 
+  @Select("""
+      SELECT id FROM lp_quote_tech_data_version
+       WHERE product_id=#{productId}
+         AND version_status IN ('FROZEN','SUBMITTED','APPROVED','RETURNED')
+         AND content_fingerprint IS NOT NULL
+         AND JSON_CONTAINS(reference_snapshot_json, JSON_OBJECT('moduleType',#{moduleType}), '$.modules')
+       ORDER BY version_no DESC LIMIT 1
+      """)
+  Long selectLatestSubmittedModuleVersion(@Param("productId") Long productId, @Param("moduleType") String moduleType);
+
   @Select("SELECT * FROM lp_quote_tech_data_version WHERE id=#{id} FOR UPDATE")
   QuoteTechDataVersion selectByIdForUpdate(@Param("id") Long id);
 

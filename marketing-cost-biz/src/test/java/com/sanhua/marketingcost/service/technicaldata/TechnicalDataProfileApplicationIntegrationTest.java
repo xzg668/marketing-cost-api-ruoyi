@@ -29,6 +29,8 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
   @Autowired private TechnicalDataSubmissionSnapshotService snapshots;
   @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients;
   @Autowired private JdbcTemplate jdbc;
+  @Autowired private QuoteTechnicalDataRepository versionRepository;
+  @Autowired private TechnicalDataParticipantVersions participantVersions;
   private String plateRevision;
 
   @Test void optionalOaFieldsDoNotDefaultChoicesOrBlockSavingCompleteProductData() {
@@ -58,6 +60,23 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(jdbc.queryForMap("SELECT version_status,product_model,product_property,created_by FROM lp_quote_tech_data_version WHERE id=?", saved.versionId()))
         .containsEntry("version_status", "DRAFT").containsEntry("product_model", "OA-MODEL")
         .containsEntry("product_property", "非标品").containsEntry("created_by", 101L);
+  }
+
+  @Test void returnedUnchangedProfilePreservesSubmittedFeesAndDoesNotRequireARefreshedPlateRevision() {
+    var product = fixture();
+    var input = update(false, "0.1", "0.3", null, 0);
+    var saved = profiles.save(product.id(), input, TECH);
+    var person = recipients.current(taskId(product)).getFirst();
+    var frozen = participantVersions.freeze(versionRepository.lockProduct(product.id()).orElseThrow(), person, saved.expectedVersion(), 101L);
+    var original = versionRepository.findVersion(frozen.getId()).orElseThrow().getProductFeesJson();
+    participantVersions.restore(versionRepository.lockProduct(product.id()).orElseThrow(), person, frozen.getId(), 101L);
+    input.setExpectedVersion(versionRepository.findProduct(product.id()).orElseThrow().getRowVersion());
+    input.setExpectedPlateMaterialRevision("external-revision-no-longer-current");
+    var unchanged = profiles.save(product.id(), input, TECH);
+    assertThat(unchanged.unitMouldFee()).isEqualTo(saved.unitMouldFee());
+    assertThat(validation.validate(taskId(product), 101L, TECH).issues()).isEmpty();
+    participantVersions.freeze(versionRepository.lockProduct(product.id()).orElseThrow(), person, unchanged.expectedVersion(), 101L);
+    assertThat(versionRepository.findVersion(frozen.getId()).orElseThrow().getProductFeesJson()).isEqualTo(original);
   }
 
   @Test void requiredChoicesAndEveryFeeAreValidatedBeforeAnyDatabaseWrite() throws Exception {

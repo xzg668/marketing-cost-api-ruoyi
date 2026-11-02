@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 辅料参考/上传的事务边界；原始资料服务端取证，技术只编辑本次金额。 */
 @Service
 public class TechnicalDataAuxiliaryApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
@@ -30,7 +31,8 @@ public class TechnicalDataAuxiliaryApplicationService {
   public TechnicalDataAuxiliaryApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataSourceSnapshotFactory snapshots,
       TechnicalDataVersionContentCodec codec, TechnicalDataAuxiliarySourceQuery sources,
-      TechnicalDataAuxiliaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+      TechnicalDataAuxiliaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.snapshots = snapshots;
@@ -94,6 +96,7 @@ public class TechnicalDataAuxiliaryApplicationService {
         || !Set.of("REFERENCE", "UPLOAD").contains(Objects.toString(request.getEntryMode(), ""))) throw invalid("辅料请求不完整或包含未知字段");
     var scope = scope(productId, actor, request.getExpectedVersion()); ensureEditable(scope, actor);
     sharedModules.requireOwnership(productId, "AUXILIARY");
+    if (reuse.save(scope.product(), scope.module(), request, actor.userId())) return get(productId, null, actor);
     List<ItemEvidence> origins;
     if ("REFERENCE".equals(request.getEntryMode())) {
       if (request.getFileSha256() != null) throw invalid("参考方式不能带入上传文件");
@@ -141,6 +144,7 @@ public class TechnicalDataAuxiliaryApplicationService {
     var rows = repository.findAuxItems(version.getId());
     var issues = new ArrayList<>(TechnicalDataAuxiliaryRules.validate(rows, codec));
     if (!issues.isEmpty()) return issues;
+    if (reuse.unchanged(product, version, "AUXILIARY")) return List.copyOf(issues);
     try {
       var first = codec.auxiliaryEvidence(rows.getFirst());
       var expected = first.cms() != null ? cmsEvidence(sources.require(repository.findTask(product.getTaskId()).orElseThrow(),

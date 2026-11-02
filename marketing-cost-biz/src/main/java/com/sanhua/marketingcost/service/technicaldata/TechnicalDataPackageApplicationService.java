@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 包装草稿与本人模块版本的事务边界；来源查询和用量规则独立维护。 */
 @Service
 public class TechnicalDataPackageApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
@@ -29,7 +30,8 @@ public class TechnicalDataPackageApplicationService {
 
   public TechnicalDataPackageApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataSourceSnapshotFactory snapshots,
-      TechnicalDataVersionContentCodec codec, TechnicalDataPackageSourceQuery sources, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+      TechnicalDataVersionContentCodec codec, TechnicalDataPackageSourceQuery sources, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.snapshots = snapshots;
@@ -83,22 +85,22 @@ public class TechnicalDataPackageApplicationService {
     if (!Objects.equals(scope.product().getContentSchemaVersion(), 2) || !Objects.equals(scope.product().getActiveFlag(), 1)
         || !actor.canEditModule(scope.task(), scope.module())) throw forbidden("当前包装模块未分派给本人或已送审");
     sharedModules.requireOwnership(productId, "PACKAGE");
+    if (reuse.save(scope.product(), scope.module(), request, actor.userId())) return get(productId, null, actor);
     if (!"MISSING".equals(scope.module().getSourceAvailability())) throw invalid("请先核实本产品的包装缺口");
     BigDecimal parentBaseQuantity = TechnicalDataPackageRules.quantity(request.getParentBaseQuantity(), "母件底数", true);
     boolean reference = "REFERENCE".equals(request.getEntryMode());
-    Source referenceSource = reference ? sources.require(scope.task(), scope.product(), request.getReferenceParentNodeId(), request.getReferenceFingerprint()) : null;
+    var referenceBinding = reference ? referenceBinding(scope, request) : null;
     if (!reference && (request.getReferenceParentNodeId() != null || request.getReferenceFingerprint() != null)) throw invalid("自行录入不能带入参考页的母件来源");
-    var evidence = referenceSource == null ? null : referenceSource.evidence();
+    var evidence = referenceBinding == null ? null : referenceBinding.source().evidence();
     var packaging = new Packaging(evidence == null ? null : evidence.topProductCode(), evidence == null ? null : evidence.parentMaterialNo(),
         evidence == null ? null : evidence.parentQuantity(), null, null,
         evidence == null ? null : "U9:" + evidence.parentNodeId(), request.getEntryMode(), evidence, parentBaseQuantity,
         TechnicalDataPackageRules.QUANTITY_BASIS);
     var sourceCache = new HashMap<Long, Source>();
-    if (referenceSource != null) sourceCache.put(evidence.parentNodeId(), referenceSource);
     var items = new ArrayList<QuoteTechPackageItem>();
     for (var input : request.getItems()) {
       if (input == null || !input.getUnknownFields().isEmpty()) throw invalid("包装子件包含未知字段");
-      items.add(item(scope, input, referenceSource, sourceCache, items.size() + 1));
+      items.add(item(scope, input, referenceBinding, sourceCache, items.size() + 1));
     }
     var issues = TechnicalDataPackageRules.validate(packaging, items);
     // 草稿可缺母件底数或尚未选子件；已填写的行必须真实完整，提交另做完整性校验。
@@ -128,21 +130,47 @@ public class TechnicalDataPackageApplicationService {
     return get(productId, null, actor);
   }
 
-  private QuoteTechPackageItem item(Scope scope, TechnicalDataPackageItemRequest input, Source reference, Map<Long, Source> cache, int line) {
+  private TechnicalDataPackageReferenceBinding referenceBinding(Scope scope, TechnicalDataPackageSaveRequest request) {
+    Long draftId = scope.product().getCurrentEditVersionId();
+    if (draftId != null) {
+      var draft = repository.findVersion(draftId).orElseThrow();
+      if (!Objects.equals(draft.getProductId(), scope.product().getId()) || !"DRAFT".equals(draft.getVersionStatus())) throw conflict("当前版本不能覆盖");
+      var saved = codec.packaging(draft);
+      if (saved != null && "REFERENCE".equals(saved.entryMode()) && saved.source() != null
+          && Objects.equals(saved.source().parentNodeId(), request.getReferenceParentNodeId())
+          && Objects.equals(saved.source().fingerprint(), request.getReferenceFingerprint())) {
+        var current = sources.requireSaved(scope.task(), scope.product(), saved.source());
+        if (Objects.equals(current.evidence().fingerprint(), request.getReferenceFingerprint())) {
+          return TechnicalDataPackageReferenceBinding.current(current);
+        }
+        return TechnicalDataPackageReferenceBinding.saved(saved.source(), current, repository.findPackageItems(draftId), codec);
+      }
+    }
+    return TechnicalDataPackageReferenceBinding.current(sources.require(scope.task(), scope.product(),
+        request.getReferenceParentNodeId(), request.getReferenceFingerprint()));
+  }
+
+  private QuoteTechPackageItem item(Scope scope, TechnicalDataPackageItemRequest input, TechnicalDataPackageReferenceBinding reference, Map<Long, Source> cache, int line) {
     var item = new QuoteTechPackageItem(); item.setLineNo(line); item.setSortSeq(line);
     item.setQuantity(TechnicalDataPackageRules.quantity(input.getQuantity(), "第 " + line + " 行子件用量", false));
     PackageItemEvidence evidence;
     if (input.getSourceNodeId() != null) {
       Long parentId = input.getSourceParentNodeId();
-      Source source = cache.computeIfAbsent(parentId, id -> sources.require(scope.task(), scope.product(), id, input.getSourceFingerprint()));
-      if (!Objects.equals(source.evidence().fingerprint(), input.getSourceFingerprint())) throw conflict("子件来源已变化，请重新选择");
-      if (reference != null && !Objects.equals(parentId, reference.evidence().parentNodeId())) throw invalid("参考方式只能使用所选包装母件的实际子件");
-      var child = source.children().stream().filter(row -> Objects.equals(row.sourceNodeId(), input.getSourceNodeId())).findFirst()
-          .orElseThrow(() -> invalid("所选子件不是该包装母件的直接下级"));
+      Source source;
+      Child child;
+      if (reference != null) {
+        source = reference.source();
+        child = reference.requireChild(parentId, input.getSourceNodeId(), input.getSourceFingerprint());
+      } else {
+        source = cache.computeIfAbsent(parentId, id -> sources.require(scope.task(), scope.product(), id, input.getSourceFingerprint()));
+        if (!Objects.equals(source.evidence().fingerprint(), input.getSourceFingerprint())) throw conflict("子件来源已变化，请重新选择");
+        child = source.children().stream().filter(row -> Objects.equals(row.sourceNodeId(), input.getSourceNodeId())).findFirst()
+            .orElseThrow(() -> invalid("所选子件不是该包装母件的直接下级"));
+      }
       item.setComponentMaterialNo(child.materialNo()); item.setComponentName(child.name()); item.setComponentSpec(child.specification());
       item.setOriginalUnit(text(child.unit(), 32, "来源子件单位", true));
       item.setSourceReferenceId(child.sourceNodeId().toString()); item.setSourceReferenceVersion(source.evidence().buildBatchId());
-      evidence = new PackageItemEvidence("U9_BOM", child.model(), parentId, child.sourceNodeId(), source.evidence().topProductCode(),
+      evidence = new PackageItemEvidence("U9_BOM", child.model(), source.evidence().parentNodeId(), child.sourceNodeId(), source.evidence().topProductCode(),
           source.evidence().buildBatchId(), child.path(), source.evidence().fingerprint(), child.quantity(), child.unit());
     } else {
       if (reference != null || input.getSourceParentNodeId() != null || input.getSourceFingerprint() != null) throw invalid("参考包装子件必须有实际来源节点");
@@ -164,12 +192,18 @@ public class TechnicalDataPackageApplicationService {
     if (!issues.isEmpty()) return issues;
     var task = repository.findTask(product.getTaskId()).orElseThrow();
     var cache = new HashMap<Long, Source>();
+    if (reuse.unchanged(product, version, "PACKAGE")) return List.copyOf(issues);
     try {
-      if (packaging.source() != null) cache.put(packaging.source().parentNodeId(), sources.require(task, product, packaging.source().parentNodeId(), packaging.source().fingerprint()));
+      var reference = "REFERENCE".equals(packaging.entryMode()) && packaging.source() != null
+          ? TechnicalDataPackageReferenceBinding.saved(packaging.source(), sources.requireSaved(task, product, packaging.source()), items, codec) : null;
       for (var item : items) {
         var evidence = codec.packageEvidence(item);
         if (evidence == null) { issues.add("包装子件缺少来源说明"); continue; }
         if ("U9_BOM".equals(evidence.kind())) {
+          if (reference != null) {
+            reference.requireChild(evidence.parentNodeId(), evidence.sourceNodeId(), evidence.sourceFingerprint());
+            continue;
+          }
           var source = cache.computeIfAbsent(evidence.parentNodeId(), id -> sources.require(task, product, id, evidence.sourceFingerprint()));
           if (!source.evidence().fingerprint().equals(evidence.sourceFingerprint())
               || source.children().stream().noneMatch(child -> Objects.equals(child.sourceNodeId(), evidence.sourceNodeId())

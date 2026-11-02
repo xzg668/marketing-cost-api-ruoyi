@@ -82,7 +82,7 @@ class OaWorkflowClientTest {
     properties.setBaseUrl("http://127.0.0.1:1/unreachable-submit");
     properties.setRejectBaseUrl(auth.getBaseUrl());
     var body = json.createObjectNode().put("userid", "0001").put("requestId", "00123")
-        .put("RejectToType", "0").put("RejectToNodeid", "000987654321");
+        .put("RejectToType", "0").put("rejectNodeid", "000987654321");
     assertThat(client.reject(body).status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
     assertThat(path).isEqualTo(OaWorkflowClient.REJECT_PATH);
     assertThat(json.readTree(requestBody)).isEqualTo(body);
@@ -93,10 +93,10 @@ class OaWorkflowClientTest {
 
   @Test void invalidRejectionNodeIsNeverSentAndOaRejectionIsNotRetried() {
     var body = json.createObjectNode().put("userid", "0001").put("requestId", "00123").put("RejectToType", "0");
-    assertThatThrownBy(() -> client.reject(body)).hasMessageContaining("RejectToNodeid");
+    assertThatThrownBy(() -> client.reject(body)).hasMessageContaining("rejectNodeid");
     assertThat(calls.get()).isZero();
     response = "{\"message\":{\"errcode\":\"1200308\",\"errmsg\":\"退回节点不在可选范围内\"}}";
-    var result = client.reject(body.put("RejectToNodeid", "000987654321"));
+    var result = client.reject(body.put("rejectNodeid", "000987654321"));
     assertThat(result.status()).isEqualTo(OaWorkflowResult.Status.REJECTED);
     assertThat(result.errorCode()).isEqualTo("1200308");
     assertThat(calls.get()).isEqualTo(1);
@@ -106,7 +106,7 @@ class OaWorkflowClientTest {
     delay = 1500;
     properties.setReadTimeoutMs(1000);
     var body = json.createObjectNode().put("userid", "0001").put("requestId", "00123")
-        .put("RejectToType", "0").put("RejectToNodeid", "000987654321");
+        .put("RejectToType", "0").put("rejectNodeid", "000987654321");
     assertThat(client.reject(body).status()).isEqualTo(OaWorkflowResult.Status.UNKNOWN);
     assertThat(calls.get()).isEqualTo(1);
   }

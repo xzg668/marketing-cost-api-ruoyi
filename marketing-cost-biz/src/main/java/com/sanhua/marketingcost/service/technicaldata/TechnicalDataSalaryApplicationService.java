@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 工资资料保存与个人版本的事务边界；来源取证、完整性校验各自独立。 */
 @Service
 public class TechnicalDataSalaryApplicationService {
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
@@ -29,7 +30,8 @@ public class TechnicalDataSalaryApplicationService {
   public TechnicalDataSalaryApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataSourceSnapshotFactory snapshots,
       TechnicalDataVersionContentCodec codec, TechnicalDataSalarySourceQuery sources,
-      TechnicalDataSalaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+      TechnicalDataSalaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse) {
+    this.reuse = reuse;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.snapshots = snapshots;
@@ -93,6 +95,7 @@ public class TechnicalDataSalaryApplicationService {
     var scope = scope(productId, actor, request.getExpectedVersion());
     if (!editable(scope, actor)) throw forbidden("当前工资模块未分派给本人、无需补录或已送审");
     sharedModules.requireOwnership(productId, "SALARY");
+    if (reuse.save(scope.product(), scope.module(), request, actor.userId())) return get(productId, null, actor);
     var source = sources.requireReference(scope.task(), scope.product(), request.getReferenceMaterialNo(),
         request.getReferenceFingerprint(), request.getEntryMode());
     if ("REFERENCE".equals(request.getEntryMode()) && request.getFileSha256() != null) throw invalid("参考方式不能带入上传文件");
@@ -125,6 +128,7 @@ public class TechnicalDataSalaryApplicationService {
     var rows = repository.findSalaryItems(version.getId());
     var issues = new ArrayList<>(TechnicalDataSalaryRules.validate(rows, codec));
     if (!issues.isEmpty()) return issues;
+    if (reuse.unchanged(product, version, "SALARY")) return List.copyOf(issues);
     try {
       var direct = rows.stream().filter(row -> "DIRECT".equals(row.getLaborType())).findFirst().orElseThrow();
       var indirect = rows.stream().filter(row -> "INDIRECT".equals(row.getLaborType())).findFirst().orElseThrow();

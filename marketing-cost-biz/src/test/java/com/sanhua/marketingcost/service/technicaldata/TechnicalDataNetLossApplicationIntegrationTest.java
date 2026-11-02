@@ -132,6 +132,23 @@ class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(validation.validate(taskId, 101L, WANG).valid()).isTrue();
   }
 
+  @Test void returnedUnchangedLossKeepsReferenceAndEditingToOnePercentStillWorks() {
+    var input = reference(source("A"), 0);
+    var saved = service.save(productId, input, WANG);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
+    String original = content(frozen);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), recipient(), frozen.getId(), 101L);
+    var row = rates.selectById(rateA); row.setLossRate(new BigDecimal("0.09")); rates.updateById(row);
+    input.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
+    var unchanged = service.save(productId, input, WANG);
+    assertThat(unchanged.content().rate()).isEqualByComparingTo(saved.content().rate());
+    assertThat(validation.validate(taskId, 101L, WANG).issues()).isEmpty();
+    var next = service.save(productId, manual("1", unchanged.expectedVersion()), WANG);
+    assertThat(next.content().rate()).isEqualByComparingTo("0.01");
+    versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), next.expectedVersion(), 101L);
+    assertThat(content(repository.findVersion(frozen.getId()).orElseThrow())).isEqualTo(original);
+  }
+
   @Test void personalReturnAndModeSwitchKeepOldSnapshotAndOtherPersonsModule() {
     var saved = service.save(productId, reference(source("A"), 0), WANG);
     var first = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
