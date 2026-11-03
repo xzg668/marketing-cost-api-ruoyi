@@ -64,8 +64,8 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
         String.class, formId);
     assertThat(savedNode).isEqualTo("001327000000123456789");
     var rejection = returnClient.previewRejection(source.path("requestId").asText(), "001001", savedNode);
-    assertThat(rejection.path("rejectNodeid").asText()).isEqualTo("001327000000123456789");
-    assertThat(rejection.has("RejectToNodeid")).isFalse();
+    assertThat(rejection.path("RejectToNodeid").asText()).isEqualTo("001327000000123456789");
+    assertThat(rejection.has("rejectNodeid")).isFalse();
     assertThat(service.receive(PEER, source.toString())).isEqualTo(received);
     assertThatThrownBy(() -> service.receive(PEER, source.deepCopy().put("rejectNodeid", "OTHER").toString()))
         .hasMessageContaining("不能覆盖");

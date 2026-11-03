@@ -68,6 +68,7 @@ public class TechnicalDataReturnService {
   private final OaTechnicalReturnDelivery delivery;
   private final OaMessageRepository messages;
   private final OaMessageCodec codec;
+  private final OaWorkflowNotificationRepository notifications;
   private final TechnicalDataAuditLogService audit;
   private final TransactionTemplate transaction;
 
@@ -87,6 +88,7 @@ public class TechnicalDataReturnService {
       OaTechnicalReturnDelivery delivery,
       OaMessageRepository messages,
       OaMessageCodec codec,
+      OaWorkflowNotificationRepository notifications,
       TechnicalDataAuditLogService audit,
       PlatformTransactionManager manager) {
     this.jdbc = jdbc;
@@ -104,6 +106,7 @@ public class TechnicalDataReturnService {
     this.delivery = delivery;
     this.messages = messages;
     this.codec = codec;
+    this.notifications = notifications;
     this.audit = audit;
     this.transaction = new TransactionTemplate(manager);
   }
@@ -321,18 +324,19 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     return Objects.requireNonNull(transaction.execute(tx -> complete(id)));
   }
 
-  /** OA技术节点通知只确认已发送但回执未知的第二步，并沿用原退回产品/板块范围。 */
+  /** 提前通知只保存；I05 开放编辑必须有 rejectRequest 的成功回执。 */
   @Transactional
-  public void confirmFromNotification(String id, OaWorkflowNotification event, long notificationId) {
+  public boolean confirmFromNotification(String id, OaWorkflowNotification event, long notificationId) {
     var original = batches.find(id, false);
     if (original == null) throw invalid("退回记录不存在");
     jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, original.formId());
     var batch = batches.find(id, true);
     if (!event.technical() || !"I05".equals(batch.operation())
         || !event.requestId().equals(batch.request().path("requestId").asText())
-        || !"UNKNOWN".equals(batch.status()) || !"REJECT".equals(batch.returnStep())
+        || !Set.of("SENDING", "UNKNOWN", "RETURN_FAILED", "OA_ACCEPTED").contains(batch.status())
+        || !"REJECT".equals(batch.returnStep())
         || batch.peopleResult() == null || batch.peopleResult().status() != OaWorkflowResult.Status.SUCCESS) {
-      throw invalid("退回人员尚未确认成功，或节点退回并非结果未知，不能用此通知开放编辑");
+      throw invalid("退回人员尚未确认成功，或节点退回未处于等待确认状态，不能用此通知开放编辑");
     }
     Set<String> expectedEmployees = new HashSet<>();
     for (long message : batches.messageIds(id)) {
@@ -348,8 +352,20 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     if (expectedEmployees.isEmpty() || !new HashSet<>(event.employeeNos()).containsAll(expectedEmployees)) {
       throw invalid("通知未覆盖本次退回的全部技术员，不能确认整批退回");
     }
-    batches.confirmReturnNotification(batch, notificationId);
+    if (!"OA_ACCEPTED".equals(batch.status())) {
+      boolean failed = "RETURN_FAILED".equals(batch.status());
+      jdbc.update("""
+          UPDATE lp_oa_integration_message SET technical_batch_id=?,status=?,error_stage='DELIVERY',
+            error_code=?,error_message=? WHERE id=? AND direction='INBOUND' AND interface_type='WORKFLOW_EVENT'
+              AND (technical_batch_id IS NULL OR technical_batch_id=?)
+          """, id, failed ? "REJECTED" : "WAITING_HANDLER", failed ? "OA_RETURN_FAILED" : "OA_RETURN_PENDING",
+          failed ? "退回接口未成功，通知不开放编辑" : "通知已接收，等待退回接口明确成功", notificationId, id);
+      return false;
+    }
+    if (batch.result() == null || batch.result().status() != OaWorkflowResult.Status.SUCCESS)
+      throw invalid("缺少 OA 退回接口成功回执，不能开放编辑");
     complete(id, true);
+    return true;
   }
 
   private String prepare(Request request, TechnicalDataActor actor) {
@@ -545,6 +561,13 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     jdbc.queryForObject(
         "SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, original.formId());
     var batch = batches.find(id, true);
+    if ("RETURN_FAILED".equals(batch.status())) {
+      jdbc.update("""
+          UPDATE lp_oa_integration_message SET status='REJECTED',error_code='OA_RETURN_FAILED',
+            error_message='退回接口未成功，通知不开放编辑',processed_at=NOW(3)
+          WHERE technical_batch_id=? AND direction='INBOUND' AND status='WAITING_HANDLER'
+          """, id);
+    }
     if (batch.result() == null
         || "SUCCESS".equals(batch.status())
         || "UNKNOWN".equals(batch.status())) return result(batch);
@@ -601,8 +624,33 @@ SET m.oa_edit_allowed=1 WHERE p.task_id=? AND p.active_flag=1 AND m.module_type=
       }
     }
     batches.finishMessages(batch);
-    if (accepted) batches.completed(id);
+    if (accepted) {
+      batches.completed(id);
+      applyPendingNotifications(batch, !notifiedByOa);
+    }
     return result(batches.find(id, false));
+  }
+
+  /** 与成功退回在同一事务内应用提前保存的通知；失败/未知回执不进入此处。 */
+  private void applyPendingNotifications(OaTechnicalBatchRepository.Batch batch, boolean applyState) {
+    for (long messageId : jdbc.queryForList("""
+        SELECT id FROM lp_oa_integration_message WHERE technical_batch_id=? AND direction='INBOUND'
+          AND interface_type='WORKFLOW_EVENT' AND status='WAITING_HANDLER' ORDER BY id
+        """, Long.class, batch.id())) {
+      var message = messages.findById(messageId);
+      var event = OaWorkflowNotification.parse(codec.readQuotation(message.rawPayload()));
+      var document = notifications.document(message.peer(), event.requestId());
+      if (!event.technical() || document == null || document.id() != batch.formId())
+        throw invalid("提前通知与本次退回流程不一致");
+      var flow = notifications.lock(message.peer(), event.requestId());
+      if (applyState && !"TECHNICAL".equals(flow.state())) {
+        notifications.applied(flow, document, "TECHNICAL", event.reason(), null);
+        notifications.associate(flow, message.id(), message.requestId().substring("NOTIFY:".length()));
+        for (long flowId : jdbc.queryForList("SELECT id FROM lp_oa_technical_flow WHERE oa_form_id=?", Long.class, batch.formId()))
+          workflow.invalidateFinance(flowId);
+      }
+      notifications.complete(message.id(), codec.write(OaWorkflowReply.success()));
+    }
   }
 
   private boolean submitted(Recipient person) {

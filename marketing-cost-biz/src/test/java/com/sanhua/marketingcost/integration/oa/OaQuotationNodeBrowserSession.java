@@ -47,7 +47,8 @@ class OaQuotationNodeBrowserSession extends OriginalPricingIntegrationTestBase {
     assertThat(Files.exists(state)).isFalse();
     String key="NODE-"+UUID.randomUUID().toString().substring(0,8), child=key+"-PART";
     String requestId="FLOW-"+key, node="001327000000123456789", month=CostPricingPeriodUtils.currentPricingMonth();
-    var body=OaQuotationRequestMapperTest.sample(2).put("requestId",requestId).put("formNo",key).put("rejectNodeid",node);
+    int sampleCase = Integer.getInteger("oa.node.browser.case", 2);
+    var body=OaQuotationRequestMapperTest.sample(sampleCase).put("requestId",requestId).put("formNo",key).put("rejectNodeid",node);
     ((com.fasterxml.jackson.databind.node.ObjectNode)body.at("/detailData/0/fields")).put("lh",key);
     var request=HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+OaQuotationIntegrationTest.URL))
         .header("Authorization",OaQuotationIntegrationTest.TOKEN).header("Content-Type","application/json")
@@ -89,8 +90,8 @@ class OaQuotationNodeBrowserSession extends OriginalPricingIntegrationTestBase {
     String stored=jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE external_document_id=? AND source_system='WEAVER' AND environment='I01_TEST'",String.class,requestId);
     assertThat(stored).isEqualTo(node);
     var rejection=returns.previewRejection(requestId,"001001",stored);
-    assertThat(rejection.path("rejectNodeid").asText()).isEqualTo(node);
-    assertThat(rejection.has("RejectToNodeid")).isFalse();
+    assertThat(rejection.path("RejectToNodeid").asText()).isEqualTo(node);
+    assertThat(rejection.has("rejectNodeid")).isFalse();
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?",Integer.class,key)).isEqualTo(1);
     int rows=jdbc.queryForObject("SELECT COUNT(*) FROM lp_bom_costing_row WHERE oa_form_item_id=? AND period_month=?",Integer.class,item,month);
     assertThat(rows).isPositive();

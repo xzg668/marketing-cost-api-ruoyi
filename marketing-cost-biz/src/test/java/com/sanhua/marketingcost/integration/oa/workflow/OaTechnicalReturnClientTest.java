@@ -14,6 +14,37 @@ class OaTechnicalReturnClientTest {
   final OaWorkflowProperties properties = new OaWorkflowProperties();
   final OaTechnicalReturnClient client = new OaTechnicalReturnClient(new ObjectMapper(), workflow, properties);
 
+  @Test
+  void rejectionUsesExactOaFieldAndPreservesLeadingZeros() {
+    when(workflow.reject(any())).thenReturn(new OaWorkflowResult("test", OaWorkflowResult.Status.SUCCESS,
+        200, "0", "成功", "00123", null, 1));
+    var body = client.previewRejection("00123", "0001", "000987654321");
+    assertThat(body.path("RejectToNodeid").asText()).isEqualTo("000987654321");
+    assertThat(body.has("rejectNodeid")).isFalse();
+    client.reject(body);
+    verify(workflow).reject(eq(body));
+  }
+
+  @Test
+  void savedLegacyBatchIsConvertedOnlyForDelivery() {
+    when(workflow.reject(any())).thenReturn(new OaWorkflowResult("test", OaWorkflowResult.Status.SUCCESS,
+        200, "0", "成功", "00123", null, 1));
+    var saved = new ObjectMapper().createObjectNode().put("userid", "0001")
+        .put("requestId", "00123").put("RejectToType", "0").put("rejectNodeid", "000987654321");
+    var original = saved.deepCopy();
+    client.reject(saved);
+    verify(workflow).reject(argThat(body -> body.path("RejectToNodeid").asText().equals("000987654321")
+        && !body.has("rejectNodeid") && body.path("requestId").asText().equals("00123")));
+    assertThat(saved).isEqualTo(original);
+  }
+
+  @Test
+  void conflictingSavedNodesCannotChooseAnotherReturnTarget() {
+    var body = client.previewRejection("00123", "0001", "NODE1").put("rejectNodeid", "NODE2");
+    assertThatThrownBy(() -> client.reject(body)).hasMessageContaining("节点字段冲突");
+    verifyNoInteractions(workflow);
+  }
+
   OaTechnicalReturnClient.Request request(List<OaTechnicalReturnClient.Target> targets) {
     return new OaTechnicalReturnClient.Request(
         "1137224760702033922",

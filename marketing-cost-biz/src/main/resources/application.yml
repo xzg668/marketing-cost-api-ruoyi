@@ -70,11 +70,13 @@ integration:
     reject-base-url: ${OA_WORKFLOW_REJECT_BASE_URL:http://172.16.113.57:20600}
     read-timeout-ms: ${OA_WORKFLOW_READ_TIMEOUT_MS:30000}
     debug-enabled: ${OA_WORKFLOW_DEBUG_ENABLED:false}
-    # I07：商用三种流程的 OA 明细表 ID；正式环境可用环境变量或外部配置覆盖。
+    # I07：商用按流程、家用按业务类型选择明细表；环境变量或外部配置可覆盖。
     final-cost-sub-form-ids:
       "[FI-SC-005]": "${OA_I07_SC005_SUBFORM_ID:1315730937451335132}"
       "[FI-SC-006]": "${OA_I07_SC006_SUBFORM_ID:1317497487388790985}"
       "[FI-SC-020]": "${OA_I07_SC020_SUBFORM_ID:1315726685492431674}"
+      "[FI-SR-005_NEW]": "${OA_I07_SR005_NEW_SUBFORM_ID:1328371833677696778}"
+      "[FI-SR-005_MASS]": "${OA_I07_SR005_MASS_SUBFORM_ID:1328371833677696777}"
   oa-person-directory:
     # API 启动同步一次，此后每日同步；本地和服务器均需配置 OA 出站鉴权与查询地址。
     enabled: ${OA_PERSON_DIRECTORY_ENABLED:true}

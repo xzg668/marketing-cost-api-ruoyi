@@ -151,7 +151,8 @@ public class QuoteFinalSubmissionService {
     return oa.preview(document.requestId(), employee, document.processCode(), oaRows(costs));
   }
   private List<OaFinalCostSubmissionClient.Row> oaRows(List<CostLine> costs) {
-    return costs.stream().map(c -> new OaFinalCostSubmissionClient.Row(c.sourceRowIndex(), c.totalCost(), c.shippingFee())).toList();
+    return costs.stream().map(c -> new OaFinalCostSubmissionClient.Row(
+        c.sourceRowIndex(), c.totalCost(), c.shippingFee(), c.businessType())).toList();
   }
   private List<CostLine> currentCosts(OaForm form, String period, String operator) {
     var products = items.selectList(Wrappers.<OaFormItem>lambdaQuery().eq(OaFormItem::getOaFormId, form.getId())

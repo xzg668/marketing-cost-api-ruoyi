@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
-/** I04/I08：requestId 为 I01 流程 ID；未传 employeeNos 时由本单唯一有效分派确定技术员。 */
+/** I04/I08：reason 可不传或为空；未传 employeeNos 时由本单唯一有效分派确定技术员。 */
 public record OaWorkflowNotification(String requestId, String eventType, List<String> employeeNos,
     String reason) {
   public boolean technical() { return "TECHNICAL".equals(eventType); }
@@ -36,7 +36,7 @@ public record OaWorkflowNotification(String requestId, String eventType, List<St
       if (!technical && !numbers.isEmpty()) throw invalid(type + " 按整单处理，不接受技术员工号");
     }
     return new OaWorkflowNotification(requestId, type, List.copyOf(numbers),
-        text(root, "reason", Set.of("TECHNICAL", "COSTING").contains(type), 512));
+        text(root, "reason", false, 512));
   }
 
   private static String text(JsonNode root, String field, boolean required, int max) {

@@ -156,16 +156,6 @@ public class OaTechnicalBatchRepository {
         """, codec.write(confirmed), batch.id(), batch.returnAttempt()));
   }
 
-  /** 已鉴权的技术节点通知确认第二步结果；不重新发送，也不覆盖明确失败。 */
-  public void confirmReturnNotification(Batch batch, long notificationId) {
-    var result = new OaWorkflowResult("OA-NOTIFY:" + notificationId, OaWorkflowResult.Status.SUCCESS,
-        null, "0", "OA技术节点通知已确认原流程退回", batch.request().path("requestId").asText(), null, 0);
-    requireOne(jdbc.update("""
-        UPDATE lp_oa_technical_batch SET status='OA_ACCEPTED',result_json=?,updated_at=NOW(3)
-        WHERE id=? AND operation='I05' AND status='UNKNOWN' AND return_step='REJECT' AND return_attempt=?
-        """, codec.write(result), batch.id(), batch.returnAttempt()));
-  }
-
   public void received(String id, OaWorkflowResult result) {
     // 审批通知可能先于同步 HTTP 回执到达，已被通知确认的提交不能被迟到回执降级。
     if ("SUCCESS".equals(find(id, true).status())) return;
@@ -235,7 +225,7 @@ public class OaTechnicalBatchRepository {
 
   public List<Long> messageIds(String batchId) {
     return jdbc.queryForList(
-      "SELECT id FROM lp_oa_integration_message WHERE technical_batch_id=? ORDER BY id",
+      "SELECT id FROM lp_oa_integration_message WHERE technical_batch_id=? AND direction='OUTBOUND' ORDER BY id",
       Long.class,
       batchId
     );
@@ -252,7 +242,7 @@ public class OaTechnicalBatchRepository {
     jdbc.update(
       """
       UPDATE lp_oa_integration_message SET status=?,attempt_count=1,result_json=?,error_stage='DELIVERY',
-        error_code=?,error_message=?,processed_at=NOW(3) WHERE technical_batch_id=? AND status='RECEIVED'
+        error_code=?,error_message=?,processed_at=NOW(3) WHERE technical_batch_id=? AND direction='OUTBOUND' AND status='RECEIVED'
       """,
       status,
       codec.write(result),

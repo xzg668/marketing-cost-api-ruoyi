@@ -6,12 +6,13 @@ import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
 import java.math.BigDecimal;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.stereotype.Component;
 
 /** I07 黄色报文：整单成本写入与核算节点提交只发送一次。 */
 @Component
 public class OaFinalCostSubmissionClient {
-  public record Row(Integer sourceRowIndex, String cost, String shippingFee) {}
+  public record Row(Integer sourceRowIndex, String cost, String shippingFee, String businessType) {}
   private final ObjectMapper json;
   private final OaWorkflowClient workflow;
   private final OaWorkflowProperties properties;
@@ -32,7 +33,12 @@ public class OaFinalCostSubmissionClient {
     if (rows == null || rows.isEmpty()) throw new IllegalArgumentException("整单没有可提交的成本结果");
     String key = costField(processCode);
     String withShippingKey = costWithShippingField(processCode);
-    long subFormId = properties.requireFinalCostSubFormId(processCode);
+    String businessType = rows.getFirst().businessType();
+    if ("FI-SR-005".equals(processCode)
+        && rows.stream().anyMatch(row -> !Objects.equals(businessType, row.businessType()))) {
+      throw new IllegalArgumentException("FI-SR-005 产品明细的业务类型不一致，请核对原报价需求单");
+    }
+    long subFormId = properties.requireFinalCostSubFormId(processCode, businessType);
     var body = json.createObjectNode();
     body.put("userid", employeeNo);
     body.put("requestId", requestId);
@@ -62,6 +68,7 @@ public class OaFinalCostSubmissionClient {
       case "FI-SC-005" -> "hyfzcbbhs";
       case "FI-SC-006" -> "zcbbhs";
       case "FI-SC-020" -> "hysfzcbbhs";
+      case "FI-SR-005" -> "hysfzcbbhs";
       default -> throw new IllegalArgumentException("未配置该 OA 流程的含运费成本字段：" + processCode);
     };
   }
@@ -81,6 +88,7 @@ public class OaFinalCostSubmissionClient {
       case "FI-SC-005" -> "zcbbhyf";
       case "FI-SC-006" -> "zcb1bhs";
       case "FI-SC-020" -> "bhysfzcbbhs";
+      case "FI-SR-005" -> "zcbbhs";
       default -> throw new IllegalArgumentException("未配置该 OA 流程的最终成本字段：" + processCode);
     };
   }

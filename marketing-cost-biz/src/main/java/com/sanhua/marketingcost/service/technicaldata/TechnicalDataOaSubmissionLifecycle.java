@@ -88,20 +88,20 @@ public class TechnicalDataOaSubmissionLifecycle {
 
   public void returned(QuoteTechTask task, QuoteTechSubmission submission, long messageId, TechnicalDataActor operator, String reason) {
     var person = requireCurrent(task, submission);
-    if (reason == null || reason.isBlank()) throw conflict("退回必须提供原因");
     workflow.decision(submission.getId(), "RETURNED", messageId);
     var version = versions.verified(submission.getTechnicalVersionId(), submission.getProductId());
     recipients.revisionScope(person.id(), person.modules());
     restore(task, recipients.findById(person.id()), submission, operator.userId(), "SUBMITTED", reason);
     versions.transition(version, "RETURNED", operator.userId());
     audit.record(task, null, submission.getId(), "PERSON_RETURNED", "SUBMITTED", "OPEN",
-        person.name() + "：" + reason, operator, "oa-message:" + messageId, "TD-PERSON-RETURNED:" + submission.getId());
+        person.name() + (reason == null ? "" : "：" + reason), operator,
+        "oa-message:" + messageId, "TD-PERSON-RETURNED:" + submission.getId());
   }
 
   /** 财务定向退回经 OA 确认后调用；原提交保留当时的冻结内容。 */
   public void financeReturned(QuoteTechTask task, QuoteTechSubmission submission, long operatorId, String reason) {
     var person = requireCurrent(task, submission);
-    if (!TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus()) || reason == null || reason.isBlank()) throw conflict("报价员退回须关联已成功提交资料和原因");
+    if (!TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus())) throw conflict("报价员退回须关联已成功提交资料");
     restore(task, person, submission, operatorId, "RETURN_PENDING", reason);
   }
 

@@ -37,10 +37,25 @@ class OaWorkflowNotificationTest {
     assertThat(OaWorkflowNotification.parse(event("WF",type)).employeeNos()).isEmpty();
     assertThatThrownBy(()->OaWorkflowNotification.parse(event("WF",type,"001"))).hasMessageContaining("按整单");
   }
-  @ParameterizedTest @ValueSource(strings={"TECHNICAL","COSTING"})
-  void returnsRequireAReason(String type) {
-    var root=type.equals("TECHNICAL")?event("WF",type,"001"):event("WF",type);
-    root.put("reason","");assertThatThrownBy(()->OaWorkflowNotification.parse(root)).hasMessageContaining("reason");
+  @ParameterizedTest @ValueSource(strings={"TECHNICAL","COSTING","COMPLETED"})
+  void reasonMayBeOmittedNullEmptyOrBlank(String type) {
+    var root=event("WF",type);
+    root.remove("reason");
+    assertThat(OaWorkflowNotification.parse(root).reason()).isNull();
+    root.putNull("reason");
+    assertThat(OaWorkflowNotification.parse(root).reason()).isNull();
+    root.put("reason","");
+    assertThat(OaWorkflowNotification.parse(root).reason()).isNull();
+    root.put("reason"," \t\n");
+    assertThat(OaWorkflowNotification.parse(root).reason()).isNull();
+  }
+  @Test void suppliedReasonStillPreservesTextAndValidatesTypeAndLength() {
+    var root=event("WF","TECHNICAL").put("reason","损失率不对");
+    assertThat(OaWorkflowNotification.parse(root).reason()).isEqualTo("损失率不对");
+    root.put("reason",123);
+    assertThatThrownBy(()->OaWorkflowNotification.parse(root)).hasMessageContaining("reason");
+    root.put("reason","a".repeat(513));
+    assertThatThrownBy(()->OaWorkflowNotification.parse(root)).hasMessageContaining("reason");
   }
   @Test void completionAllowsEmptyReasonAndRejectsOldContractAndTypo() {
     assertThat(OaWorkflowNotification.parse(event("WF","COMPLETED").put("reason","")).reason()).isNull();

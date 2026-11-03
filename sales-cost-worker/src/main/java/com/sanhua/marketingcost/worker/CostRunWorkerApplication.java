@@ -93,6 +93,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     TechnicalDataQuoteSourceReader.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataSharedModuleQuery.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataDependencies.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalDataUnchangedModuleReuse.class,
     TechnicalDataSourceCheckService.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataPublicSourceCheck.class,
     TechnicalDataSalarySourceQuery.class,

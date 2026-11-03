@@ -159,6 +159,77 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
    http.perform(post(URL).header("Authorization",TOKEN).contentType("application/json").content("{"))
      .andExpect(status().isBadRequest());
  }
+ private ObjectNode emptyReason(ObjectNode notice, String representation) {
+   switch (representation) {
+     case "missing" -> notice.remove("reason");
+     case "null" -> notice.putNull("reason");
+     case "empty" -> notice.put("reason", "");
+     case "blank" -> notice.put("reason", " \t\n");
+     default -> throw new IllegalArgumentException(representation);
+   }
+   return notice;
+ }
+ private void receiveEmptyReasonAndCheckReplay(ObjectNode notice) throws Exception {
+   http.perform(post(URL).header("Authorization",TOKEN).contentType("application/json").content(notice.toString()))
+     .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("0"))
+     .andExpect(jsonPath("$.data.status").value("SUCCEEDED"));
+   String flow=notice.path("requestId").asText();
+   long version=flowVersion(flow);
+   assertThat(jdbc.queryForObject("SELECT reason FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,flow)).isNull();
+   var stored=jdbc.queryForMap("SELECT raw_payload,status FROM lp_oa_integration_message WHERE interface_type='WORKFLOW_EVENT' AND JSON_UNQUOTE(JSON_EXTRACT(raw_payload,'$.requestId'))=?",flow);
+   assertThat(codec.read(stored.get("raw_payload").toString())).isEqualTo(notice);
+   assertThat(stored.get("status")).isEqualTo("PROCESSED");
+   for (String representation:List.of("missing","null","empty","blank")) {
+     assertThat(receive(emptyReason(notice.deepCopy(),representation))).isEqualTo("SUCCEEDED");
+     assertThat(flowVersion(flow)).isEqualTo(version);
+   }
+   assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_integration_message WHERE interface_type='WORKFLOW_EVENT' AND JSON_UNQUOTE(JSON_EXTRACT(raw_payload,'$.requestId'))=?",Long.class,flow)).isEqualTo(1);
+ }
+ @ParameterizedTest @ValueSource(strings={"missing","null","empty","blank"})
+ void initialTechnicalNotificationAcceptsAnEmptyReason(String representation) throws Exception {
+   var f=technical(null,1,"001001",false,false);
+   jdbc.update("UPDATE lp_quote_tech_module SET oa_edit_allowed=0 WHERE product_id=?",f.productId());
+   receiveEmptyReasonAndCheckReplay(emptyReason(event(f.flow(),"TECHNICAL"),representation));
+   assertThat(flowState(f.flow())).isEqualTo("TECHNICAL");
+   assertThat(people.findById(f.personId()).todoStatus()).isEqualTo("OPEN");
+   assertThat(jdbc.queryForObject("SELECT oa_edit_allowed FROM lp_quote_tech_module WHERE product_id=?",Integer.class,f.productId())).isEqualTo(1);
+ }
+ @ParameterizedTest @ValueSource(strings={"missing","null","empty","blank"})
+ void technicalReturnAcceptsAnEmptyReasonForSubmittedAndLegacyApprovedVersions(String representation) throws Exception {
+   for (boolean legacyApproved:List.of(false,true)) {
+     var f=technical();
+     if (legacyApproved) {
+       accepted(f);
+       jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='APPROVED' WHERE id=?",f.submissionId());
+       jdbc.update("UPDATE lp_quote_tech_oa_recipient SET todo_status='DONE' WHERE id=?",f.personId());
+     }
+     receiveEmptyReasonAndCheckReplay(emptyReason(event(f.flow(),"TECHNICAL"),representation));
+     var person=people.findById(f.personId());
+     assertThat(person.todoStatus()).isEqualTo("OPEN");
+     assertThat(person.returnReason()).isNull();
+     assertThat(jdbc.queryForObject("SELECT current_edit_version_id FROM lp_quote_tech_product WHERE id=?",Long.class,f.productId())).isEqualTo(f.draftId());
+     assertThat(jdbc.queryForObject("SELECT oa_edit_allowed FROM lp_quote_tech_module WHERE product_id=?",Integer.class,f.productId())).isEqualTo(1);
+     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE id=?",Long.class,f.frozenId())).isEqualTo(1);
+   }
+ }
+ @ParameterizedTest @ValueSource(strings={"missing","null","empty","blank"})
+ void costReturnAcceptsAnEmptyReasonAndKeepsTheFrozenCost(String representation) throws Exception {
+   var f=finalSubmission();
+   jdbc.update("UPDATE sys_user SET employee_no='001001' WHERE user_id=1");
+   receiveEmptyReasonAndCheckReplay(emptyReason(event(f.flow(),"COSTING"),representation));
+   assertThat(flowState(f.flow())).isEqualTo("RECOSTING");
+   assertThat(jdbc.queryForObject("SELECT status FROM lp_quote_final_submission WHERE id=?",String.class,f.submissionId())).isEqualTo("RETURNED");
+   assertThat(jdbc.queryForObject("SELECT return_reason FROM lp_quote_final_submission WHERE id=?",String.class,f.submissionId())).isNull();
+   assertThat(jdbc.queryForObject("SELECT cost_snapshot_json FROM lp_quote_final_submission WHERE id=?",String.class,f.submissionId())).isEqualTo(f.snapshot());
+ }
+ @ParameterizedTest @ValueSource(strings={"missing","null","empty","blank"})
+ void completionAcceptsAnEmptyReason(String representation) throws Exception {
+   var f=finalSubmission();
+   receiveEmptyReasonAndCheckReplay(emptyReason(event(f.flow(),"COMPLETED"),representation));
+   assertThat(flowState(f.flow())).isEqualTo("COMPLETED");
+   assertThat(jdbc.queryForObject("SELECT status FROM lp_quote_final_submission WHERE id=?",String.class,f.submissionId())).isEqualTo("COMPLETED");
+   assertThat(jdbc.queryForObject("SELECT cost_snapshot_json FROM lp_quote_final_submission WHERE id=?",String.class,f.submissionId())).isEqualTo(f.snapshot());
+ }
  @Test void successfulSubmissionsNeedNoApprovalEventAndStillWaitForOtherTechnicians() throws Exception {
    var a=technical();var b=technical(a.flow(),1,"001001");var other=technical(a.flow(),9900002,"002002");
    accepted(a);accepted(b);

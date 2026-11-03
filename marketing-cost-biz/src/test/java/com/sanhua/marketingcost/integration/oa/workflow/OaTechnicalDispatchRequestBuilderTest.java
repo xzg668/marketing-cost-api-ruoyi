@@ -81,7 +81,7 @@ class OaTechnicalDispatchRequestBuilderTest {
     assertThatThrownBy(() -> builder.build(request, "0009")).hasMessageContaining("FI-SC-006").hasMessageContaining("请先确认OA字段");
   }
 
-  @ParameterizedTest @ValueSource(strings = {"FI-SC-006", "FI-SC-020"})
+  @ParameterizedTest @ValueSource(strings = {"FI-SC-006", "FI-SC-020", "FI-SR-005"})
   void configuredProcessUsesItsOwnPeopleFieldWithoutChangingTheScope(String process) {
     String field = "SIM_" + process.replace('-', '_') + "_JSY";
     properties.getTechnicalPeopleDataKeys().put(process, field);

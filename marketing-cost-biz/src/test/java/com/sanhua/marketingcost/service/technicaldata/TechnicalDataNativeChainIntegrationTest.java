@@ -48,6 +48,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
   @Autowired OaPersonDirectoryRepository directory;
 
   @Autowired TechnicalDataReturnService returns;
+  @Autowired OaTechnicalBatchRepository batches;
   @Autowired TechnicalDataGapStatusQuery gapStatus;
   @Autowired TechnicalDataOaSubmissionLifecycle lifecycle;
   @Autowired TechnicalDataNetLossApplicationService netLoss;
@@ -583,7 +584,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(returns.submit(req,ADMIN).status()).isEqualTo("SUCCESS");
     var order=inOrder(oa);
     order.verify(oa).submit(argThat(body->body.at("/formData/dataDetails/0/dataOptions").size()==2));
-    order.verify(oa).reject(argThat(body->body.path("rejectNodeid").asText().equals("00034567890123456789")
+    order.verify(oa).reject(argThat(body->body.path("RejectToNodeid").asText().equals("00034567890123456789")
         && body.path("userid").asText().equals("11101516") && body.path("requestId").asText().equals("FLOW-"+f.formId())));
     verifyNoMoreInteractions(oa);
     assertThat(documents.workbench(f.formId(),DING).tasks()).hasSize(2);
@@ -609,14 +610,18 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(returns.status(failed.batchId(),ADMIN).status()).isEqualTo("RETURN_FAILED");
     verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
     assertThatThrownBy(()->returns.retryRejection(failed.batchId(),2,null,DING)).hasMessageContaining("原报价员");
+    // 已上线的失败批次仍保存旧字段；重试转换报文，不能改写历史或重新读取其他节点。
+    jdbc.update("UPDATE lp_oa_technical_batch SET reject_request_json=JSON_REMOVE(JSON_SET(reject_request_json,'$.rejectNodeid',JSON_EXTRACT(reject_request_json,'$.RejectToNodeid')),'$.RejectToNodeid') WHERE id=?",failed.batchId());
+    var savedRejection=jdbc.queryForObject("SELECT reject_request_json FROM lp_oa_technical_batch WHERE id=?",String.class,failed.batchId());
     // 第二次调用只使用发送前固定的原需求节点，不能被发送期间的配置/来源更改替换。
     jdbc.update("UPDATE lp_oa_quote_document SET reject_to_node_id='CHANGED' WHERE oa_form_id=?",f.formId());
     success();
     var retried=returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN);
     assertThat(retried.status()).isEqualTo("SUCCESS"); assertThat(retried.attempt()).isEqualTo(3);
+    assertThat(jdbc.queryForObject("SELECT reject_request_json FROM lp_oa_technical_batch WHERE id=?",String.class,failed.batchId())).isEqualTo(savedRejection);
     assertThat(returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN).status()).isEqualTo("SUCCESS");
     verify(oa,times(1)).submit(any());
-    verify(oa,times(2)).reject(argThat(body->body.path("rejectNodeid").asText().equals("00034567890123456789")));
+    verify(oa,times(2)).reject(argThat(body->body.path("RejectToNodeid").asText().equals("00034567890123456789")));
     assertThat(jdbc.queryForObject("SELECT JSON_UNQUOTE(people_result_json->'$.status') FROM lp_oa_technical_batch WHERE id=?",String.class,failed.batchId())).isEqualTo("SUCCESS");
     save(task,DING,"9");
   }
@@ -704,7 +709,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     verify(oa,times(1)).submit(any());
     verify(oa,times(2)).reject(argThat(body->body.path("requestId").asText().equals("FLOW-"+f.formId())
         && body.path("userid").asText().equals("11101516")
-        && body.path("rejectNodeid").asText().equals("00034567890123456789")));
+        && body.path("RejectToNodeid").asText().equals("00034567890123456789")));
     assertThat(netLoss.get(repository.findProducts(task).getFirst().getId(),null,DING).editable()).isTrue();
     save(task,DING,"9.99");
   }
@@ -750,7 +755,9 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(people.current(task).getFirst().todoStatus()).isEqualTo("RETURN_PENDING");
   }
 
-  @Test void technicalNoticeConfirmsUnknownSecondStepForWholeProductWithoutResending() {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"missing","null","empty","blank"})
+  void technicalNoticeWithEmptyReasonKeepsUnknownReturnReadonlyWithoutResending(String representation) {
     var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
     var product=repository.findProducts(task).getFirst();
     long oldRate=repository.findModules(product.getId()).stream().filter(m->"NET_LOSS".equals(m.getModuleType()))
@@ -760,19 +767,138 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     var result=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
     assertThat(result.status()).isEqualTo("UNKNOWN");
     var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
-        .put("requestId","FLOW-"+f.formId()).put("eventType","TECHNICAL").put("reason","OA确认原退回已完成");
+        .put("requestId","FLOW-"+f.formId()).put("eventType","TECHNICAL");
+    switch(representation) {
+      case "null" -> notice.putNull("reason");
+      case "empty" -> notice.put("reason","");
+      case "blank" -> notice.put("reason"," \t\n");
+    }
     notice.putArray("employeeNos").add("12211470");
     var peer=new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL"));
     org.springframework.security.core.context.SecurityContextHolder.clearContext();
     assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
     assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
-    assertThat(returns.status(result.batchId(),ADMIN).status()).isEqualTo("SUCCESS");
-    assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE","NET_LOSS");
+    assertThat(returns.status(result.batchId(),ADMIN).status()).isEqualTo("UNKNOWN");
+    assertThat(people.current(task).getFirst().todoStatus()).isEqualTo("RETURN_PENDING");
+    assertThat(people.current(task).getFirst().returnReason()).isEqualTo("请调整填写金额");
     assertThat(repository.findModules(product.getId()).stream().filter(m->"NET_LOSS".equals(m.getModuleType()))
-        .findFirst().orElseThrow().getCurrentVersionId()).isNotEqualTo(oldRate);
-    assertThat(netLoss.get(product.getId(),null,DING).editable()).isTrue();
-    save(task,DING,"9.99");
+        .findFirst().orElseThrow().getCurrentVersionId()).isEqualTo(oldRate);
+    assertThat(netLoss.get(product.getId(),null,DING).editable()).isFalse();
+    assertThatThrownBy(()->save(task,DING,"9.99")).hasMessageContaining("未分派");
     verify(oa,times(1)).submit(any()); verify(oa,times(1)).reject(any());
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "false,SUCCESS", "false,REJECTED", "false,UNKNOWN", "false,EXCEPTION",
+      "true,SUCCESS", "true,REJECTED", "true,UNKNOWN", "true,EXCEPTION"})
+  void earlyTechnicalNoticeWaitsForExplicitRejectionResult(boolean retry, String receipt) throws Exception {
+    var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
+    var req=returnRequest(task,"PROFILE","NET_LOSS");
+    TechnicalDataReturnService.Result failed;
+    if (retry) {
+      doReturn(new OaWorkflowResult("reject",OaWorkflowResult.Status.REJECTED,200,"1200390","执行失败",
+          "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+      failed=returns.submit(req,ADMIN);
+      assertThat(failed.status()).isEqualTo("RETURN_FAILED");
+    } else failed=null;
+    var entered=new CountDownLatch(1); var finish=new CountDownLatch(1);
+    doAnswer(call->{
+      entered.countDown(); assertThat(finish.await(20,TimeUnit.SECONDS)).isTrue();
+      if ("EXCEPTION".equals(receipt)) throw new IllegalStateException("simulated response lost");
+      return new OaWorkflowResult("http-receipt",OaWorkflowResult.Status.valueOf(receipt),200,
+          "SUCCESS".equals(receipt)?"0":"1200390","接口原始回执","FLOW-"+f.formId(),null,1);
+    }).when(oa).reject(any());
+    var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+        .put("requestId","FLOW-"+f.formId()).put("eventType","TECHNICAL");
+    var peer=new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL"));
+    long productId=repository.findProducts(task).getFirst().getId();
+    String originalFlow=jdbc.queryForObject("SELECT state FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,"FLOW-"+f.formId());
+    var versions=jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version WHERE product_id=? ORDER BY id",productId);
+    try(var executor=Executors.newSingleThreadExecutor()) {
+      var sending=executor.submit(()->{materialActor();try {
+        return retry?returns.retryRejection(failed.batchId(),failed.attempt(),null,ADMIN):returns.submit(req,ADMIN);
+      } finally {clearActor();}});
+      assertThat(entered.await(20,TimeUnit.SECONDS)).isTrue();
+      try {
+        clearActor();
+        assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
+        assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
+        assertThat(people.current(task).getFirst().todoStatus()).isEqualTo("RETURN_PENDING");
+        assertThat(netLoss.get(productId,null,DING).editable()).isFalse();
+        assertThat(jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version WHERE product_id=? ORDER BY id",productId)).isEqualTo(versions);
+        assertThat(jdbc.queryForObject("SELECT state FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,"FLOW-"+f.formId())).isEqualTo(originalFlow);
+      } finally {finish.countDown();}
+      var result=sending.get(20,TimeUnit.SECONDS);
+      boolean accepted="SUCCESS".equals(receipt);
+      assertThat(result.status()).isEqualTo(accepted?"SUCCESS":"REJECTED".equals(receipt)?"RETURN_FAILED":"UNKNOWN");
+      assertThat(netLoss.get(productId,null,DING).editable()).isEqualTo(accepted);
+      assertThat(people.current(task).getFirst().returnReason()).isEqualTo("请调整填写金额");
+      assertThat(jdbc.queryForObject("SELECT state FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,"FLOW-"+f.formId())).isEqualTo(accepted?"TECHNICAL":originalFlow);
+      assertThat(jdbc.queryForList("SELECT status FROM lp_oa_integration_message WHERE technical_batch_id=? AND direction='INBOUND'",String.class,result.batchId()))
+          .containsExactly(accepted?"PROCESSED":"REJECTED".equals(receipt)?"REJECTED":"WAITING_HANDLER");
+      var after=jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version WHERE product_id=? ORDER BY id",productId);
+      assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
+      assertThat(jdbc.queryForList("SELECT * FROM lp_quote_tech_data_version WHERE product_id=? ORDER BY id",productId)).isEqualTo(after);
+      assertThat(returns.status(result.batchId(),ADMIN).status()).isEqualTo(result.status());
+      if (accepted) {
+        assertThat(result.oaResult().callId()).isEqualTo("http-receipt");
+        assertThat(result.oaResult().errorCode()).isEqualTo("0");
+        assertThat(people.current(task).getFirst().processingModules()).containsExactly("PROFILE","NET_LOSS");
+        save(task,DING,"9.99");
+      } else {
+        assertThat(after).isEqualTo(versions);
+        assertThatThrownBy(()->save(task,DING,"9.99")).hasMessageContaining("未分派");
+      }
+    }
+    verify(oa,times(1)).submit(any()); verify(oa,times(retry?2:1)).reject(any());
+  }
+
+  @Test void failedEarlyNoticeDoesNotPreventTheSameReturnFromSucceedingOnExplicitRetry() {
+    var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
+    long productId=repository.findProducts(task).getFirst().getId();
+    var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+        .put("requestId","FLOW-"+f.formId()).put("eventType","TECHNICAL");
+    var peer=new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL"));
+    var attempts=new java.util.concurrent.atomic.AtomicInteger();
+    doAnswer(call->{
+      assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
+      assertThat(netLoss.get(productId,null,DING).editable()).isFalse();
+      boolean success=attempts.incrementAndGet()==2;
+      return new OaWorkflowResult("actual-receipt",success?OaWorkflowResult.Status.SUCCESS:OaWorkflowResult.Status.REJECTED,
+          200,success?"0":"1200390",success?"成功":"执行失败","FLOW-"+f.formId(),null,1);
+    }).when(oa).reject(any());
+    var first=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
+    assertThat(first.status()).isEqualTo("RETURN_FAILED");
+    assertThat(netLoss.get(productId,null,DING).editable()).isFalse();
+    var retried=returns.retryRejection(first.batchId(),first.attempt(),null,ADMIN);
+    assertThat(retried.status()).isEqualTo("SUCCESS");
+    assertThat(retried.oaResult().errorCode()).isEqualTo("0");
+    assertThat(netLoss.get(productId,null,DING).editable()).isTrue();
+    assertThat(jdbc.queryForList("SELECT status FROM lp_oa_integration_message WHERE technical_batch_id=? AND direction='INBOUND'",String.class,first.batchId()))
+        .containsExactly("PROCESSED");
+    verify(oa,times(1)).submit(any()); verify(oa,times(2)).reject(any());
+  }
+
+  @Test void notificationAfterSuccessfulReceiptBeforeCompletionUsesTheActualReceipt() {
+    var f=submittedFixture(1,true); long task=f.taskIds().getFirst();
+    doReturn(new OaWorkflowResult("unknown",OaWorkflowResult.Status.UNKNOWN,null,"TIMEOUT","结果未知",
+        "FLOW-"+f.formId(),null,1)).when(oa).reject(any());
+    var result=returns.submit(returnRequest(task,"PROFILE","NET_LOSS"),ADMIN);
+    new TransactionTemplate(manager).executeWithoutResult(tx->{
+      jdbc.update("UPDATE lp_oa_technical_batch SET status='SENDING' WHERE id=?",result.batchId());
+      batches.receiveReturnStep(batches.find(result.batchId(),true),
+          new OaWorkflowResult("actual-success",OaWorkflowResult.Status.SUCCESS,200,"0","成功","FLOW-"+f.formId(),null,1));
+    });
+    var notice=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+        .put("requestId","FLOW-"+f.formId()).put("eventType","TECHNICAL");
+    clearActor();
+    assertThat(notices.receive(new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL")),notice.toString()).path("code").asText()).isEqualTo("0");
+    var completed=returns.status(result.batchId(),ADMIN);
+    assertThat(completed.status()).isEqualTo("SUCCESS");
+    assertThat(completed.oaResult().callId()).isEqualTo("actual-success");
+    assertThat(netLoss.get(repository.findProducts(task).getFirst().getId(),null,DING).editable()).isTrue();
+    verify(oa,times(1)).reject(any());
   }
 
   @Test void repeatedRetryRequestCannotResendAfterAnotherExplicitFailure() {

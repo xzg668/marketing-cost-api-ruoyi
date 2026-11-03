@@ -17,7 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
-/** 隔离浏览器核验：报价员修改原 remark 后按顺序重新同步和退回。 */
+/** 隔离浏览器核验：提前回调先接收，退回接口明确成功后才开放编辑。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
     "server.address=127.0.0.1", "app.cors.allowed-origins=http://127.0.0.1:15192",
     "integration.oa-person-directory.enabled=false", "integration.oa-person-directory.run-at-startup=false",
@@ -111,15 +111,36 @@ class OaReturnReasonBrowserSession extends TechnicalDataNativeChainIntegrationTe
             "FLOW-"+fixture.formId(),null,1)).when(oa).reject(any());
         pending=returns.submit(req,ADMIN);
         assertThat(pending.status()).isEqualTo("RETURN_FAILED");
+        // 模拟已发布版本保存的失败批次，浏览器继续退回时须发送修正后的 OA 字段。
+        jdbc.update("UPDATE lp_oa_technical_batch SET reject_request_json=JSON_REMOVE(JSON_SET(reject_request_json,'$.rejectNodeid',JSON_EXTRACT(reject_request_json,'$.RejectToNodeid')),'$.RejectToNodeid') WHERE id=?",pending.batchId());
         String oldNode=access.quoterNode(fixture.formId()).workItemId();
         var notice=json.createObjectNode().put("requestId","FLOW-"+fixture.formId())
-            .put("eventType","COSTING").put("reason","人工干预");
+            .put("eventType","COSTING");
         var peer=new com.sanhua.marketingcost.integration.oa.OaPeer("HZ_KG_OA_TST","TEST",Set.of("COMMERCIAL"));
         assertThat(notices.receive(peer,notice.toString()).path("code").asText()).isEqualTo("0");
         String newNode=access.quoterNode(fixture.formId()).workItemId();
         assertThat(newNode).isNotEqualTo(oldNode);
-        doAnswer(call->new OaWorkflowResult("browser-retry",OaWorkflowResult.Status.SUCCESS,200,"0","成功",
-            ((com.fasterxml.jackson.databind.node.ObjectNode)call.getArgument(0)).path("requestId").asText(),null,1)).when(oa).reject(any());
+        doAnswer(call->{
+          var body=json.createObjectNode().put("requestId","FLOW-"+fixture.formId()).put("eventType","TECHNICAL");
+          var callback=java.net.http.HttpRequest.newBuilder(java.net.URI.create(
+              "http://127.0.0.1:"+port+"/integration/v1/workflow-events"))
+              .timeout(Duration.ofSeconds(20)).header("Content-Type","application/json")
+              .header("Authorization","Bearer costing-node-isolated-test-token-32-characters")
+              .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body.toString())).build();
+          try(var http=java.net.http.HttpClient.newHttpClient()) {
+            var reply=http.send(callback,java.net.http.HttpResponse.BodyHandlers.ofString());
+            Files.writeString(Path.of(state+".early-callback"),json.writeValueAsString(Map.of(
+                "request",body,"httpStatus",reply.statusCode(),"response",json.readTree(reply.body()),
+                "beforeRejectRequestResponse",true,
+                "technicianEditableBeforeReceipt",netLoss.get(repository.findProducts(task).getFirst().getId(),null,DING).editable())));
+            assertThat(reply.statusCode()).isEqualTo(200);
+            assertThat(json.readTree(reply.body()).path("data").path("status").asText()).isEqualTo("SUCCEEDED");
+            assertThat(people.current(task).getFirst().todoStatus()).isEqualTo("RETURN_PENDING");
+            assertThat(netLoss.get(repository.findProducts(task).getFirst().getId(),null,DING).editable()).isFalse();
+          }
+          return new OaWorkflowResult("browser-retry",OaWorkflowResult.Status.SUCCESS,200,"0","成功",
+              ((com.fasterxml.jackson.databind.node.ObjectNode)call.getArgument(0)).path("requestId").asText(),null,1);
+        }).when(oa).reject(any());
         Files.writeString(Path.of(state+".return-ready"),json.writeValueAsString(Map.of(
             "batchId",pending.batchId(),"oldNode",oldNode,"newNode",newNode)));
       }
@@ -130,7 +151,21 @@ class OaReturnReasonBrowserSession extends TechnicalDataNativeChainIntegrationTe
     assertThat(pending).isNotNull();
     var result=returns.status(pending.batchId(),ADMIN);
     assertThat(result.status()).isEqualTo("SUCCESS");
+    assertThat(result.oaResult().callId()).isEqualTo("browser-retry");
+    assertThat(result.oaResult().errorCode()).isEqualTo("0");
+    assertThat(jdbc.queryForObject("SELECT state FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,
+        "FLOW-"+fixture.formId())).isEqualTo("TECHNICAL");
+    assertThat(jdbc.queryForObject("SELECT reason FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,
+        "FLOW-"+fixture.formId())).isNull();
     verify(oa,times(2)).submit(any()); verify(oa,times(2)).reject(any());
+    var rejections=org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.node.ObjectNode.class);
+    verify(oa,times(2)).reject(rejections.capture());
+    for(var rejection:rejections.getAllValues()) {
+      assertThat(rejection.path("RejectToNodeid").asText()).isEqualTo("00034567890123456789");
+      assertThat(rejection.has("rejectNodeid")).isFalse();
+    }
+    var savedRejection=jdbc.queryForObject("SELECT reject_request_json FROM lp_oa_technical_batch WHERE id=?",String.class,pending.batchId());
+    assertThat(json.readTree(savedRejection).path("rejectNodeid").asText()).isEqualTo("00034567890123456789");
     var requests=org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.node.ObjectNode.class);
     verify(oa,times(2)).submit(requests.capture());
     assertThat(requests.getAllValues().get(0).path("remark").asText()).contains("请调整净损失率");

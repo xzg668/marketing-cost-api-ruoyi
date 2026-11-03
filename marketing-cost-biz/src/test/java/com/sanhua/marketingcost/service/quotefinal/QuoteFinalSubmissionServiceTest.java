@@ -25,6 +25,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 @Tag("integration")
 class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase {
+  @org.springframework.test.context.DynamicPropertySource
+  static void pricingPeriod(org.springframework.test.context.DynamicPropertyRegistry registry) {
+    registry.add("monthly.reprice.go-live-months.COMMERCIAL", CostPricingPeriodUtils::currentPricingMonth);
+  }
+
   @Autowired QuoteFinalSubmissionService service;
   @Autowired QuoteFinalSubmissionRepository repository;
   @Autowired JdbcTemplate jdbc;
@@ -128,9 +133,16 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
   }
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.CsvSource({
-      "FI-SC-005,zcbbhyf,hyfzcbbhs", "FI-SC-006,zcb1bhs,zcbbhs", "FI-SC-020,bhysfzcbbhs,hysfzcbbhs"})
-  void finalWritebackAddsEachOriginalRowsFreightOnce(String process, String without, String with) {
+      "FI-SC-005,新品,zcbbhyf,hyfzcbbhs,1315730937451335132",
+      "FI-SC-006,批量品,zcb1bhs,zcbbhs,1317497487388790985",
+      "FI-SC-020,批量品,bhysfzcbbhs,hysfzcbbhs,1315726685492431674",
+      "FI-SR-005,新品,zcbbhs,hysfzcbbhs,1328371833677696778",
+      "FI-SR-005,衍生品,zcbbhs,hysfzcbbhs,1328371833677696778",
+      "FI-SR-005,批量品,zcbbhs,hysfzcbbhs,1328371833677696777"})
+  void finalWritebackAddsEachOriginalRowsFreightOnce(String process, String businessType,
+      String without, String with, String tableId) {
     jdbc.update("UPDATE oa_form SET process_code=? WHERE id=?", process, formId);
+    jdbc.update("UPDATE oa_form_item SET business_type=? WHERE oa_form_id=?", businessType, formId);
     when(oaContext.document(formId)).thenReturn(new TechnicalDataOaContext.Document(formId,requestId,process,
         new OaPeer("I07","TEST",Set.of("COMMERCIAL")),null));
     jdbc.update("UPDATE oa_form_item SET shipping_fee=1.2345,seq=7 WHERE id=?", items.getFirst());
@@ -143,6 +155,8 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
     var captured = ArgumentCaptor.forClass(ObjectNode.class); verify(oa).submit(captured.capture());
     var details = captured.getValue().at("/formData/dataDetails");
     assertThat(details.size()).isEqualTo(4);
+    details.forEach(field -> assertThat(field.path("subFormId").asText()).isEqualTo(tableId));
+    assertThat(submitted.costs()).allSatisfy(cost -> assertThat(cost.businessType()).isEqualTo(businessType));
     var actual = new HashMap<String, String>();
     details.forEach(field -> actual.put(field.path("dataIndex").asText()+":"+field.path("dataKey").asText(), field.path("content").asText()));
     assertThat(actual).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -151,6 +165,37 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
     jdbc.update("UPDATE oa_form_item SET shipping_fee=999 WHERE oa_form_id=?", formId);
     assertThat(read().costs()).isEqualTo(submitted.costs());
     send(before.fingerprint(), key()); verify(oa, times(1)).submit(any());
+  }
+
+  @Test void householdBusinessTypeChangeInvalidatesPreviewBeforeFreezingOrSending() {
+    household("新品");
+    var before = read();
+    assertThat(before.canConfirm()).isTrue();
+    jdbc.update("UPDATE oa_form_item SET business_type='批量品' WHERE oa_form_id=?", formId);
+    assertThatThrownBy(() -> send(before.fingerprint(), key())).hasMessageContaining("已变化");
+    assertThat(repository.latest(formId)).isNull();
+    verifyNoInteractions(oa);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.NullSource
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"UNKNOWN", "批量品"})
+  void householdInvalidOrMixedTypesCannotFreezeOrSend(String secondType) {
+    household("新品");
+    jdbc.update("UPDATE oa_form_item SET business_type=? WHERE id=?", secondType, items.getLast());
+    var state = read();
+    assertThat(state.canConfirm()).isFalse();
+    assertThat(state.error()).contains("业务类型");
+    assertThatThrownBy(() -> send(state.fingerprint(), key())).hasMessageContaining("业务类型");
+    assertThat(repository.latest(formId)).isNull();
+    verifyNoInteractions(oa);
+  }
+
+  private void household(String businessType) {
+    jdbc.update("UPDATE oa_form SET process_code='FI-SR-005' WHERE id=?", formId);
+    jdbc.update("UPDATE oa_form_item SET business_type=? WHERE oa_form_id=?", businessType, formId);
+    when(oaContext.document(formId)).thenReturn(new TechnicalDataOaContext.Document(formId, requestId,
+        "FI-SR-005", new OaPeer("I07", "TEST", Set.of("COMMERCIAL")), null));
   }
 
   @Test void changedFreightInvalidatesTheConfirmedPreviewBeforeSending() {

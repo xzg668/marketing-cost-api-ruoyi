@@ -21,10 +21,12 @@ public class OaWorkflowProperties {
   /** 退回接口可由 OA 直接提供，与 ESB 提交入口分别配置；留空沿用流程基地址。 */
   private String rejectBaseUrl;
   private int readTimeoutMs = 30000;
-  /** I07 的 OA 明细表 ID，按流程配置；与产品明细行 rowId 无关。字符串配置避免大整数精度丢失。 */
+  /** I07 明细表 ID；家用按新品/衍生品与批量品分别配置，字符串避免大整数精度丢失。 */
   private Map<String, String> finalCostSubFormIds = new LinkedHashMap<>();
-  /** I02/I05 共用的技术员表单字段。只默认已确认的005；其他流程须显式配置。 */
-  private Map<String, String> technicalPeopleDataKeys = new LinkedHashMap<>(Map.of("FI-SC-005", "jsy"));
+  /** I02/I05 共用的技术员表单字段；家用 FI-SR-005 使用已确认的同名字段。 */
+  private Map<String, String> technicalPeopleDataKeys = new LinkedHashMap<>(Map.of(
+      "FI-SC-005", "jsy",
+      "FI-SR-005", "FI-SR-005"));
 
   public String requireTechnicalPeopleDataKey(String processCode) {
     String value = technicalPeopleDataKeys == null ? null : technicalPeopleDataKeys.get(processCode);
@@ -38,10 +40,21 @@ public class OaWorkflowProperties {
     return key;
   }
 
-  public long requireFinalCostSubFormId(String processCode) {
-    String value = finalCostSubFormIds == null ? null : finalCostSubFormIds.get(processCode);
+  public long requireFinalCostSubFormId(String processCode, String businessType) {
+    String tableKey = processCode;
+    if ("FI-SR-005".equals(processCode)) {
+      if (businessType == null) {
+        throw new IllegalArgumentException("FI-SR-005 缺少原报价需求单的业务类型");
+      }
+      tableKey = switch (businessType) {
+        case "新品", "衍生品" -> "FI-SR-005_NEW";
+        case "批量品" -> "FI-SR-005_MASS";
+        default -> throw new IllegalArgumentException("FI-SR-005 业务类型须为新品、衍生品或批量品");
+      };
+    }
+    String value = finalCostSubFormIds == null ? null : finalCostSubFormIds.get(tableKey);
     if (value == null || value.isBlank()) {
-      throw new IllegalArgumentException("未配置 " + processCode + " 的 I07 明细表 ID（subFormId）");
+      throw new IllegalArgumentException("未配置 " + tableKey + " 的 I07 明细表 ID（subFormId）");
     }
     try {
       if (!value.matches("[0-9]+")) throw new NumberFormatException();
@@ -49,7 +62,7 @@ public class OaWorkflowProperties {
       if (id <= 0) throw new NumberFormatException();
       return id;
     } catch (NumberFormatException invalid) {
-      throw new IllegalArgumentException(processCode + " 的 I07 明细表 ID（subFormId）须为有效的正整数 LONG");
+      throw new IllegalArgumentException(tableKey + " 的 I07 明细表 ID（subFormId）须为有效的正整数 LONG");
     }
   }
 

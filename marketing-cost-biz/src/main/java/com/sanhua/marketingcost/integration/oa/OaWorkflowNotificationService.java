@@ -7,7 +7,7 @@ import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 成功回执意味着通知和业务修改在同一事务中已保存；整单锁避免通知与提交交叉修改。 */
+/** 通知和可执行的业务修改一并保存；I05 提前通知先接收，等待退回接口的明确成功回执。 */
 @Service
 public class OaWorkflowNotificationService {
   private final OaMessageRepository messages;
@@ -60,7 +60,9 @@ public class OaWorkflowNotificationService {
           repository.associate(flow, message.id(), hash);
         }
         String reply = codec.write(OaWorkflowReply.success());
-        repository.complete(message.id(), reply);
+        if (Set.of("WAITING_HANDLER", "REJECTED").contains(messages.findById(message.id()).status())) {
+          repository.acknowledgePendingReturn(message.id(), reply);
+        } else repository.complete(message.id(), reply);
         call.result("HANDLED", null, "0");
         return codec.read(reply);
       } catch (RuntimeException exception) {

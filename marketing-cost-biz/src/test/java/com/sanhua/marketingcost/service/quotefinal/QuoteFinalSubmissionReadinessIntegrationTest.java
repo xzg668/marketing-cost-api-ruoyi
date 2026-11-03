@@ -26,6 +26,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Tag("integration")
 class QuoteFinalSubmissionReadinessIntegrationTest extends OriginalPricingIntegrationTestBase {
+  @org.springframework.test.context.DynamicPropertySource
+  static void pricingPeriod(org.springframework.test.context.DynamicPropertyRegistry registry) {
+    registry.add("monthly.reprice.go-live-months.COMMERCIAL", CostPricingPeriodUtils::currentPricingMonth);
+  }
+
   @Autowired QuoteFinalSubmissionService service;
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager transactions;

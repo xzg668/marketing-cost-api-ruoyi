@@ -52,6 +52,12 @@ public class OaWorkflowNotificationRepository {
         """, reply, messageId);
   }
 
+  /** I05 的提前通知先保存接收回执，业务应用等待 rejectRequest 明确成功。 */
+  public void acknowledgePendingReturn(long messageId, String reply) {
+    jdbc.update("UPDATE lp_oa_integration_message SET result_json=? WHERE id=? AND status IN ('WAITING_HANDLER','REJECTED')",
+        reply, messageId);
+  }
+
   /** 技术审批后的报价员取实际 I02 操作人；成本退回取原成本提交人。 */
   public Quoter quoter(long formId, Long resultOperator) {
     List<Long> ids = resultOperator == null

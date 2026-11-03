@@ -42,6 +42,21 @@ class OaWorkflowConfigurationTest {
         .run(application -> assertThat(application).hasFailed());
   }
 
+  @Test void commercialFieldConfigurationPreservesHouseholdDefault() {
+    context.withPropertyValues(
+        "integration.oa-workflow.technical-people-data-keys[FI-SC-005]=jsy",
+        "integration.oa-workflow.technical-people-data-keys[FI-SC-006]=jsy",
+        "integration.oa-workflow.technical-people-data-keys[FI-SC-020]=jsy")
+        .run(application -> {
+          assertThat(application).hasNotFailed();
+          var properties = application.getBean(OaWorkflowProperties.class);
+          assertThat(properties.requireTechnicalPeopleDataKey("FI-SR-005")).isEqualTo("FI-SR-005");
+          for (String process : java.util.List.of("FI-SC-005", "FI-SC-006", "FI-SC-020")) {
+            assertThat(properties.requireTechnicalPeopleDataKey(process)).isEqualTo("jsy");
+          }
+        });
+  }
+
   @Configuration(proxyBeanMethods = false) @EnableConfigurationProperties
   static class Binding {}
 }

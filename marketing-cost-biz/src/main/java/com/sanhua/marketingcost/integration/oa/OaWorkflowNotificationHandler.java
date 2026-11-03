@@ -213,6 +213,7 @@ public class OaWorkflowNotificationHandler {
       OaWorkflowNotificationRepository.Document document, OaWorkflowNotificationRepository.Flow flow, Scope scope) {
     if (scope.submissionIds().isEmpty()) return enterTechnical(flow, scope);
     boolean changed = false;
+    boolean waitingForReturnReceipt = false;
     var operator = new TechnicalDataActor(0L, "OA状态通知", Set.of());
     for (long recipientId : scope.recipientIds()) {
       var person = recipients.findById(recipientId);
@@ -224,8 +225,8 @@ public class OaWorkflowNotificationHandler {
       if (pendingLocalReturn(person.id())) {
         var batchId = jdbc.queryForObject("SELECT technical_batch_id FROM lp_oa_integration_message WHERE id=?",
             String.class, person.returnMessageId());
-        returns.confirmFromNotification(batchId, event, message.id());
-        changed = true;
+        if (returns.confirmFromNotification(batchId, event, message.id())) changed = true;
+        else waitingForReturnReceipt = true;
         continue;
       }
       if ("APPROVED".equals(submission.getSubmissionStatus()) && "DONE".equals(person.todoStatus())) {
@@ -244,6 +245,7 @@ public class OaWorkflowNotificationHandler {
       confirmOutbound(submission.getOutboundMessageId(), message.id());
       changed = true;
     }
+    if (waitingForReturnReceipt) return false;
     for (long submissionId : scope.submissionIds()) {
       var batchIds = jdbc.queryForList("""
           SELECT m.technical_batch_id FROM lp_quote_tech_submission s JOIN lp_oa_integration_message m ON m.id=s.outbound_message_id

@@ -95,7 +95,7 @@ public class OaTechnicalReturnClient {
     }
     return json.createObjectNode().put("userid", line(employeeNo, "报价员工号"))
         .put("requestId", line(requestId, "原OA流程ID"))
-        .put("RejectToType", "0").put("rejectNodeid", rejectToNodeId);
+        .put("RejectToType", "0").put("RejectToNodeid", rejectToNodeId);
   }
 
   public OaWorkflowResult updateTechnicians(ObjectNode body) {
@@ -108,9 +108,18 @@ public class OaTechnicalReturnClient {
   }
 
   public OaWorkflowResult reject(ObjectNode body) {
+    // 已失败批次保存了旧协议字段；仅转换本次发送副本，保留原节点值与历史报文。
+    ObjectNode request = body.deepCopy();
+    var legacyNode = request.remove("rejectNodeid");
+    if (legacyNode != null) {
+      if (request.has("RejectToNodeid") && !request.get("RejectToNodeid").equals(legacyNode)) {
+        throw new IllegalArgumentException("退回记录的节点字段冲突，请核实原请求");
+      }
+      request.set("RejectToNodeid", legacyNode);
+    }
     try (var call = OaInterfaceLog.start("I05_TECHNICAL_RETURN")) {
-      call.business(body);
-      var result = workflow.reject(body);
+      call.business(request);
+      var result = workflow.reject(request);
       call.result(result.status().name(), result.httpStatus(), result.errorCode());
       return result;
     }
