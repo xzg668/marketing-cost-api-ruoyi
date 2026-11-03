@@ -22,7 +22,7 @@ public class CostRunWorkerProperties {
   private int lockTimeoutMinutes = 10;
   private int maxRetryCount = 3;
   private int writeBatchSize = 100;
-  private long pollIntervalMs = 5000L;
+  private long pollIntervalMs = 1000L;
   private Set<CostRunTaskScene> scenes =
       EnumSet.of(CostRunTaskScene.QUOTE);
   private String generatedId;
@@ -84,7 +84,7 @@ public class CostRunWorkerProperties {
   }
 
   public long getPollIntervalMs() {
-    return pollIntervalMs > 0 ? pollIntervalMs : 5000L;
+    return pollIntervalMs > 0 ? pollIntervalMs : 1000L;
   }
 
   public void setPollIntervalMs(long pollIntervalMs) {

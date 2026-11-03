@@ -810,7 +810,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     if (partCodes == null || partCodes.isEmpty()) {
       return Collections.emptySet();
     }
-    List<MaterialMasterRaw> parents = selectPackageComponentParents(organizationCode);
+    List<MaterialMasterRaw> parents = selectPackageComponentParents(partCodes, organizationCode);
     if (parents == null || parents.isEmpty()) {
       return Collections.emptySet();
     }
@@ -850,10 +850,10 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     return keys;
   }
 
-  private List<MaterialMasterRaw> selectPackageComponentParents(String organizationCode) {
+  private List<MaterialMasterRaw> selectPackageComponentParents(Set<String> partCodes, String organizationCode) {
     String organization = requiredMaterialOrganizationCode(organizationCode, "包装组件父件识别");
-    return materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(
-        MAIN_CATEGORY_PACKAGE, null, organization);
+    return materialMasterRawMapper.selectPackageComponentParentsByCodes(
+        MAIN_CATEGORY_PACKAGE, partCodes, organization);
   }
 
   /** T26：构造 1 行聚合行 DTO（partCode 留空，跟 Excel 见机表 r44/r45 显示一致） */

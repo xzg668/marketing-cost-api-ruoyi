@@ -16,7 +16,7 @@ class MaterialMasterRawMapperSqlTest {
     String sql = selectSql("selectLatestActiveBatchId", String.class, String.class);
 
     assertThat(sql).contains(
-        "MAX(import_batch_id)",
+        "ORDER BY import_batch_id DESC LIMIT 1",
         "active_flag = 1",
         "organization_code = #{organizationCode}",
         "source_type = #{sourceType}");
@@ -97,12 +97,14 @@ class MaterialMasterRawMapperSqlTest {
   @DisplayName("包装组件父件查询限定组织当前有效 raw")
   void packageComponentParentQueryUsesLatestActiveBatch() throws Exception {
     String sql = selectSql(
-        "selectPackageComponentParentsByLatestBatch", String.class, String.class, String.class);
+        "selectPackageComponentParentsByCodes", String.class, java.util.Collection.class, String.class);
 
     assertThat(sql).contains(
         "active_flag = 1",
         "organization_code = #{organizationCode}",
-        "main_category_name = #{mainCategoryName}");
+        "main_category_name = #{mainCategoryName}",
+        "material_code IN",
+        "<otherwise>AND 1 = 0</otherwise>");
     assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
   }
 

@@ -88,21 +88,15 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
   @Select("SELECT DISTINCT material_code FROM lp_bom_costing_row WHERE calculation_scope='' AND oa_no=#{oaNo}")
   List<String> selectDistinctMaterialCodesByOaNo(@Param("oaNo") String oaNo);
 
-  /** T5：主档同步必须按 BOM 成本行已经落表的组织分组，不能再按 OA 推断组织。 */
-  @Select(
-      "SELECT DISTINCT material_code, material_organization_code "
-          + "FROM lp_bom_costing_row "
-          + "WHERE oa_no=#{oaNo}")
-  List<BomCostingRow> selectDistinctMaterialCodesWithOrgByOaNo(@Param("oaNo") String oaNo);
-
-  /** 报价任务前置同步只读取本次核算月份，禁止历史 BOM 脏数据阻断当前批次。 */
+  /** 每个产品只同步自己的当前月份料号，整单不能在每个产品上重新同步全单。 */
   @Select(
       "SELECT DISTINCT material_code, material_organization_code "
           + "FROM lp_bom_costing_row "
           + "WHERE calculation_scope='' AND oa_no=#{oaNo} "
-          + "AND period_month=#{periodMonth}")
-  List<BomCostingRow> selectDistinctMaterialCodesWithOrgByOaNoAndPeriod(
+          + "AND oa_form_item_id=#{itemId} AND period_month=#{periodMonth}")
+  List<BomCostingRow> selectDistinctMaterialCodesWithOrgByProduct(
       @Param("oaNo") String oaNo,
+      @Param("itemId") Long itemId,
       @Param("periodMonth") String periodMonth);
 
   /**

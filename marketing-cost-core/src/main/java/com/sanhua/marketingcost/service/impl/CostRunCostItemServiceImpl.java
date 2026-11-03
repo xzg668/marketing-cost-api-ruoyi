@@ -2237,8 +2237,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     for (Map.Entry<String, Set<String>> entry : codesByOrganization.entrySet()) {
       String organizationCode = requiredMaterialOrganizationCode(entry.getKey());
       List<MaterialMasterRaw> rows =
-          materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(
-              MAIN_CATEGORY_PACKAGE, null, organizationCode);
+          materialMasterRawMapper.selectPackageComponentParentsByCodes(
+              MAIN_CATEGORY_PACKAGE, entry.getValue(), organizationCode);
       if (rows == null || rows.isEmpty()) {
         continue;
       }

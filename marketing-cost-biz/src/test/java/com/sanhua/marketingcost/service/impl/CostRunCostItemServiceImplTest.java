@@ -451,7 +451,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
@@ -685,7 +685,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     form.setProcessCode("FI-SC-006");
@@ -755,7 +755,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     ThreeExpenseRate rate = new ThreeExpenseRate();
@@ -820,7 +820,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
@@ -1385,7 +1385,7 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
 
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
     when(partMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(
@@ -1404,7 +1404,7 @@ class CostRunCostItemServiceImplTest {
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(newRawMaster("9830000025598", "包装组件")));
     // 原表五行合计 21.5318 / 底数 6，正式单价保留六位；最终包装成本为 3.768065。
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(newPart("9830000025598", new BigDecimal("3.588633"))));
@@ -1419,7 +1419,7 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
 
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("PLATE")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("PLATE")))
         .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
     when(partMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(newPart("9830000026238", new BigDecimal("2.000000"), "220", "PLATE")));
@@ -1428,7 +1428,7 @@ class CostRunCostItemServiceImplTest {
 
     assertThat(svc.sumPackageComponentParentAmount("OA-1", "1079900000536"))
         .isEqualByComparingTo(new BigDecimal("2.000000"));
-    verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("PLATE"));
+    verify(rawMapper).selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("PLATE"));
   }
 
   @Test
@@ -1439,7 +1439,7 @@ class CostRunCostItemServiceImplTest {
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
 
     // raw 主档无包装组件
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
 
     CostRunCostItemServiceImpl svc = buildBucketSvc(partMapper, rawMapper, bomMapper);
@@ -1454,7 +1454,7 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
 
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(newPart("NORMAL", BigDecimal.ONE)));
 
@@ -1573,7 +1573,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
   }

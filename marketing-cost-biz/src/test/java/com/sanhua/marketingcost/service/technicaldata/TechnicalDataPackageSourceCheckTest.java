@@ -118,7 +118,7 @@ class TechnicalDataPackageSourceCheckTest {
     when(materials.selectByLatestBatchAndCodes(java.util.Set.of("PK", "BOX"), null, "COMMERCIAL")).thenReturn(List.of(material));
     assertThat(check.check(context, TechnicalDataAvailability.MISSING).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
     verify(materials).selectByLatestBatchAndCodes(java.util.Set.of("PK", "BOX"), null, "COMMERCIAL");
-    verify(materials, never()).selectPackageComponentParentsByLatestBatch(any(), any(), any());
+    verify(materials, never()).selectPackageComponentParentsByCodes(any(), any(), any());
 
     var emptyParent = new com.sanhua.marketingcost.entity.QuoteBomSupplementDetail();
     emptyParent.setMaterialCode("PK"); emptyParent.setPath("/PRODUCT/OTHER/PK/"); emptyParent.setLevel(2);

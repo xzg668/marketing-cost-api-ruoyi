@@ -65,31 +65,25 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
 
   @Override
   @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-  public SyncResult syncByOaNo(String oaNo) {
-    return syncByScope(oaNo, null);
-  }
-
-  @Override
-  @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-  public SyncResult syncByOaNoAndPeriod(String oaNo, String periodMonth) {
+  public SyncResult syncProduct(String oaNo, Long itemId, String periodMonth) {
+    if (itemId == null || itemId <= 0) {
+      throw new IllegalArgumentException("itemId 必须为有效报价产品行");
+    }
     if (!StringUtils.hasText(periodMonth)) {
       throw new IllegalArgumentException("periodMonth 为空");
     }
-    return syncByScope(oaNo, periodMonth.trim());
+    return syncByScope(oaNo, itemId, periodMonth.trim());
   }
 
-  private SyncResult syncByScope(String oaNo, String periodMonth) {
+  private SyncResult syncByScope(String oaNo, Long itemId, String periodMonth) {
     if (!StringUtils.hasText(oaNo)) {
       throw new RuntimeException("oaNo 为空");
     }
     String oa = oaNo.trim();
 
-    // 1) OA 涉及的去重料号，按成本行已落表的 U9 料品组织分组。
+    // 1) 本产品涉及的去重料号，按成本行已落表的 U9 料品组织分组。
     List<BomCostingRow> costingScopes =
-        StringUtils.hasText(periodMonth)
-            ? bomCostingRowMapper.selectDistinctMaterialCodesWithOrgByOaNoAndPeriod(
-                oa, periodMonth)
-            : bomCostingRowMapper.selectDistinctMaterialCodesWithOrgByOaNo(oa);
+        bomCostingRowMapper.selectDistinctMaterialCodesWithOrgByProduct(oa, itemId, periodMonth);
     if (costingScopes == null || costingScopes.isEmpty()) {
       log.warn("OA {} 核算月 {} 在 lp_bom_costing_row 无 BOM 行，跳过同步", oa, periodMonth);
       return new SyncResult(0, 0, 0, null);
@@ -100,8 +94,7 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
       distinctCodes.addAll(scopedCodes);
     }
 
-    // 2) staging 最新有效批次。raw 表会保留历史批次，后续 U9 接口接入也会继续写 raw，
-    //    同步主表时必须固定到一个 active batch，避免同一批同步混入新旧数据。
+    // 2) 导入流水只用于追溯；实际取行按组织和料号读取当前有效态。
     Map<String, MaterialMaster> existingByCode = loadExistingByCode(distinctCodes);
     int stagingHits = 0;
     int affected = 0;
@@ -121,7 +114,7 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
       }
       batchTraces.add(organizationCode + ":" + batchId);
 
-      // 3) 拉这些料号在最新有效批次的 staging 行
+      // 3) 拉这些料号当前有效的 staging 行
       List<MaterialMasterRaw> raws = selectRawRows(codes, organizationCode);
       if (raws == null || raws.isEmpty()) {
         log.warn(
@@ -141,8 +134,8 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
       affected += masterMapper.upsertBatch(rows);
     }
     log.info(
-        "T15 主档同步: oa={} materialOrgs={} codes={} stagingHits={} affected={} importTrace={}",
-        oa, codesByOrganization.keySet(), distinctCodes.size(), stagingHits, affected, batchTraces);
+        "产品主档同步: oa={} itemId={} month={} materialOrgs={} codes={} stagingHits={} affected={} importTrace={}",
+        oa, itemId, periodMonth, codesByOrganization.keySet(), distinctCodes.size(), stagingHits, affected, batchTraces);
     return new SyncResult(distinctCodes.size(), stagingHits, affected, String.join(",", batchTraces));
   }
 

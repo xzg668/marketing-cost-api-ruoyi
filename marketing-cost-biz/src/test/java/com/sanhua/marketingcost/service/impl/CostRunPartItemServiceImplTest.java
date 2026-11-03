@@ -570,7 +570,7 @@ class CostRunPartItemServiceImplTest {
             storedPart("OA-1", "P-1", "PKG-PARENT", "包装组件", "12.000000"),
             storedPart("OA-1", "P-1", "NORMAL", "普通子件", "2.000000")));
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(rawParent("PKG-PARENT")));
 
     CostRunPartItemServiceImpl svc =
@@ -599,7 +599,7 @@ class CostRunPartItemServiceImplTest {
     assertThat(packageRow.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     assertThat(items).anyMatch(item -> "NORMAL".equals(item.getPartCode()));
     assertThat(items).filteredOn(item -> "PKG-PARENT".equals(item.getPartCode())).hasSize(1);
-    verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL"));
+    verify(rawMapper).selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL"));
   }
 
   @Test
@@ -639,7 +639,7 @@ class CostRunPartItemServiceImplTest {
     normalPart.setBusinessUnitType("COMMERCIAL");
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(packagePart, normalPart));
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(rawParent("PKG-PARENT")));
 
     CostRunPartItemServiceImpl svc =
@@ -707,7 +707,7 @@ class CostRunPartItemServiceImplTest {
                 "0.76269554",
                 "联动价")));
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("PLATE")))
+    when(rawMapper.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("PLATE")))
         .thenReturn(List.of());
     MaterialMasterRaw parentArchive = rawMaterial("1053000301687", "A板片组件", "S012B-05101", "制造件");
     MaterialMasterRaw copperArchive =

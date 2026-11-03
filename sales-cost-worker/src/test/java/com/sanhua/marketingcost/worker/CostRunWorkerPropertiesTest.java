@@ -65,7 +65,7 @@ class CostRunWorkerPropertiesTest {
     assertThat(properties.getLockTimeoutMinutes()).isEqualTo(10);
     assertThat(properties.getMaxRetryCount()).isZero();
     assertThat(properties.getWriteBatchSize()).isEqualTo(100);
-    assertThat(properties.getPollIntervalMs()).isEqualTo(5000L);
+    assertThat(properties.getPollIntervalMs()).isEqualTo(1000L);
     assertThat(properties.getScenes())
         .containsExactly(CostRunTaskScene.QUOTE);
   }

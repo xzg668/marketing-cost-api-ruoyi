@@ -30,13 +30,13 @@ class MaterialMasterSyncServiceImplTest {
   // ============== 业务流程 ==============
 
   @Test
-  @DisplayName("syncByOaNo 正常路径：BOM 有码 + staging 命中 → upsertBatch 被调用")
+  @DisplayName("syncProduct 正常路径：BOM 有码 + staging 命中 → upsertBatch 被调用")
   void sync_happyPath() {
     BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-1"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByProduct("OA-1", 11L, "2026-08"))
         .thenReturn(List.of(costingRow("M-001", "COMMERCIAL"), costingRow("M-002", "COMMERCIAL")));
     when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
 
@@ -51,7 +51,7 @@ class MaterialMasterSyncServiceImplTest {
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    SyncResult res = svc.syncByOaNo("OA-1");
+    SyncResult res = svc.syncProduct("OA-1", 11L, "2026-08");
 
     assertThat(res.distinctCodes()).isEqualTo(2);
     assertThat(res.stagingHits()).isEqualTo(2);
@@ -75,13 +75,13 @@ class MaterialMasterSyncServiceImplTest {
   }
 
   @Test
-  @DisplayName("报价批次主档同步只读取指定核算月份，不扫描历史 BOM")
+  @DisplayName("产品主档同步只读取指定产品和月份，不扫描其他产品或历史 BOM")
   void sync_scopesQuoteBatchToPricingMonth() {
     BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNoAndPeriod("OA-SCOPED", "2026-08"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByProduct("OA-SCOPED", 11L, "2026-08"))
         .thenReturn(List.of(costingRow("M-CURRENT", "COMMERCIAL")));
     when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
     when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
@@ -90,12 +90,11 @@ class MaterialMasterSyncServiceImplTest {
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    SyncResult result = svc.syncByOaNoAndPeriod("OA-SCOPED", "2026-08");
+    SyncResult result = svc.syncProduct("OA-SCOPED", 11L, "2026-08");
 
     assertThat(result.distinctCodes()).isEqualTo(1);
     verify(bomMapper)
-        .selectDistinctMaterialCodesWithOrgByOaNoAndPeriod("OA-SCOPED", "2026-08");
-    verify(bomMapper, never()).selectDistinctMaterialCodesWithOrgByOaNo(any());
+        .selectDistinctMaterialCodesWithOrgByProduct("OA-SCOPED", 11L, "2026-08");
   }
 
   @Test
@@ -105,7 +104,7 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-KEEP"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByProduct("OA-KEEP", 11L, "2026-08"))
         .thenReturn(List.of(costingRow("M-KEEP", "COMMERCIAL")));
     when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
     MaterialMasterRaw raw = new MaterialMasterRaw();
@@ -126,7 +125,7 @@ class MaterialMasterSyncServiceImplTest {
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    svc.syncByOaNo("OA-KEEP");
+    svc.syncProduct("OA-KEEP", 11L, "2026-08");
 
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<SyncMaterialMasterRow>> captor = ArgumentCaptor.forClass(List.class);
@@ -144,7 +143,7 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-FILL"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByProduct("OA-FILL", 11L, "2026-08"))
         .thenReturn(List.of(costingRow("M-FILL", "COMMERCIAL")));
     when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
     MaterialMasterRaw raw = newRaw("M-FILL", "2.75", null, null, "商用部品");
@@ -155,7 +154,7 @@ class MaterialMasterSyncServiceImplTest {
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    svc.syncByOaNo("OA-FILL");
+    svc.syncProduct("OA-FILL", 11L, "2026-08");
 
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<SyncMaterialMasterRow>> captor = ArgumentCaptor.forClass(List.class);
@@ -173,12 +172,12 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-EMPTY"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByProduct("OA-EMPTY", 11L, "2026-08"))
         .thenReturn(List.of());
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    SyncResult res = svc.syncByOaNo("OA-EMPTY");
+    SyncResult res = svc.syncProduct("OA-EMPTY", 11L, "2026-08");
 
     assertThat(res.distinctCodes()).isZero();
     assertThat(res.stagingHits()).isZero();
@@ -193,13 +192,13 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-X"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByProduct("OA-X", 11L, "2026-08"))
         .thenReturn(List.of(costingRow("M-001", "COMMERCIAL")));
     when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn(null);
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    SyncResult result = svc.syncByOaNo("OA-X");
+    SyncResult result = svc.syncProduct("OA-X", 11L, "2026-08");
 
     assertThat(result.distinctCodes()).isEqualTo(1);
     assertThat(result.stagingHits()).isZero();
@@ -214,12 +213,12 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-NO-ORG"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByProduct("OA-NO-ORG", 11L, "2026-08"))
         .thenReturn(List.of(costingRow("M-001", null)));
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    SyncResult result = svc.syncByOaNo("OA-NO-ORG");
+    SyncResult result = svc.syncProduct("OA-NO-ORG", 11L, "2026-08");
 
     assertThat(result.distinctCodes()).isZero();
     assertThat(result.stagingHits()).isZero();

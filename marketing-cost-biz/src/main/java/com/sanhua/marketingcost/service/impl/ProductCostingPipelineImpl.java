@@ -183,7 +183,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
         return bomBlocked;
       }
       // BOM 行生成后再同步本轮实际涉及的料号，避免前置同步读取上一轮成本行。
-      materialMasterSyncService.syncByOaNoAndPeriod(scope.oaNo(), scope.periodMonth());
+      materialMasterSyncService.syncProduct(scope.oaNo(), scope.itemId(), scope.periodMonth());
 
       stage = STEP_PRICE;
       QuotePricePrepareGenerateRequest priceRequest = new QuotePricePrepareGenerateRequest();

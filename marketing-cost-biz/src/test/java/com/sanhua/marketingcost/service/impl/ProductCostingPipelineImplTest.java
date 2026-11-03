@@ -127,6 +127,7 @@ class ProductCostingPipelineImplTest {
     assertThat(result.getSourceRevision()).isNotBlank();
     assertThat(result.getCostVersionId()).isNull();
     assertThat(result.getPricePrepareNo()).isNull();
+    verify(syncService).syncProduct("OA-1", 11L, MONTH);
     verify(priceService).checkPriceSources(anyString(), anyLong(), any());
     verify(priceService, never()).generate(anyString(), anyLong(), any());
     verify(stateService, never()).bindCurrentPriceFingerprint(anyString(), anyLong(), anyString(), anyString());

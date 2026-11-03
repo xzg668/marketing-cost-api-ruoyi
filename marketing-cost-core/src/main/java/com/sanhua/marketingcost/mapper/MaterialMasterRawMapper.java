@@ -39,13 +39,14 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
   /** 查 staging 指定组织的最近一次导入流水，仅用于追溯展示；无数据返 null。 */
   @Select({
       "<script>",
-      "SELECT MAX(import_batch_id)",
+      "SELECT import_batch_id",
       "FROM lp_material_master_raw",
       "WHERE active_flag = 1",
       "  AND organization_code = #{organizationCode}",
       "<if test='sourceType != null and sourceType != \"\"'>",
       "  AND source_type = #{sourceType}",
       "</if>",
+      "ORDER BY import_batch_id DESC LIMIT 1",
       "</script>"
   })
   String selectLatestActiveBatchId(
@@ -213,30 +214,28 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
   }
 
   /**
-   * 按当前有效组织读取包装组件父件候选。
+   * 只识别当前产品实际涉及的包装组件父件，不读取该组织全部包装组件。
    *
    * <p>包装组件父件常是 U9 虚拟件，不一定同步到主表；必须查 raw，且要限定组织。
    */
   @Select({
       "<script>",
-      "SELECT *",
+      "SELECT material_code",
       "FROM lp_material_master_raw",
       "WHERE active_flag = 1",
       "  AND organization_code = #{organizationCode}",
-      "<if test='sourceType != null and sourceType != \"\"'>",
-      "  AND source_type = #{sourceType}",
-      "</if>",
       "  AND main_category_name = #{mainCategoryName}",
+      "<choose>",
+      "<when test='codes != null and !codes.isEmpty()'>",
+      "AND material_code IN",
+      "<foreach collection='codes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
+      "</when>",
+      "<otherwise>AND 1 = 0</otherwise>",
+      "</choose>",
       "</script>"
   })
-  List<MaterialMasterRaw> selectPackageComponentParentsByLatestBatch(
+  List<MaterialMasterRaw> selectPackageComponentParentsByCodes(
       @Param("mainCategoryName") String mainCategoryName,
-      @Param("sourceType") String sourceType,
+      @Param("codes") Collection<String> codes,
       @Param("organizationCode") String organizationCode);
-
-  /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
-  default List<MaterialMasterRaw> selectPackageComponentParentsByLatestBatch(
-      String mainCategoryName, String sourceType) {
-    throw new IllegalArgumentException("读取 U9 料品档案必须显式传入 organizationCode");
-  }
 }

@@ -40,6 +40,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
   @Autowired TechnicalDataDocumentSubmissionService documents;
   @Autowired TechnicalDataProfileApplicationService profiles;
   @Autowired TechnicalDataTaskApplicationService views;
+  @Autowired TechnicalDataSubmissionValidationService validation;
   @Autowired TechnicalDataReadPolicy readPolicy;
   @Autowired com.sanhua.marketingcost.service.platematerial.PlateMaterialMappingService plateMappings;
   @Autowired OaIntegrationProperties properties;
@@ -213,6 +214,33 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_submission WHERE task_id=?", Integer.class, task)).isZero();
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_technical_batch WHERE oa_form_id=? AND operation='I03'",
         Integer.class, f.formId())).isZero();
+  }
+
+  @Test void unchangedReturnedProfileDoesNotDisableResubmissionWhenPublicSourceChanges() {
+    var f = submittedFixture(1, true);
+    long task = f.taskIds().getFirst();
+    var product = repository.findProducts(task).getFirst();
+    var history = jdbc.queryForList("SELECT * FROM lp_quote_tech_submission WHERE task_id=? ORDER BY id", task);
+    jdbc.update("""
+        INSERT INTO lp_material_master_raw(organization_code,material_code,material_model,
+          production_division,active_flag,import_batch_id)
+        VALUES('COMMERCIAL',?,?,'其他事业部',1,'RETURN-RESUBMIT-TEST')
+        """, product.getMaterialNo(), product.getSourceModel());
+    assertThat(returns.submit(returnRequest(task, "PROFILE", "NET_LOSS"), ADMIN).status()).isEqualTo("SUCCESS");
+    assertThat(documents.workbench(f.formId(), DING).canSubmit()).isFalse();
+    save(task, DING, "2.50");
+    saveRate(task, "1");
+    assertThat(views.detail(task, DING).products().getFirst().profile().plateMaterial().sourceChanged()).isTrue();
+    assertThat(validation.validate(task, DING.userId(), DING).valid()).isTrue();
+    assertThat(repository.findModules(product.getId()).stream().filter(m -> "PROFILE".equals(m.getModuleType())))
+        .singleElement().satisfies(m -> assertThat(m.getLastValidationCode()).isEqualTo("REUSED_SUBMITTED"));
+    assertThat(documents.workbench(f.formId(), DING).canSubmit()).isTrue();
+    assertThat(documents.submit(f.formId(), request(f.formId(), DING), DING).status()).isEqualTo("SUCCESS");
+    for (var row : history) {
+      assertThat(jdbc.queryForObject("SELECT content_snapshot_json FROM lp_quote_tech_submission WHERE id=?",
+          String.class, row.get("id"))).isEqualTo(row.get("content_snapshot_json"));
+    }
+    assertThat(documents.workbench(f.formId(), DING).canSubmit()).isFalse();
   }
 
   @Test void twoProductsUseOneI03AndDraftIsPrivateAndOverwritten() {

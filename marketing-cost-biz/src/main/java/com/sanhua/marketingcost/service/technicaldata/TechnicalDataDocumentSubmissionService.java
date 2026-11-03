@@ -53,6 +53,7 @@ public class TechnicalDataDocumentSubmissionService {
   private final TechnicalDataOaRecipientRepository recipients;
   private final TechnicalDataOaWorkflowRepository workflow;
   private final TechnicalDataSubmissionValidationService validation;
+  private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataSubmissionSnapshotService snapshots;
   private final TechnicalDataParticipantVersions versions;
   private final TechnicalDataOaSubmissionLifecycle lifecycle;
@@ -74,6 +75,7 @@ public class TechnicalDataDocumentSubmissionService {
     TechnicalDataOaRecipientRepository recipients,
     TechnicalDataOaWorkflowRepository workflow,
     TechnicalDataSubmissionValidationService validation,
+    TechnicalDataUnchangedModuleReuse reuse,
     TechnicalDataSubmissionSnapshotService snapshots,
     TechnicalDataParticipantVersions versions,
     TechnicalDataSubmissionRemark remarks,
@@ -94,6 +96,7 @@ public class TechnicalDataDocumentSubmissionService {
     this.recipients = recipients;
     this.workflow = workflow;
     this.validation = validation;
+    this.reuse = reuse;
     this.snapshots = snapshots;
     this.versions = versions;
     this.remarks = remarks;
@@ -128,20 +131,19 @@ public class TechnicalDataDocumentSubmissionService {
       }
       if ("OPEN".equals(person.todoStatus())) open = true;
       if (Set.of("PREPARED", "RETURN_PENDING").contains(person.todoStatus())) pending = true;
-      var modules = taskRepository.findModules(
-        views
-          .stream()
-          .filter(view -> view.id() == id)
-          .findFirst()
-          .orElseThrow()
-          .products()
-          .getFirst()
-          .id()
-      );
-      var plate = views.stream().filter(view -> view.id() == id).findFirst().orElseThrow()
-          .products().getFirst().profile().plateMaterial();
+      var productView = views.stream().filter(view -> view.id() == id).findFirst().orElseThrow()
+          .products().getFirst();
+      var modules = taskRepository.findModules(productView.id());
+      var plate = productView.profile().plateMaterial();
       boolean plateConfirmed = !person.processingModules().contains("PROFILE") || plate == null
           || plate.historical() || plate.saved() != null && !plate.sourceChanged();
+      if (!plateConfirmed) {
+        var product = products.findProduct(productView.id()).orElseThrow();
+        var draft = product.getCurrentEditVersionId() == null ? null
+            : products.findVersion(product.getCurrentEditVersionId()).orElseThrow();
+        // 与提交校验、冻结共用规则：退回后未修改的资料可沿用原提交快照。
+        plateConfirmed = reuse.unchanged(product, draft, "PROFILE");
+      }
       if (
         plateConfirmed && !person.processingModules().isEmpty() &&
         person

@@ -54,7 +54,7 @@ cost:
       threads: ${COST_RUN_WORKER_THREADS:4}
       claim-batch-size: ${COST_RUN_WORKER_CLAIM_BATCH_SIZE:20}
       write-batch-size: ${COST_RUN_WORKER_WRITE_BATCH_SIZE:100}
-      poll-interval-ms: ${COST_RUN_WORKER_POLL_INTERVAL_MS:5000}
+      poll-interval-ms: ${COST_RUN_WORKER_POLL_INTERVAL_MS:1000}
       lock-timeout-minutes: ${COST_RUN_WORKER_LOCK_TIMEOUT_MINUTES:10}
       max-retry-count: ${COST_RUN_WORKER_MAX_RETRY_COUNT:3}
       scenes: ${COST_RUN_WORKER_SCENES:QUOTE}

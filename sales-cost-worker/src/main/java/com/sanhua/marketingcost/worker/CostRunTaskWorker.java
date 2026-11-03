@@ -47,7 +47,7 @@ public class CostRunTaskWorker {
     this.properties = properties;
   }
 
-  @Scheduled(fixedDelayString = "${cost.run.worker.poll-interval-ms:5000}")
+  @Scheduled(fixedDelayString = "${cost.run.worker.poll-interval-ms:1000}")
   public void scheduledScan() {
     scanOnce();
   }
