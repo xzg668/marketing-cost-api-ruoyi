@@ -12,7 +12,9 @@ class TechnicalDataSharedModuleQueryTest {
   private final TechnicalDataSharedModules shared = mock(TechnicalDataSharedModules.class);
   private final QuoteTechnicalDataRepository versions = mock(QuoteTechnicalDataRepository.class);
   private final TechnicalDataSharedModuleQuery query = new TechnicalDataSharedModuleQuery(shared, versions,
-      mock(TechnicalDataVersionContentCodec.class), mock(TechnicalDataDependencies.class), mock(TechnicalDataTaskRepository.class));
+      mock(TechnicalDataVersionContentCodec.class), mock(TechnicalDataDependencies.class), mock(TechnicalDataTaskRepository.class),
+      mock(com.sanhua.marketingcost.mapper.OaFormItemMapper.class), mock(com.sanhua.marketingcost.mapper.OaFormMapper.class),
+      mock(com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver.class), mock(TechnicalDataPriceRequirements.class));
   private final TechnicalDataProductSource target = new TechnicalDataProductSource(20L, "QUOTE-B", 22L,
       "B", 1, "PRODUCT-X", "产品", null, null, null, null, null, null, null, "COMMERCIAL", "210", "COMMERCIAL");
 
@@ -28,8 +30,8 @@ class TechnicalDataSharedModuleQueryTest {
     when(shared.find("PRODUCT-X", 22L, "NET_LOSS")).thenReturn(owner("COMMERCIAL", "210", "2026-08", "RETURNED", "DRAFT"));
     var result = query.describe(target, "2026-09", List.of(fact(TechnicalDataAvailability.MISSING)));
     assertThat(result).hasSize(1);
-    assertThat(result.getFirst().status()).isEqualTo("IN_PROGRESS");
-    assertThat(result.getFirst().message()).contains("王工", "不能重复补录");
+    assertThat(result.getFirst().status()).isEqualTo("SAVED");
+    assertThat(result.getFirst().message()).contains("王工", "已有资料", "无需重复补录");
     assertThat(result.getFirst().sourceVersionId()).isNull();
     verifyNoInteractions(versions);
   }
@@ -66,6 +68,41 @@ class TechnicalDataSharedModuleQueryTest {
         "CANCELLED", source.moduleStatus(), source.assigneeId(), source.assigneeName(), source.versionId(), source.versionStatus(),
         source.businessUnit(), source.organization(), source.accountingMonth()));
     assertThat(query.describe(target, "2026-09", List.of(fact(TechnicalDataAvailability.MISSING)))).isEmpty();
+  }
+
+  @Test void sharedSubmittedModuleDoesNotBlockOtherUnfilledModules() {
+    var checkedAt = LocalDateTime.now();
+    var requirements = List.of(
+        new TechnicalDataModuleRequirement("PROFILE", true, "MISSING", "缺产品资料", TechnicalDataAvailability.MISSING, null, checkedAt),
+        new TechnicalDataModuleRequirement("NET_LOSS", true, "MISSING", "缺净损失率", TechnicalDataAvailability.MISSING, null, checkedAt));
+    var sources = List.of(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSharedModuleInfo(
+        "NET_LOSS", "SUBMITTED", 3L, 2L, 9L, "saved", "王工", "已有资料"));
+    var result = TechnicalDataSharedModuleQuery.applySharedSources(requirements, sources);
+    assertThat(result).filteredOn(TechnicalDataModuleRequirement::required)
+        .extracting(TechnicalDataModuleRequirement::moduleType).containsExactly("PROFILE");
+    assertThat(result.getLast().reasonCode()).isEqualTo("SHARED_MODULE_SUBMITTED");
+    assertThat(result.getLast().sourceReference()).contains("3", "9", "saved");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"PROFILE", "DRAWING_BOM", "MANUFACTURING", "PACKAGE", "AUXILIARY", "SOLDER", "SALARY", "NET_LOSS"})
+  void everySavedSupplementModuleIsSharedWithoutReadingOrPublishingDraftContent(String type) {
+    var base = owner("COMMERCIAL", "210", "2026-09", "READY", "DRAFT");
+    var source = new TechnicalDataSharedModuleRepository.Owner(base.moduleId(), base.productId(), base.taskId(),
+        base.quoteItemId(), base.materialNo(), type, base.taskStatus(), base.moduleStatus(), base.assigneeId(),
+        base.assigneeName(), base.versionId(), base.versionStatus(), base.businessUnit(), base.organization(), base.accountingMonth());
+    when(shared.find("PRODUCT-X", 22L, type)).thenReturn(source);
+    var fact = new TechnicalDataSourceFact(TechnicalDataModuleType.valueOf(type), TechnicalDataAvailability.MISSING,
+        "MISSING", "缺资料", null, LocalDateTime.now());
+    var sources = query.describe(target, "2026-09", List.of(fact));
+    assertThat(sources).singleElement().satisfies(row -> {
+      assertThat(row.status()).isEqualTo("SAVED"); assertThat(row.message()).contains("已有资料");
+      assertThat(row.sourceTaskId()).isEqualTo(base.taskId()); assertThat(row.sourceVersionId()).isNull();
+    });
+    var mapped = TechnicalDataSharedModuleQuery.applySharedSources(new TechnicalDataModuleRequirementEvaluator().evaluate(List.of(fact)), sources);
+    assertThat(mapped).filteredOn(row -> type.equals(row.moduleType())).singleElement()
+        .satisfies(row -> assertThat(row.required()).isFalse());
+    verifyNoInteractions(versions);
   }
 
   private TechnicalDataSourceFact fact(TechnicalDataAvailability status) {

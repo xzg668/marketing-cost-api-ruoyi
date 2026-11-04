@@ -62,7 +62,8 @@ public class TechnicalDataSubmissionValidationService {
     var products = taskRepository.findProducts(taskId);
     var allModules = taskRepository.findModules(products.stream().map(QuoteTechProduct::getId).toList());
     if (actor == null || !actor.canReadTask(task, allModules) || assigneeUserId == null
-        || actor.canViewSupplementOverview() || !Objects.equals(actor.userId(), assigneeUserId)) {
+        || actor.canViewSupplementOverview() && !actor.canFillUnassigned(task)
+        || !Objects.equals(actor.userId(), assigneeUserId)) {
       throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.FORBIDDEN, "无权读取此产品任务");
     }
     List<TechnicalDataTaskValidationResponse.Issue> issues = new ArrayList<>();
@@ -77,7 +78,8 @@ public class TechnicalDataSubmissionValidationService {
       var byType = moduleMap(product, modules, issues);
       var person = recipients.current(taskId).stream().filter(row -> row.userId()==assigneeUserId).findFirst().orElse(null);
       var own = modules.stream().filter(module -> requiredModule(module)
-          && Objects.equals(module.getAssigneeUserId(), assigneeUserId)
+          && (actor.canFillUnassigned(task) ? actor.canEditModule(task, module)
+              : Objects.equals(module.getAssigneeUserId(), assigneeUserId))
           && (person == null || person.processingModules().contains(module.getModuleType()))).toList();
       if (own.isEmpty()) add(issues, product, "TASK", "assigneeUserId", null, "PERSON_SCOPE_EMPTY", "此人没有负责的补录模块", "task-status");
       boolean frozen = !own.isEmpty() && own.stream().allMatch(module -> Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(module.getModuleStatus()));
@@ -123,6 +125,11 @@ public class TechnicalDataSubmissionValidationService {
     if (version == null) return false;
     int before = issues.size();
     int itemCount = codec.supplementItemCount(version, module.getModuleType());
+    if ("PRICE".equals(module.getModuleType()) && "PRICE_SHARED_COMPLETE".equals(module.getLastValidationCode())
+        && "TECH_PRICE_SHARED".equals(module.getReferenceSourceType()) && module.getReferenceSnapshotJson() != null) {
+      var shared = codec.sharedPrices(module.getReferenceSnapshotJson());
+      if (shared != null && !shared.owners().isEmpty() && !shared.requirements().items().isEmpty()) itemCount = Math.max(1, itemCount);
+    }
     // 原关系已由 U9 补齐时，可保存真实复查证据而无新增原料行；仍逐项核验来源，不造空白明细。
     if ("MANUFACTURING".equals(module.getModuleType()) && codec.manufacturing(version) != null
         && codec.manufacturing(version).evidence() != null) itemCount = Math.max(1, itemCount);

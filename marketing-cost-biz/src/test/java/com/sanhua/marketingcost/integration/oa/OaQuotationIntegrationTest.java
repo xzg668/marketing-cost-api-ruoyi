@@ -33,6 +33,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 @TestPropertySource(
     properties = {
+      "monthly.reprice.go-live-months.COMMERCIAL=2026-10",
       "integration.oa.mode=MOCK",
       "integration.oa.environment=I01_TEST",
           "integration.oa.clients.test.source-system=WEAVER",
@@ -49,6 +50,8 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   @Autowired JdbcTemplate jdbc;
   @Autowired MockMvc http;
   @Autowired ObjectMapper json;
+  @Autowired com.sanhua.marketingcost.service.quotefinal.QuoteFinalSubmissionService finalSubmission;
+  @Autowired com.sanhua.marketingcost.service.costing.ProductCostingContextResolver costingContexts;
   @SpyBean OaMessageRepository repository;
   @Autowired com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalReturnClient returnClient;
 
@@ -83,6 +86,85 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
     String id = UUID.randomUUID().toString();
     return r.put("requestId", "REQ-" + id)
         .put("formNo", "I01-" + id);
+  }
+
+  @Test
+  void srBatchOaPushPersistsThreeProductsOriginalFieldsAndOneStableReceipt() throws Exception {
+    var source = OaQuotationRequestMapperTest.srBatchPush();
+    String identity = UUID.randomUUID().toString();
+    source.put("requestId", "SR-COMPAT-" + identity).put("formNo", "SR-COMPAT-" + identity);
+    ((ObjectNode) source.path("mainData")).putObject("oaAdditionalField").put("value", "保留原值");
+    String raw = source.toString();
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+        .contentType("application/json").content(raw))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+        .andReturn();
+    var result = json.readTree(response.getResponse().getContentAsByteArray());
+    long formId = result.at("/data/quoteId").asLong();
+    assertThat(jdbc.queryForObject("SELECT copper_price FROM oa_form WHERE id=?",
+        java.math.BigDecimal.class, formId)).isEqualByComparingTo("107215.00");
+    assertThat(result.at("/data/itemMappings")).hasSize(3);
+    for (var mapping : result.at("/data/itemMappings")) {
+      assertThat(mapping.path("tableKey").asText()).isEqualTo("批量品明细表");
+      long itemId = mapping.path("quoteItemId").asLong();
+      String number = mapping.path("rowId").asText().substring("SR-BATCH-".length());
+      assertThat(jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?",
+          String.class, itemId)).isEqualTo("SR-MATERIAL-" + number);
+      assertThat(jdbc.queryForObject("SELECT shipping_fee FROM oa_form_item WHERE id=?",
+          java.math.BigDecimal.class, itemId)).isEqualByComparingTo("0.3738");
+      assertThat(jdbc.queryForObject("SELECT source_field_path FROM lp_oa_form_item_extra_field "
+          + "WHERE oa_form_item_id=? AND field_code='lh'", String.class, itemId))
+          .endsWith(".plpmxb.lh");
+    }
+    assertThat(jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
+        String.class, source.path("requestId").asText())).isEqualTo(raw);
+    var login = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+        "admin", null, java.util.List.of());
+    login.setDetails(java.util.Map.of("businessUnitType", "COMMERCIAL"));
+    var context = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+    context.setAuthentication(login);
+    org.springframework.security.core.context.SecurityContextHolder.setContext(context);
+    try {
+      var submission = finalSubmission.status(source.path("formNo").asText(), "2026-10",
+          new com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor(1L, "admin", Set.of("*:*:*")));
+      assertThat(submission.canConfirm()).isFalse();
+      assertThat(submission.costs()).hasSize(3).allSatisfy(cost -> {
+        assertThat(cost.status()).isEqualTo("NOT_READY");
+        assertThat(cost.message()).contains("海外销售标识");
+      });
+    } finally {
+      org.springframework.security.core.context.SecurityContextHolder.clearContext();
+    }
+    assertThat(service.receive(PEER, raw)).isEqualTo(result);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?",
+        Integer.class, source.path("formNo").asText())).isEqualTo(1);
+  }
+
+  @Test
+  void srIntermediateSalesFieldIsSavedAndUsedByTheRealCostingContext() throws Exception {
+    for (String flag : new String[] {"是", "否"}) {
+      var source = OaQuotationRequestMapperTest.srBatchPush();
+      String identity = "SR-SALES-" + UUID.randomUUID();
+      source.put("requestId", identity).put("formNo", identity);
+      ((ObjectNode) source.path("mainData")).put("sftghwshxszjzd", flag);
+      var response = http.perform(post(URL).header("Authorization", TOKEN)
+          .contentType("application/json").content(source.toString()))
+          .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+          .andExpect(jsonPath("$.data.inputStatus").value("PENDING")).andReturn();
+      var result = json.readTree(response.getResponse().getContentAsByteArray());
+      long formId = result.at("/data/quoteId").asLong();
+      long itemId = result.at("/data/itemMappings/0/quoteItemId").asLong();
+      assertThat(jdbc.queryForObject("SELECT overseas_sales_mode FROM oa_form WHERE id=?",
+          String.class, formId)).isEqualTo(flag);
+      assertThat(jdbc.queryForObject("SELECT field_value FROM lp_oa_form_header_extra_field "
+          + "WHERE oa_form_id=? AND field_code='sftghwshxszjzd'", String.class, formId)).isEqualTo(flag);
+      var context = costingContexts.resolve(new com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest(
+          identity, itemId, "2026-10", "admin", false));
+      assertThat(context.form().getOverseasSalesMode()).isEqualTo(flag);
+      String raw = jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
+          String.class, identity);
+      assertThat(json.readTree(raw)).isEqualTo(source);
+    }
   }
 
   @Test

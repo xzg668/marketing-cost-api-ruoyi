@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataModuleResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataProductResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataWorkbenchRowResponse;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -14,12 +15,31 @@ import org.springframework.stereotype.Repository;
 /** 核算已确认但尚未分派的缺口直接进入工作台；读取列表不创建任务或 OA 待办。 */
 @Repository
 public class TechnicalDataPendingProductQuery {
+  // 列表保留原核算检查快照，但图库是否存在必须读取当前报价、月份绑定的实际来源。
+  // 原有共享办理资料仍保留提交/审批约束；不能通过列表覆盖原办理人的状态。
+  private static final String CURRENT_DRAWING_SOURCE = """
+      SELECT v.id FROM lp_quote_bom_preparation_record p
+      JOIN lp_quote_bom_supplement_version v ON v.id=p.electronic_source_version_id
+        AND v.preparation_id=p.id AND v.oa_form_item_id=i.id AND v.active_flag=1
+        AND BINARY v.period_month=BINARY w.period_month
+        AND BINARY v.material_org_code=BINARY p.material_organization_code
+        AND v.bom_source IN ('ELECTRONIC_DRAWING_PDF','ELECTRONIC_DRAWING_EXCEL')
+      WHERE p.oa_form_item_id=i.id AND p.active_flag=1
+        AND BINARY p.cost_period_month=BINARY w.period_month
+        AND EXISTS (SELECT 1 FROM lp_electronic_drawing_source_node n WHERE n.supplement_version_id=v.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.sharedModules[*]' COLUMNS (
+            module_type VARCHAR(40) PATH '$.moduleType')) s WHERE s.module_type='DRAWING_BOM')
+      ORDER BY p.id DESC LIMIT 1
+      """;
   private final JdbcTemplate jdbc;
   private final ObjectMapper json;
+  private final TechnicalDataSharedModuleQuery shared;
 
-  public TechnicalDataPendingProductQuery(JdbcTemplate jdbc, ObjectMapper json) {
+  public TechnicalDataPendingProductQuery(JdbcTemplate jdbc, ObjectMapper json, TechnicalDataSharedModuleQuery shared) {
     this.jdbc = jdbc;
     this.json = json;
+    this.shared = shared;
   }
 
   private record Query(String sql, List<Object> args) {}
@@ -39,13 +59,14 @@ public class TechnicalDataPendingProductQuery {
           AND EXISTS (
             SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.modules[*]' COLUMNS (
               module_type VARCHAR(40) PATH '$.moduleType', required_flag INT PATH '$.required')) m
-            WHERE m.required_flag=1 AND NOT EXISTS (
+            WHERE m.required_flag=1 AND (m.module_type<>'DRAWING_BOM' OR (%s) IS NULL)
+              AND NOT EXISTS (
               SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.sharedModules[*]' COLUMNS (
                 module_type VARCHAR(40) PATH '$.moduleType', source_status VARCHAR(40) PATH '$.status')) s
               WHERE s.module_type=m.module_type AND s.source_status IN ('SUBMITTED','APPROVED')))
           AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_task t
             WHERE t.oa_form_item_id=i.id AND BINARY t.accounting_month=BINARY w.period_month AND t.active_flag=1)
-        """);
+        """.formatted(CURRENT_DRAWING_SOURCE));
     List<Object> args = new ArrayList<>();
     if (!"ALL".equals(accessMode)) { sql.append(" AND f.business_unit_type=?"); args.add(businessUnit); }
     if (oaNo != null) { sql.append(" AND f.oa_no=?"); args.add(oaNo); }
@@ -78,8 +99,8 @@ public class TechnicalDataPendingProductQuery {
     args.add(offset); args.add(size);
     return jdbc.query("""
         SELECT i.id,i.seq,i.material_no,i.product_name,i.sunl_model,i.spec,i.annual_volume,
-          f.oa_no,w.period_month,w.technical_check_json
-        """ + query.sql() + " ORDER BY w.updated_at DESC,w.id DESC LIMIT ?,?", (row, index) -> {
+          f.oa_no,w.period_month,w.technical_check_json,(%s) AS current_drawing_source_id
+        """.formatted(CURRENT_DRAWING_SOURCE) + query.sql() + " ORDER BY w.updated_at DESC,w.id DESC LIMIT ?,?", (row, index) -> {
       TechnicalDataSourceCheckResponse check;
       try {
         check = json.treeToValue(json.readTree(row.getString("technical_check_json")).get("check"),
@@ -87,7 +108,16 @@ public class TechnicalDataPendingProductQuery {
       } catch (JsonProcessingException exception) {
         throw new IllegalStateException("产品 " + row.getLong("id") + " 的补录检查记录无法读取，请重新核算", exception);
       }
-      var modules = check.modules().stream().map(module -> new TechnicalDataModuleResponse(
+      Long drawingSourceId = row.getObject("current_drawing_source_id", Long.class);
+      var currentShared = shared.current(row.getLong("id"), row.getString("period_month"), check.modules());
+      check = new TechnicalDataSourceCheckResponse(check.oaFormItemId(), check.accountingMonth(), check.fingerprint(),
+          check.checkedAt(), check.modules(), check.taskUpdateMessage(), currentShared);
+      var modules = TechnicalDataSharedModuleQuery.applySharedSources(check.modules(), check.sharedModules()).stream().map(module ->
+          "DRAWING_BOM".equals(module.moduleType()) && drawingSourceId != null
+              ? new TechnicalDataModuleResponse(null, module.moduleType(), false, "DRAWING_SOURCE_AVAILABLE",
+                  "已有电子图库明细表，制造件原材料等核算资料单独检查", null, "NOT_REQUIRED", null, 0, null,
+                  "AVAILABLE", "{\"sourceVersionId\":" + drawingSourceId + "}", LocalDateTime.now(), null, null)
+              : new TechnicalDataModuleResponse(
           null, module.moduleType(), module.required(), module.reasonCode(), module.reason(), null,
           module.required() ? "PENDING" : "NOT_REQUIRED", null, 0, null, module.availability().name(),
           module.sourceReference(), module.checkedAt(), null, null)).toList();

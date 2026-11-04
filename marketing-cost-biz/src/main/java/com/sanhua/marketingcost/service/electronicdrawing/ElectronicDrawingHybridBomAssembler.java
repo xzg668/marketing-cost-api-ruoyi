@@ -14,10 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -78,7 +76,7 @@ public class ElectronicDrawingHybridBomAssembler {
     String fingerprint = fingerprint(output);
     return new HybridBom(
         List.copyOf(output), fingerprint, stats.u9PurchaseLeaves,
-        stats.electronicPurchaseLeaves, stats.replacedElectronicDescendants,
+        stats.electronicPurchaseLeaves,
         stats.u9QueryCount);
   }
 
@@ -122,16 +120,20 @@ public class ElectronicDrawingHybridBomAssembler {
       return;
     }
 
+    // 图纸有下级时逐项沿图纸组树；U9 仅补充图纸未列出的制造件下级。
+    if (!children.isEmpty()) {
+      for (var child : children) composeElectronic(command, tree, child, nodeKey, path, occurrencesToTop,
+          withAncestor(ancestorMaterialCodes, normalizedCode), output, stats);
+      return;
+    }
+
     if (ElectronicDrawingBomScope.DRAWING_NODE.equals(material.sourceCategory())) {
       var raw = command.manufacturingRawNodes().get(source.sourceNodeId());
       if (raw != null) {
         attachTechnicalRaw(raw, source, nodeKey, path, occurrencesToTop, withAncestor(ancestorMaterialCodes, normalizedCode), output);
         return;
       }
-      if (children.isEmpty()) throw invalid(BOM_GAP, "图库结构节点没有下级：" + source.drawingCode());
-      for (var child : children) composeElectronic(command, tree, child, nodeKey, path, occurrencesToTop,
-          withAncestor(ancestorMaterialCodes, normalizedCode), output, stats);
-      return;
+      throw invalid(BOM_GAP, "图库结构节点没有下级：" + source.drawingCode());
     }
 
     ElectronicDrawingU9SubBomPort.SubBomQuery query =
@@ -151,7 +153,6 @@ public class ElectronicDrawingHybridBomAssembler {
         Set<String> nextAncestors = withAncestor(ancestorMaterialCodes, normalizedCode);
         attachU9Tree(result.nodes(), command.materialOrganizationCode(), source, nodeKey, path, toTop,
             nextAncestors, output, stats);
-        stats.replacedElectronicDescendants += countDescendants(source.sourceSequence(), tree.children());
       }
       case NOT_FOUND -> {
         var savedRaw = command.manufacturingRawNodes().get(source.sourceNodeId());
@@ -159,15 +160,8 @@ public class ElectronicDrawingHybridBomAssembler {
           attachTechnicalRaw(savedRaw, source, nodeKey, path, occurrencesToTop, withAncestor(ancestorMaterialCodes, normalizedCode), output);
           return;
         }
-        if (children.isEmpty()) {
-          throw invalid(BOM_GAP,
-              "制造/委外/虚拟件既无 U9 子 BOM，也无电子图库下级：" + material.materialCode());
-        }
-        Set<String> nextAncestors = withAncestor(ancestorMaterialCodes, normalizedCode);
-        for (ElectronicNode child : children) {
-          composeElectronic(command, tree, child, nodeKey, path, occurrencesToTop,
-              nextAncestors, output, stats);
-        }
+        throw invalid(BOM_GAP,
+            "制造/委外/虚拟件既无 U9 子 BOM，也无电子图库下级：" + material.materialCode());
       }
       case MULTIPLE -> throw invalid(U9_QUERY_BLOCKED,
           "制造节点存在多个当前有效 U9 子 BOM：" + material.materialCode());
@@ -554,18 +548,6 @@ public class ElectronicDrawingHybridBomAssembler {
     visited.add(node.nodeKey());
   }
 
-  private static int countDescendants(
-      String sequence, Map<String, List<ElectronicNode>> children) {
-    int count = 0;
-    Deque<ElectronicNode> queue = new ArrayDeque<>(children.getOrDefault(sequence, List.of()));
-    while (!queue.isEmpty()) {
-      ElectronicNode node = queue.removeFirst();
-      count++;
-      queue.addAll(children.getOrDefault(node.sourceSequence(), List.of()));
-    }
-    return count;
-  }
-
   private static Set<String> withAncestor(Set<String> ancestors, String code) {
     Set<String> result = new LinkedHashSet<>(ancestors);
     result.add(code);
@@ -765,7 +747,6 @@ public class ElectronicDrawingHybridBomAssembler {
       String compositionFingerprint,
       int u9PurchaseLeafCount,
       int electronicDrawingPurchaseLeafCount,
-      int replacedElectronicDescendantCount,
       int u9QueryCount) {
 
     public HybridBom {
@@ -800,7 +781,6 @@ public class ElectronicDrawingHybridBomAssembler {
   private static final class ComposeStats {
     private int u9PurchaseLeaves;
     private int electronicPurchaseLeaves;
-    private int replacedElectronicDescendants;
     private int u9QueryCount;
   }
 }

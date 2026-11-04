@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 同一 OA 单据按当前技术员汇总；只提交本人全部产品，不等待其他人。 */
 @Service
 public class TechnicalDataDocumentSubmissionService {
+  private final TechnicalDataPriceApplicationService sharedPrices;
 
   public record Request(String idempotencyKey, String fingerprint) {
     @JsonAnySetter
@@ -85,9 +86,11 @@ public class TechnicalDataDocumentSubmissionService {
     OaTechnicalBatchRepository batches,
     OaTechnicalBatchDelivery delivery,
     OaMessageCodec codec,
-    PlatformTransactionManager manager
+    PlatformTransactionManager manager,
+    TechnicalDataPriceApplicationService sharedPrices
   ) {
     this.jdbc = jdbc;
+    this.sharedPrices = sharedPrices;
     this.tasks = tasks;
     this.submissions = submissions;
     this.products = products;
@@ -155,7 +158,10 @@ public class TechnicalDataDocumentSubmissionService {
               .anyMatch(
                 module ->
                   type.equals(module.getModuleType()) &&
-                  Set.of("READY", "FROZEN", "SUBMITTED", "APPROVED").contains(module.getModuleStatus())
+                  (Set.of("READY", "FROZEN", "SUBMITTED", "APPROVED").contains(module.getModuleStatus())
+                      || "PRICE".equals(type) && productView.modules().stream().anyMatch(view ->
+                          "PRICE".equals(view.moduleType()) && Set.of("SHARED_MODULE_SAVED", "SHARED_MODULE_SUBMITTED")
+                              .contains(view.requirementReasonCode())))
               )
           )
       ) complete++;
@@ -259,6 +265,7 @@ public class TechnicalDataDocumentSubmissionService {
         throw conflict("本人已有待确认或已提交资料，请查看原提交结果");
       }
       taskViews.detail(task.getId(), actor);
+      sharedPrices.prepareSharedReference(task.getId(), actor);
       var checked = validation.validate(task.getId(), actor.userId(), actor);
       if (!checked.valid()) throw conflict(
         checked

@@ -32,7 +32,13 @@ public class QuoteCostingSubmissionService {
           WHERE t.oa_form_id=? AND (? IS NULL OR t.oa_form_item_id=?)
             AND t.active_flag=1 AND t.task_status<>'UNASSIGNED' AND (
             t.task_status NOT IN ('SUBMITTED','APPROVED','RETURN_PENDING')
-            OR NOT EXISTS(SELECT 1 FROM lp_quote_tech_oa_recipient r WHERE r.task_id=t.id AND r.active_flag=1)
+            OR (NOT EXISTS(SELECT 1 FROM lp_quote_tech_oa_recipient r WHERE r.task_id=t.id AND r.active_flag=1)
+              AND NOT (COALESCE(t.source_system,'')='QUOTE_ADMIN_DIRECT' AND t.task_status='SUBMITTED'
+                AND t.assignee_user_id>0 AND t.oa_flow_id IS NULL AND COALESCE(t.oa_assignment_version,0)=0
+                AND t.oa_dispatch_message_id IS NULL AND t.external_task_id IS NULL AND t.external_task_status IS NULL
+                AND EXISTS(SELECT 1 FROM lp_quote_tech_product p JOIN lp_quote_tech_data_version v ON v.id=p.effective_version_id
+                  WHERE p.task_id=t.id AND p.active_flag=1 AND p.product_status='SUBMITTED'
+                    AND v.product_id=p.id AND v.version_status='SUBMITTED' AND v.content_fingerprint IS NOT NULL)))
             OR EXISTS(SELECT 1 FROM lp_quote_tech_oa_recipient r
               LEFT JOIN lp_quote_tech_submission s ON s.id=r.latest_submission_id
               WHERE r.task_id=t.id AND r.active_flag=1

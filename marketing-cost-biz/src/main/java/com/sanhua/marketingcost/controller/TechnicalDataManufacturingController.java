@@ -12,7 +12,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/v2/technical-data/products/{productId}/manufacturing")
+@RequestMapping("/api/v2/technical-data")
 public class TechnicalDataManufacturingController {
   private final TechnicalDataManufacturingApplicationService service;
   private final TechnicalDataActorProvider actors;
@@ -21,19 +21,25 @@ public class TechnicalDataManufacturingController {
     this.service = service; this.actors = actors;
   }
 
-  @GetMapping
+  @GetMapping("/products/{productId}/manufacturing")
   @PreAuthorize("@ss.hasAnyPermi('technical:data:task:list','technical:data:task:edit','technical:data:admin:operate','ingest:quote:cost-run:execute')")
   public CommonResult<TechnicalDataManufacturingResponse> read(@PathVariable Long productId, @RequestParam(required = false) Long versionId) {
     return execute(() -> service.read(productId, versionId, actors.current()));
   }
 
-  @GetMapping("/raw-material")
+  @GetMapping("/quote-items/{itemId}/manufacturing")
+  @PreAuthorize("@ss.hasAnyPermi('technical:data:admin:operate','ingest:quote:cost-run:execute')")
+  public CommonResult<TechnicalDataManufacturingResponse> readQuote(@PathVariable Long itemId, @RequestParam String accountingMonth) {
+    return execute(() -> service.readQuote(itemId, accountingMonth, actors.current()));
+  }
+
+  @GetMapping("/products/{productId}/manufacturing/raw-material")
   @PreAuthorize("@ss.hasAnyPermi('technical:data:task:list','technical:data:task:edit','technical:data:admin:operate','ingest:quote:cost-run:execute')")
   public CommonResult<TechnicalDataManufacturingApplicationService.MaterialOption> material(@PathVariable Long productId, @RequestParam String materialNo) {
     return execute(() -> service.material(productId, materialNo, actors.current()));
   }
 
-  @PutMapping
+  @PutMapping("/products/{productId}/manufacturing")
   @PreAuthorize("@ss.hasAnyPermi('technical:data:task:edit','technical:data:admin:operate','ingest:quote:cost-run:execute')")
   public CommonResult<TechnicalDataManufacturingResponse> save(@PathVariable Long productId, @RequestBody TechnicalDataManufacturingSaveRequest request) {
     return execute(() -> service.save(productId, request, actors.current()));

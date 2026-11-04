@@ -348,7 +348,6 @@ class ElectronicDrawingWorkflowOrchestratorTest {
         18,
         10,
         leafCount,
-        12,
         18,
         false,
         List.of());

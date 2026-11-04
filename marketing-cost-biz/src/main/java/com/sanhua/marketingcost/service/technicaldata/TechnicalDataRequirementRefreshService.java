@@ -133,10 +133,12 @@ public class TechnicalDataRequirementRefreshService {
         throw conflict("产品已有送审资料，来源变化须先在原任务核实，不能覆盖冻结版本");
       }
       if (Integer.valueOf(1).equals(module.getRequiredFlag())
-          && Set.of(TechnicalDataAvailability.ERROR, TechnicalDataAvailability.UNCONFIRMED).contains(next.availability())) {
+          && Set.of(TechnicalDataAvailability.ERROR, TechnicalDataAvailability.UNCONFIRMED).contains(next.availability())
+          && !(module.getCurrentVersionId() == null && (next.reasonCode().startsWith("SHARED_MODULE_")
+              || "PRICE_SHARED_SAVED".equals(next.reasonCode())))) {
         throw conflict("原待补模块的来源尚未重新确认，请核实后再分派，原草稿已保留");
       }
-      String status = next.availability() == TechnicalDataAvailability.AVAILABLE ? "NOT_REQUIRED"
+      String status = !next.required() ? "NOT_REQUIRED"
           : module.getCurrentVersionId() == null ? "PENDING" : "EDITING";
       if (modules.refreshRequirement(module.getId(), module.getRowVersion(), next, status) != 1) {
         throw conflict("补录资料已被另一人更新，请刷新后再分派");

@@ -9,6 +9,23 @@ import com.sanhua.marketingcost.entity.QuoteTechModule;
 import org.junit.jupiter.api.Test;
 
 class TechnicalDataActorTest {
+  @Test void adminCanOnlyEditUnassignedProductsWithoutAnyOaDispatch() {
+    var admin = actor("*:*:*");
+    var task = new QuoteTechTask(); task.setTaskStatus("UNASSIGNED"); task.setActiveFlag(1);
+    var module = new QuoteTechModule(); module.setModuleType("MANUFACTURING");
+    module.setRequiredFlag(1); module.setModuleStatus("PENDING");
+    assertThat(admin.canEditModule(task, module)).isTrue();
+    assertThat(actor("ingest:quote:cost-run:execute").canEditModule(task, module)).isFalse();
+    assertThat(new TechnicalDataActor(1L, "OA", Set.of("*:*:*"), 1L).canEditModule(task, module)).isFalse();
+    task.setAssigneeUserId(101L);
+    assertThat(admin.canEditModule(task, module)).isFalse();
+    task.setAssigneeUserId(null); task.setOaAssignmentVersion(1);
+    assertThat(admin.canEditModule(task, module)).isFalse();
+    task.setOaAssignmentVersion(0); task.setExternalTaskStatus("SYNC_FAILED");
+    assertThat(admin.canEditModule(task, module)).isFalse();
+    task.setExternalTaskStatus(null); module.setModuleStatus("SUBMITTED");
+    assertThat(admin.canEditModule(task, module)).isFalse();
+  }
   @Test void newGapIsNotImplicitlyAssignedToPreviousTechnicianBeforeOaAcceptsDispatch() {
     var tech=new TechnicalDataActor(101L,"技术员",Set.of("technical:data:task:edit"));
     var task=new QuoteTechTask(); task.setAssigneeUserId(101L); task.setOaAssignmentVersion(1);

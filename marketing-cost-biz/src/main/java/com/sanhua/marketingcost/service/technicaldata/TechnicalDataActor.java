@@ -89,9 +89,20 @@ public record TechnicalDataActor(
             && Objects.equals(module.getAssigneeUserId(), userId));
   }
 
-  /** 只有实际办理人可以填写自己的模块；报价员和管理员只查看提交结果。 */
+  /** 管理员仅可填写尚未进入任何 OA 分派的产品。 */
+  public boolean canFillUnassigned(QuoteTechTask task) {
+    return userId != null && admin() && !oaSession() && task != null
+        && Integer.valueOf(1).equals(task.getActiveFlag())
+        && "UNASSIGNED".equals(task.getTaskStatus()) && task.getAssigneeUserId() == null
+        && task.getOaFlowId() == null && task.getOaDispatchMessageId() == null
+        && (task.getOaAssignmentVersion() == null || task.getOaAssignmentVersion() == 0)
+        && task.getExternalTaskId() == null && task.getExternalTaskStatus() == null;
+  }
+
+  /** 技术员填写本人模块；管理员仅填写未分派产品。 */
   public boolean canEditModule(QuoteTechTask task, QuoteTechModule module) {
-    if (userId == null || canViewSupplementOverview()) return false;
+    boolean unassigned = canFillUnassigned(task);
+    if (userId == null || canViewSupplementOverview() && !unassigned) return false;
     if (task == null || module == null || Integer.valueOf(0).equals(module.getOaEditAllowed())
         || !canEdit() || !canAccessTask(task)
         || !Integer.valueOf(1).equals(task.getActiveFlag())
@@ -101,11 +112,13 @@ public record TechnicalDataActor(
         || (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0
             && !"PUBLISHED".equals(task.getExternalTaskStatus()))) return false;
     Long owner = module.getAssigneeUserId() == null ? task.getAssigneeUserId() : module.getAssigneeUserId();
-    return Objects.equals(owner, userId);
+    return unassigned ? owner == null : Objects.equals(owner, userId);
   }
 
   public List<String> assignedModules(QuoteTechTask task, Collection<QuoteTechModule> modules) {
     if (userId == null) return List.of();
+    if (canFillUnassigned(task)) return modules.stream().filter(module -> canEditModule(task, module))
+        .map(QuoteTechModule::getModuleType).toList();
     return modules.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag())
         && (module.getAssigneeUserId() != null || task.getOaAssignmentVersion() == null || task.getOaAssignmentVersion() == 0)
         && Objects.equals(module.getAssigneeUserId() == null ? task.getAssigneeUserId() : module.getAssigneeUserId(), userId))

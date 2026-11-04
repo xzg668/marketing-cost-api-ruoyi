@@ -483,7 +483,7 @@ class ElectronicDrawingHybridBomServiceTest {
             null,
             null,
             ElectronicDrawingSourceNode.MATCH_AUTO);
-    return new HybridBom(List.of(root, leaf), FINGERPRINT, 0, 1, 0, 0);
+    return new HybridBom(List.of(root, leaf), FINGERPRINT, 0, 1, 0);
   }
 
   private List<QuoteBomSupplementDetail> stored(

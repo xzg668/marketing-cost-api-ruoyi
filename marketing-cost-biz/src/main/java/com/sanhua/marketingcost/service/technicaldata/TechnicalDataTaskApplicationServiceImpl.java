@@ -56,6 +56,7 @@ public class TechnicalDataTaskApplicationServiceImpl
   private final TechnicalDataRequirementRefreshService requirementRefresh;
   private final TechnicalDataPendingProductQuery pendingProducts;
   private final TechnicalDataPlateMaterialProfile plateMaterials;
+  private final TechnicalDataSharedModuleQuery sharedSources;
 
   public TechnicalDataTaskApplicationServiceImpl(
       TechnicalDataTaskRepository repository,
@@ -67,7 +68,9 @@ public class TechnicalDataTaskApplicationServiceImpl
       TechnicalDataVersionContentCodec contentCodec, TechnicalDataOaDispatchService oaDispatch,
       com.sanhua.marketingcost.integration.oa.OaMessageCodec messageCodec,
       TechnicalDataRequirementRefreshService requirementRefresh, TechnicalDataPendingProductQuery pendingProducts,
-      TechnicalDataReadPolicy readPolicy, TechnicalDataPlateMaterialProfile plateMaterials) {
+      TechnicalDataReadPolicy readPolicy, TechnicalDataPlateMaterialProfile plateMaterials,
+      TechnicalDataSharedModuleQuery sharedSources) {
+    this.sharedSources = sharedSources;
     this.plateMaterials = plateMaterials;
     this.readPolicy=readPolicy;
     this.pendingProducts = pendingProducts;
@@ -83,6 +86,32 @@ public class TechnicalDataTaskApplicationServiceImpl
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     // 锁住产品后必须能读到前一批刚提交的模块；RR 的旧读视图会把它们误当作不存在。
     this.transactionTemplate.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+  }
+
+  @Override
+  public TechnicalDataTaskResponse startAdminEntry(Long itemId, String accountingMonth, TechnicalDataActor actor) {
+    requireActor(actor);
+    if (!actor.admin() || actor.oaSession()) throw forbidden("只有管理员可以直接补录未分派产品");
+    return transactionTemplate.execute(status -> {
+      var source = sourceReader.lockAndRead(itemId, accountingMonth);
+      oaWorkflowAccess.requireCosting(source.product().oaFormId());
+      var task = repository.lockActiveTask(itemId, accountingMonth).orElse(null);
+      if (task != null) {
+        if (!actor.canFillUnassigned(task)) throw forbidden("产品已分派或已提交，管理员不能直接补录");
+        requirementRefresh.refresh(task, source.check().modules());
+        return assemble(task, actor);
+      }
+      requireSupplementGap(source);
+      task = repository.upsertActiveTask(newTask(UUID.randomUUID().toString(), accountingMonth,
+          null, source.product(), null, actor));
+      if (!actor.canFillUnassigned(task)) throw forbidden("产品已分派，请刷新后查看");
+      var snapshot = snapshotFactory.create(source.product());
+      var product = repository.upsertActiveProduct(newProduct(task, source.product(), snapshot));
+      if (!Objects.equals(product.getTaskId(), task.getId())) throw error(
+          TechnicalDataTaskErrorCode.ACTIVE_PRODUCT_CONFLICT, "产品已有活动补录任务");
+      for (var requirement : source.check().modules()) repository.upsertModule(newModule(product, requirement));
+      return assemble(task, actor);
+    });
   }
 
   @Override
@@ -355,11 +384,6 @@ public class TechnicalDataTaskApplicationServiceImpl
       String expectedFingerprint,
       TechnicalDataQuoteSourceReader.Source source,
       String action) {
-    if (!source.check().sharedModules().isEmpty()) {
-      var shared = source.check().sharedModules().getFirst();
-      throw error(TechnicalDataTaskErrorCode.SHARED_MODULE_CONFLICT,
-          shared.message() + (shared.sourceTaskId() == null ? "" : "（原任务 " + shared.sourceTaskId() + "）"));
-    }
     if (!Objects.equals(expectedFingerprint, source.check().fingerprint())) {
       throw error(TechnicalDataTaskErrorCode.VERSION_CONFLICT,
           "产品 " + source.product().oaFormItemId() + " 的来源或缺口已变化，请重新检查后再" + action);
@@ -459,6 +483,14 @@ public class TechnicalDataTaskApplicationServiceImpl
         }
       }
       var profileVersion=visible.get("PROFILE");
+      var requirements = modules.stream().map(module -> new TechnicalDataModuleRequirement(module.getModuleType(),
+          Integer.valueOf(1).equals(module.getRequiredFlag()), Objects.toString(module.getRequirementReasonCode(), ""),
+          module.getRequirementReason(), TechnicalDataAvailability.valueOf(Objects.toString(module.getSourceAvailability(), "UNCONFIRMED")),
+          module.getSourceReference(), module.getSourceCheckedAt())).toList();
+      var shared = submission == null ? sharedSources.current(product.getOaFormItemId(), product.getAccountingMonth(), requirements)
+          : List.<com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSharedModuleInfo>of();
+      var displayed = TechnicalDataSharedModuleQuery.applySharedSources(requirements, shared).stream()
+          .collect(Collectors.toMap(TechnicalDataModuleRequirement::moduleType, Function.identity()));
       var source=snapshotFactory.readProfile(product.getSourceSnapshotJson());
       var supplements=new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.SupplementSnapshot(
           contentCodec.productFees(profileVersion),contentCodec.drawingBom(visible.get("DRAWING_BOM")),
@@ -475,7 +507,16 @@ public class TechnicalDataTaskApplicationServiceImpl
           product.getQuoteNo(),product.getAccountingMonth(),product.getSourceSnapshotJson(),product.getSourceFingerprint(),
           state,ownDraft?product.getCurrentEditVersionId():null,latest,product.getEffectiveVersionId(),
           product.getRowVersion(),profile(product,profileVersion,plateDecisions.get(product.getId())),modules.stream().sorted(Comparator.comparingInt(
-              module -> TechnicalDataModuleType.orderOf(module.getModuleType()))).map(this::module).toList(),
+              module -> TechnicalDataModuleType.orderOf(module.getModuleType()))).map(value -> {
+                var response = module(value);
+                var requirement = displayed.get(value.getModuleType());
+                if (submission != null || !requirement.reasonCode().startsWith("SHARED_MODULE_")
+                    || Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(value.getModuleStatus())) return response;
+                return new TechnicalDataModuleResponse(response.id(), response.moduleType(), false,
+                    requirement.reasonCode(), requirement.reason(), response.entryMode(), "NOT_REQUIRED", null, 0,
+                    response.rowVersion(), requirement.availability().name(), requirement.sourceReference(),
+                    requirement.checkedAt(), response.assigneeUserId(), response.assigneeName());
+              }).toList(),
           product.getContentSchemaVersion(),supplements));
     }
     return result;

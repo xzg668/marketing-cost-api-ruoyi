@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingSourceNodeRepository;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage;
 import com.sanhua.marketingcost.service.quotebom.*;
@@ -31,8 +32,10 @@ class TechnicalDataSourceCheckServiceTest {
   private final OaMessageCodec codec = new OaMessageCodec(new ObjectMapper().findAndRegisterModules());
   private final ElectronicDrawingWorkflowContextPort drawings = mock(ElectronicDrawingWorkflowContextPort.class);
   private final TechnicalDataSharedModules shared = mock(TechnicalDataSharedModules.class);
+  private final ElectronicDrawingSourceNodeRepository drawingSources = mock(ElectronicDrawingSourceNodeRepository.class);
+  private final TechnicalDataManufacturingSourceQuery manufacturing = mock(TechnicalDataManufacturingSourceQuery.class);
   private final TechnicalDataPublicSourceCheck publicSources = new TechnicalDataPublicSourceCheck(u9, salary, codec,
-      drawings, mock(TechnicalDataManufacturingSourceQuery.class), packaging, netLoss, shared);
+      drawings, manufacturing, packaging, netLoss, shared, drawingSources);
   private final TechnicalDataSourceCheckService service = new TechnicalDataSourceCheckService(publicSources, prices,
       codec, mock(QuoteTechnicalDataRepository.class), mock(TechnicalDataPriceRequirements.class), mock(TechnicalDataPriceOwnership.class));
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L, 2L, "OA-1", "2026-09", "COMMERCIAL",
@@ -40,6 +43,7 @@ class TechnicalDataSourceCheckServiceTest {
   private QuoteCostingWorkspace workspace;
 
   @BeforeEach void prepare() {
+    when(drawingSources.findByVersionId(41L)).thenReturn(List.of(new ElectronicDrawingSourceNode()));
     when(packaging.check(any(), any())).thenReturn(new TechnicalDataSourceFact(TechnicalDataModuleType.PACKAGE,
         TechnicalDataAvailability.UNCONFIRMED, "PACKAGE_PENDING", "由包装专用检查验证", null, context.scanAt()));
     workspace = new QuoteCostingWorkspace(); workspace.setCurrentBomBuildBatchId("BOM-1");
@@ -83,15 +87,33 @@ class TechnicalDataSourceCheckServiceTest {
     }
   }
 
-  @Test void receivingOrMatchingDrawingStillNeedsCompletionAndCannotReuseOldFingerprint() {
+  @Test void receivedDrawingExistsBeforeMatchingOrCompositionAndManufacturingGapsRemainRequired() {
     when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
+    when(manufacturing.inspect(any())).thenReturn(new TechnicalDataManufacturingSourceQuery.Assessment(
+        41L, "2026-09", "raw-gap", List.of(new TechnicalDataManufacturingSourceQuery.Node(
+            221L, "G1:R4", "G1:R2", "接管", "T-JG-0478", "TP2 Y2 Φ6×1.0", BigDecimal.ONE,
+            null, null, "9990000051108", TechnicalDataManufacturingSourceQuery.State.MISSING_RAW,
+            "缺少原材料关系", List.of())), null));
+    workspace.setCurrentBomBuildBatchId(null);
     for (String stage : List.of(ElectronicDrawingWorkflowStage.RECEIVED, ElectronicDrawingWorkflowStage.MAPPING_PENDING,
-        ElectronicDrawingWorkflowStage.VALIDATION_FAILED, ElectronicDrawingWorkflowStage.WAIT_REVIEW)) {
-      when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(stage, 41L, "old-composition"));
-      assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+        ElectronicDrawingWorkflowStage.VALIDATION_FAILED, ElectronicDrawingWorkflowStage.COMPOSED)) {
+      when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(stage, 41L, null));
+      var requirements = new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts());
+      assertThat(requirements).filteredOn(row -> row.moduleType().equals("DRAWING_BOM"))
+          .allSatisfy(row -> {
+            assertThat(row.required()).isFalse();
+            assertThat(row.availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
+            assertThat(row.reasonCode()).isEqualTo("DRAWING_SOURCE_AVAILABLE");
+          });
+      assertThat(requirements).filteredOn(row -> row.moduleType().equals("MANUFACTURING"))
+          .allSatisfy(row -> {
+            assertThat(row.required()).isTrue();
+            assertThat(row.reasonCode()).isEqualTo("MANUFACTURING_RAW_MISSING");
+          });
+      assertThat(requirements).filteredOn(row -> row.moduleType().equals("PRICE"))
+          .extracting(TechnicalDataModuleRequirement::reasonCode).containsExactly("PRICE_BOM_NOT_READY");
     }
-    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(ElectronicDrawingWorkflowStage.COMPOSED, 41L, null));
-    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    verifyNoInteractions(prices);
   }
 
   @Test void publicationAdapterReadyStatusIsAvailableWithPersistedPublishedStage() {
@@ -103,9 +125,9 @@ class TechnicalDataSourceCheckServiceTest {
     assertThat(published.published()).isTrue();
     assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
 
-    // A raw stage string without the adapter's validated publication must remain incomplete.
+    // Having source details does not require the adapter to declare a published, calculable BOM.
     when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing("PUBLISHED", 41L, "old-fingerprint"));
-    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
   }
 
   @Test void missingDrawingStillRequiresSupplementAndLookupFailureIsAnError() {
@@ -113,6 +135,17 @@ class TechnicalDataSourceCheckServiceTest {
     when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(null, null, null));
     assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
     when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenThrow(new IllegalStateException("database failure"));
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
+  }
+
+  @Test void emptyDrawingVersionCannotClaimTheDetailsExistEvenWithAnOldCompositionFingerprint() {
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
+    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09"))
+        .thenReturn(drawing(ElectronicDrawingWorkflowStage.COMPOSED, 41L, "old-fingerprint"));
+    when(drawingSources.findByVersionId(41L)).thenReturn(List.of());
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).reason()).contains("没有明细");
+    when(drawingSources.findByVersionId(41L)).thenThrow(new IllegalStateException("source lookup failure"));
     assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
   }
 

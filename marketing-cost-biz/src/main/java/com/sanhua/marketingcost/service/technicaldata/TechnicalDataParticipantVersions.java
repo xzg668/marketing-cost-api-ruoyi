@@ -56,10 +56,27 @@ public class TechnicalDataParticipantVersions {
   }
 
   public QuoteTechDataVersion freeze(QuoteTechProduct product, Recipient person, int expectedVersion, long actorId) {
-    if (!Objects.equals(product.getRowVersion(), expectedVersion)) throw conflict("产品资料已变化，请刷新后提交");
     var draft = draft(product);
     var all = repository.lockModules(product.getId());
-    var own = scope(all, person);
+    return freeze(product, draft, all, scope(all, person), expectedVersion, actorId);
+  }
+
+  /** 管理员直接保存仍经过同一冻结校验和不可变版本复制，不生成 OA 待办或回执。 */
+  public QuoteTechDataVersion freezeAdmin(QuoteTechProduct product, int expectedVersion, TechnicalDataActor actor) {
+    var task = repository.lockTask(product.getTaskId()).orElseThrow();
+    if (!actor.canFillUnassigned(task)) throw conflict("只有未分派产品可以由管理员直接保存");
+    var draft = draft(product);
+    var all = repository.lockModules(product.getId());
+    var required = all.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag())).toList();
+    if (required.isEmpty() || required.stream().anyMatch(module -> !actor.canEditModule(task, module))) {
+      throw conflict("产品模块已分派或已提交，请刷新后查看");
+    }
+    return freeze(product, draft, all, required, expectedVersion, actor.userId());
+  }
+
+  private QuoteTechDataVersion freeze(QuoteTechProduct product, QuoteTechDataVersion draft, List<QuoteTechModule> all,
+      List<QuoteTechModule> own, int expectedVersion, long actorId) {
+    if (!Objects.equals(product.getRowVersion(), expectedVersion)) throw conflict("产品资料已变化，请刷新后提交");
     if (own.stream().anyMatch(module -> Integer.valueOf(0).equals(module.getOaEditAllowed()))) throw conflict("OA待办已暂停或失效，不能提交补录");
     for (var module : own) {
       if (!"PRICE".equals(module.getModuleType())) sharedModules.requireOwnership(product.getId(), module.getModuleType());
@@ -67,7 +84,7 @@ public class TechnicalDataParticipantVersions {
     if (own.stream().anyMatch(module -> !Set.of("READY", "RETURNED").contains(module.getModuleStatus())
         || !Objects.equals(module.getCurrentVersionId(), draft.getId()) || !"MISSING".equals(module.getSourceAvailability())
         || module.getLastValidationCode() == null)) throw conflict("本人负责模块尚未全部完成服务端校验");
-    Set<String> types = Set.copyOf(person.processingModules());
+    Set<String> types = own.stream().map(QuoteTechModule::getModuleType).collect(java.util.stream.Collectors.toSet());
     if (types.contains("PROFILE") && !TechnicalDataProductFeeRules.validate(codec.productFees(draft)).isEmpty()) {
       throw conflict("本人负责模块的产品费用尚未填写完整，不能冻结提交");
     }

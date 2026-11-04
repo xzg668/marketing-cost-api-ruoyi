@@ -5,9 +5,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.ingest.QuoteExcelImportCommitResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteExcelImportPreviewResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -17,6 +20,7 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class QuotePdfImportServiceImplTest {
   private QuoteIngestService quoteIngestService;
@@ -220,6 +224,52 @@ class QuotePdfImportServiceImplTest {
     assertThat(response.getForms().get(0).getItems())
         .extracting("sunlModel")
         .containsExactly("S12BH-12L-18", "S12BH-16L-34", "S12BH-30L-19");
+  }
+
+  @Test
+  void realFiSr005NovemberPrintPreviewAndCommitKeepAllThreeProductsWhenAvailable() throws Exception {
+    Path file = Path.of("/Users/xiexicheng/Desktop/fee/打印 - SANHUA三花1103.pdf");
+    Assumptions.assumeTrue(DesktopFixtureAccess.isReadable(file), "November FI-SR-005 PDF must be readable");
+    QuotePdfImportServiceImpl service = new QuotePdfImportServiceImpl(
+        new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),
+        quoteIngestService, new PdfBoxQuotePdfTextExtractor());
+
+    try (InputStream inputStream = Files.newInputStream(file)) {
+      QuoteExcelImportPreviewResponse response = service.preview(inputStream, file.getFileName().toString());
+      assertThat(response.isValid()).as(errorSummary(response)).isTrue();
+      assertThat(response.getItemCount()).isEqualTo(3);
+      assertThat(response.getForms()).hasSize(1);
+      var form = response.getForms().get(0);
+      assertThat(form.getOaNo()).isEqualTo("FI-SR-005-20261102-0009");
+      assertThat(form.getQuoteScenario()).isEqualTo("MASS_PRODUCT");
+      assertThat(form.getItems()).extracting("materialNo")
+          .containsExactly("1064100050088", "1064100050090", "1064100050089");
+      assertThat(form.getItems()).extracting("sunlModel")
+          .containsExactly("MPS5AH343", "MPS4AH014", "MPS4AH015");
+      assertThat(form.getItems()).extracting("productName")
+          .containsExactly("膜片式压力控制器", "膜片式压力控制器", "膜片式压力控制器");
+      assertThat(form.getItems()).extracting("validMonth").containsExactly(3, 3, 3);
+      assertThat(form.getItems().get(0).getSupportQty()).isEqualByComparingTo("0.1070");
+      assertThat(form.getItems().get(1).getSupportQty()).isEqualByComparingTo("0.1070");
+      assertThat(form.getItems().get(2).getSupportQty()).isEqualByComparingTo("0.1890");
+      assertThat(form.getItems().get(0).getTotalWithShip()).isEqualByComparingTo("13.571");
+      assertThat(form.getItems().get(1).getTotalWithShip()).isEqualByComparingTo("12.121");
+      assertThat(form.getItems().get(2).getTotalWithShip()).isEqualByComparingTo("11.713");
+      assertThat(form.getItems().get(0).getTotalNoShip()).isEqualByComparingTo("13.197");
+      assertThat(form.getItems().get(1).getTotalNoShip()).isEqualByComparingTo("11.747");
+      assertThat(form.getItems().get(2).getTotalNoShip()).isEqualByComparingTo("11.339");
+    }
+    verify(quoteIngestService, never()).ingest(any());
+    when(quoteIngestService.ingest(any())).thenReturn(new QuoteIngestResponse());
+    try (InputStream inputStream = Files.newInputStream(file)) {
+      assertThat(service.commit(inputStream, file.getFileName().toString()).isCommitted()).isTrue();
+    }
+    var captured = ArgumentCaptor.forClass(QuoteIngestRequest.class);
+    verify(quoteIngestService).ingest(captured.capture());
+    assertThat(captured.getValue().getItems()).extracting("materialNo")
+        .containsExactly("1064100050088", "1064100050090", "1064100050089");
+    assertThat(captured.getValue().getItems()).extracting("shippingFee")
+        .containsExactly("0.3738", "0.3738", "0.3738");
   }
 
   private QuotePdfDocument document(String fileName, List<String> lines) {

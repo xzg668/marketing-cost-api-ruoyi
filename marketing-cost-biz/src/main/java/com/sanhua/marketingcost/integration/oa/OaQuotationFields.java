@@ -224,6 +224,7 @@ final class OaQuotationFields {
           new Field("hl", "汇率", true),
           new Field("hlldqk", "汇率联动情况", false),
           new Field("sftghwshxs", "是否通过海外三花销售", false),
+          new Field("sftghwshxszjzd", "是否通过海外三花销售中间字段", false),
           new Field("crmsjbm", "CRM商机编码", false),
           new Field("htpsdh", "合同评审单号", false),
           new Field("hsstjj", "核算时铜基价（含税）", true),

@@ -95,6 +95,158 @@ class OaQuotationRequestMapperTest {
     }
   }
 
+  static ObjectNode srBatchPush() throws Exception {
+    var source = sample(4);
+    var main = (ObjectNode) source.path("mainData");
+    main.put("djtjg", "99999.00").put("hsstjj", "107215.00").put("hl", "6.760000");
+    main.remove("sftghwshxs");
+    var template = (ObjectNode) source.path("detailData").get(0).deepCopy();
+    var rows = source.putArray("detailData");
+    for (int i = 1; i <= 3; i++) {
+      var row = template.deepCopy().put("tableKey", "批量品明细表")
+          .put("rowId", "SR-BATCH-" + i).put("rowIndex", Integer.toString(i));
+      var fields = (ObjectNode) row.remove("fields");
+      fields.retain("cpmc", "khmc", "lh", "shxh", "gg", "ysfyz", "yjnylwz");
+      fields.put("lh", "SR-MATERIAL-" + i).put("ysfyz", "0.3738")
+          .put("yjnylwz", i == 3 ? "0.1890" : "0.1070");
+      row.set("plpmxb", fields);
+      rows.add(row);
+    }
+    return source;
+  }
+
+  @Test
+  void srBatchPushAcceptsOaNamesWithoutChangingCopperPriceOrSource() throws Exception {
+    var source = srBatchPush();
+    var before = source.deepCopy();
+    var mapped = mapper.map(source, PEER);
+    var request = mapped.quote().request();
+
+    assertThat(request.getHeader().getCopperPrice()).isEqualTo("107215.00");
+    assertThat(request.getItems()).extracting(item -> item.getMaterialNo())
+        .containsExactly("SR-MATERIAL-1", "SR-MATERIAL-2", "SR-MATERIAL-3");
+    assertThat(request.getItems()).extracting(item -> item.getSupportQty())
+        .containsExactly("0.1070", "0.1070", "0.1890");
+    assertThat(request.getItems()).allSatisfy(item -> {
+      assertThat(item.getAnnualVolume()).isNull();
+      assertThat(item.getShippingFee()).isEqualTo("0.3738");
+    });
+    assertThat(request.getItems().getFirst().getExtraFields()).anySatisfy(field -> {
+      assertThat(field.getFieldCode()).isEqualTo("lh");
+      assertThat(field.getSourceFieldPath()).isEqualTo("detailData[0].plpmxb.lh");
+    });
+    assertThat(mapped.lines()).extracting(OaQuotationRequestMapper.SourceLine::tableKey)
+        .containsOnly("批量品明细表");
+    assertThat(mapped.issues()).extracting(OaQuotationResponse.InputIssue::field)
+        .contains("mainData.sftghwshxs");
+    assertThat(new QuoteIngestRequestValidator().validate(request).getErrors()).isEmpty();
+    assertThat(source).isEqualTo(before);
+  }
+
+  @Test
+  void extraBusinessFieldsArePreservedInSourceWithoutBecomingCostInputs() throws Exception {
+    for (int n = 1; n <= 6; n++) {
+      var source = sample(n);
+      var expected = mapper.map(source, PEER).quote().request();
+      ((ObjectNode) source.path("mainData")).putObject("oaAdditionalField").put("value", "原值");
+      ((ObjectNode) source.at("/detailData/0/fields")).putArray("oaAdditionalDetail").add("附件");
+      var before = source.deepCopy();
+      assertThat(mapper.map(source, PEER).quote().request())
+          .usingRecursiveComparison().isEqualTo(expected);
+      assertThat(source).isEqualTo(before);
+    }
+  }
+
+  @Test
+  void nonCostingMetadataDoesNotBlockButActiveCopperPriceStillValidates() throws Exception {
+    var source = srBatchPush();
+    var main = (ObjectNode) source.path("mainData");
+    main.putObject("djtjg").put("value", "无需解析为铜价");
+    main.putObject("sqrgh").put("Name", "申请人工号");
+    main.put("bz1", "长备注".repeat(1000));
+    var before = source.deepCopy();
+    var request = mapper.map(source, PEER).quote().request();
+    assertThat(request.getHeader().getCopperPrice()).isEqualTo("107215.00");
+    assertThat(request.getExtraFields()).noneMatch(f -> "bz1".equals(f.getFieldCode()));
+    assertThat(request.getExtraFields()).anySatisfy(f -> {
+      assertThat(f.getFieldCode()).isEqualTo("sqrgh");
+      assertThat(f.getValueType()).isEqualTo("JSON");
+      assertThat(f.getFieldValue()).isEqualTo(main.path("sqrgh").toString());
+    });
+    assertThat(source).isEqualTo(before);
+    main.put("hsstjj", "不是数字");
+    assertThatThrownBy(() -> mapper.map(source, PEER))
+        .isInstanceOfSatisfying(OaQuotationValidationException.class,
+            e -> assertThat(e.errors().getFirst().field()).isEqualTo("mainData.hsstjj"));
+  }
+
+  @Test
+  void fieldsFromOtherFormsCannotBecomePricingOrExpenseInputs() throws Exception {
+    var source = srBatchPush();
+    var main = (ObjectNode) source.path("mainData");
+    main.put("hsssus304jj0", "12345.00").put("sfzbxqjzdbhcp", "是")
+        .put("sqcs", "其他表单处室");
+    var header = mapper.map(source, PEER).quote().request().getHeader();
+    assertThat(header.getSus304Price()).isNull();
+    assertThat(header.getBoardTender()).isNull();
+    assertThat(header.getApplicantOffice()).isNull();
+    assertThat(header.getCopperPrice()).isEqualTo("107215.00");
+  }
+
+  @Test
+  void srOverseasSalesReadsEitherActualOaFieldWithoutInventingADefault() throws Exception {
+    for (int n = 4; n <= 6; n++) {
+      for (String flag : new String[] {"是", "否"}) {
+        var source = sample(n);
+        var main = (ObjectNode) source.path("mainData");
+        main.remove("sftghwshxs");
+        main.put("sftghwshxszjzd", flag);
+        var before = source.deepCopy();
+        var mapped = mapper.map(source, PEER);
+        assertThat(mapped.quote().request().getHeader().getOverseasSalesMode()).isEqualTo(flag);
+        assertThat(mapped.issues()).noneMatch(issue -> issue.field().contains("sftghw"));
+        assertThat(mapped.quote().request().getExtraFields()).anySatisfy(field -> {
+          assertThat(field.getFieldCode()).isEqualTo("sftghwshxszjzd");
+          assertThat(field.getFieldValue()).isEqualTo(flag);
+          assertThat(field.getSourceFieldPath()).isEqualTo("mainData.sftghwshxszjzd");
+        });
+        assertThat(source).isEqualTo(before);
+        main.put("sftghwshxs", flag);
+        assertThat(mapper.map(source, PEER).quote().request().getHeader().getOverseasSalesMode())
+            .isEqualTo(flag);
+        main.put("sftghwshxs", "是".equals(flag) ? "否" : "是");
+        assertThatThrownBy(() -> mapper.map(source, PEER)).hasMessageContaining("不一致");
+      }
+    }
+    var source = srBatchPush();
+    var main = (ObjectNode) source.path("mainData");
+    main.put("sftghwshxszjzd", " ");
+    assertThat(mapper.map(source, PEER).quote().request().getHeader().getOverseasSalesMode()).isNull();
+    assertThat(mapper.map(source, PEER).issues()).anyMatch(issue -> issue.field().contains("sftghw"));
+    main.put("sftghwshxszjzd", "未知");
+    assertThatThrownBy(() -> mapper.map(source, PEER)).hasMessageContaining("须为是、否");
+  }
+
+  @Test
+  void srBatchAliasesKeepRowIdentityAndRejectConflictingDetailObjects() throws Exception {
+    var source = srBatchPush();
+    var aliases = mapper.map(source, PEER);
+    for (var node : source.path("detailData")) {
+      var row = (ObjectNode) node;
+      row.put("tableKey", "明细表1");
+      row.set("fields", row.remove("plpmxb"));
+    }
+    var canonical = mapper.map(source, PEER);
+    assertThat(canonical.lines()).extracting(OaQuotationRequestMapper.SourceLine::externalLineId)
+        .containsExactlyElementsOf(aliases.lines().stream()
+            .map(OaQuotationRequestMapper.SourceLine::externalLineId).toList());
+    var row = (ObjectNode) source.at("/detailData/0");
+    row.set("plpmxb", row.path("fields").deepCopy());
+    assertThat(mapper.map(source, PEER).quote().request().getItems()).hasSize(3);
+    ((ObjectNode) row.path("plpmxb")).put("lh", "DIFFERENT-MATERIAL");
+    assertThatThrownBy(() -> mapper.map(source, PEER)).hasMessageContaining("不一致");
+  }
+
   @Test
   void oaRequestIdIsTheOnlyDocumentIdentityAndRemovedFieldsAreRejected() throws Exception {
     var root = sample(1).put("requestId", "000123456789");
@@ -294,7 +446,7 @@ class OaQuotationRequestMapperTest {
   }
 
   @Test
-  void requiredEnvelopeFieldsArraysAndUnknownFieldsStillFail() throws Exception {
+  void requiredEnvelopeFieldsAndInvalidKnownBusinessFieldsStillFail() throws Exception {
     for (String key : new String[] {"requestId", "formNo", "processCode", "mainData", "detailData"}) {
       var missing = sample(2);
       missing.remove(key);
@@ -304,9 +456,6 @@ class OaQuotationRequestMapperTest {
     var a = sample(2);
     ((ObjectNode) a.path("mainData")).putArray("sqdw").add("事业部");
     assertThatThrownBy(() -> mapper.map(a, PEER)).hasMessageContaining("单个字符串");
-    var u = sample(2);
-    ((ObjectNode) u.path("mainData")).put("sssyb", "废弃");
-    assertThatThrownBy(() -> mapper.map(u, PEER)).hasMessageContaining("不属于");
   }
 
   @Test

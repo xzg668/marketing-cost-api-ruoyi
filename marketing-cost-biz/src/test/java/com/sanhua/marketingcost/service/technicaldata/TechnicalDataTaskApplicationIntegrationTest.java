@@ -86,6 +86,21 @@ class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegra
   }
   @AfterEach void clearContext() { SecurityContextHolder.clearContext(); }
 
+  @Test void adminStartsUnassignedProductWithoutOaAndCannotEnterAssignedProducts() {
+    var ids = products(1);
+    var tech = new TechnicalDataActor(101L, "技术员", Set.of("technical:data:task:edit"));
+    assertThatThrownBy(() -> service.startAdminEntry(ids.getFirst(), "2026-09", tech)).hasMessageContaining("只有管理员");
+    clearInvocations(oa);
+    var started = service.startAdminEntry(ids.getFirst(), "2026-09", ADMIN);
+    assertThat(started.taskStatus()).isEqualTo("UNASSIGNED");
+    assertThat(started.assigneeUserId()).isNull();
+    assertThat(service.startAdminEntry(ids.getFirst(), "2026-09", ADMIN).id()).isEqualTo(started.id());
+    verifyNoInteractions(oa);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_oa_recipient WHERE task_id=?", Integer.class, started.id())).isZero();
+    service.publish(request(ids, 101L), ADMIN);
+    assertThatThrownBy(() -> service.startAdminEntry(ids.getFirst(), "2026-09", ADMIN)).hasMessageContaining("已分派");
+  }
+
   @Test void productSnapshotReadsAnnualVolumeUnitFromCurrentItemExtensionTable() {
     var ids = products(1);
     Long itemId = ids.getFirst();
@@ -100,6 +115,31 @@ class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegra
     assertThat(product.annualVolumeUnit()).isEqualTo("TEN_THOUSAND_PIECES");
     assertThat(product.sourceSnapshotJson()).contains("TEN_THOUSAND_PIECES");
   }
+
+  @Test void savedProfileIsSharedWhileAdminCanStillFillOtherModules() {
+    var ids = products(2);
+    String material = jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?", String.class, ids.getFirst());
+    jdbc.update("UPDATE oa_form_item SET material_no=? WHERE id=?", material, ids.getLast());
+    jdbc.update("UPDATE lp_quote_costing_workspace SET product_code=? WHERE oa_form_item_id=?", material, ids.getLast());
+    var original = service.startAdminEntry(ids.getFirst(), "2026-09", ADMIN).products().getFirst();
+    var input = new TechnicalDataProfileUpdateRequest();
+    input.setExpectedVersion(original.rowVersion()); input.setProductProperty("标准品");
+    input.setExpectedPlateMaterialRevision(original.profile().plateMaterial().revision());
+    var saved = profiles.save(original.id(), input, ADMIN);
+    var consumer = service.startAdminEntry(ids.getLast(), "2026-09", ADMIN).products().getFirst();
+    assertThat(consumer.modules()).filteredOn(row -> "PROFILE".equals(row.moduleType())).singleElement().satisfies(row -> {
+      assertThat(row.required()).isFalse();
+      assertThat(row.requirementReasonCode()).isEqualTo("SHARED_MODULE_SAVED");
+      assertThat(row.sourceReference()).startsWith("TECH_SHARED:");
+      assertThat(row.currentVersionId()).isNull();
+    });
+    assertThat(consumer.modules()).filteredOn(com.sanhua.marketingcost.dto.technicaldata.TechnicalDataModuleResponse::required)
+        .extracting(com.sanhua.marketingcost.dto.technicaldata.TechnicalDataModuleResponse::moduleType)
+        .contains("AUXILIARY", "SOLDER");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE product_id=?", Integer.class, consumer.id())).isZero();
+    assertThat(jdbc.queryForObject("SELECT version_status FROM lp_quote_tech_data_version WHERE id=?", String.class, saved.versionId())).isEqualTo("DRAFT");
+    verifyNoInteractions(oa);
+  }
   @Test void sameProductInAnotherMonthCannotStartAnotherSupplement() {
     List<Long> ids = products(2);
     var september = service.publish(request(ids, 101L), ADMIN);
@@ -108,7 +148,8 @@ class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegra
         + "FROM lp_quote_costing_workspace WHERE oa_form_item_id=? AND period_month='2026-09'", ids.get(0));
     var next = request(List.of(ids.get(0)), 101L); next.setAccountingMonth("2026-10");
     next.setCheckFingerprints(Map.of(ids.getFirst(), sources.lockAndRead(ids.getFirst(), "2026-10").check().fingerprint()));
-    assertThatThrownBy(() -> service.publish(next, ADMIN)).hasMessageContaining("不能重复补录");
+    assertThatThrownBy(() -> service.publish(next, ADMIN)).hasMessageContaining("没有已确认的补录缺口");
+    assertThatThrownBy(() -> service.startAdminEntry(ids.getFirst(), "2026-10", ADMIN)).hasMessageContaining("没有已确认的补录缺口");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_task WHERE oa_form_item_id=?", Integer.class, ids.getFirst())).isEqualTo(1);
   }
   @Test void uncheckedNoGapForgedFieldsAndCrossBusinessUnitAreRejected() {

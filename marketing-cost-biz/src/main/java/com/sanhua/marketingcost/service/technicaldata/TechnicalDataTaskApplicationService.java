@@ -6,6 +6,8 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataWorkbenchPageResponse;
 
 public interface TechnicalDataTaskApplicationService {
+  TechnicalDataTaskResponse startAdminEntry(Long itemId, String accountingMonth, TechnicalDataActor actor);
+
   TechnicalDataTaskPublishResponse publish(
       TechnicalDataTaskPublishRequest request, TechnicalDataActor actor);
 

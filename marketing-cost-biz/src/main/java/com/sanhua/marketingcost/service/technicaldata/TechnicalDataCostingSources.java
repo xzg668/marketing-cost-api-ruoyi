@@ -248,7 +248,7 @@ public class TechnicalDataCostingSources {
     }
     // 本单资料确认前须能检查已提交内容；成本发布另行校验报价员本次确认采用的整单资料。
     // 其他报价复用时仍要求原报价员已认可资料，避免把待退回内容当作公共有效依据。
-    if (!Objects.equals(task.getOaFormId(), context.oaFormId())
+    if (!TechnicalDataAdminDirectSave.isPublished(task) && !Objects.equals(task.getOaFormId(), context.oaFormId())
         && (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
         || !flow.confirmedFingerprint().equals(json.canonicalHash(captured==null?workflow.submissionBasis(flow.id()):captured.submissionBasis())))) {
       throw error(context, type, "TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", "原补录尚未到财务节点并完成资料确认：" + label);

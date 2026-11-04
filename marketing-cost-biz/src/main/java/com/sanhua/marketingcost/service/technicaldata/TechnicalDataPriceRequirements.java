@@ -32,12 +32,14 @@ public class TechnicalDataPriceRequirements {
   private final TechnicalDataVersionContentCodec content;
   private final OaMessageCodec json;
   private final JdbcTemplate jdbc;
+  private final TechnicalDataPriceOwnership ownership;
 
   public TechnicalDataPriceRequirements(PricePrepareService preparation, MakePartMaterialPriceResolveService prices,
       MaterialMasterRawMapper materials, QuoteTechnicalDataRepository versions, TechnicalDataTaskRepository tasks,
-      TechnicalDataVersionContentCodec content, OaMessageCodec json, JdbcTemplate jdbc) {
+      TechnicalDataVersionContentCodec content, OaMessageCodec json, JdbcTemplate jdbc, TechnicalDataPriceOwnership ownership) {
     this.preparation = preparation; this.prices = prices; this.materials = materials; this.versions = versions;
     this.tasks = tasks; this.content = content; this.json = json; this.jdbc = jdbc;
+    this.ownership = ownership;
   }
 
   public TechnicalDataPriceRequirementsResponse check(QuoteTechTask task, QuoteTechProduct product) {
@@ -54,6 +56,48 @@ public class TechnicalDataPriceRequirements {
     var demands = new TreeMap<String, Set<String>>();
     addModules(product, demands);
     return resolve(task, product, demands, new ArrayList<>(), Set.of());
+  }
+
+  /** 列表使用已检查的需求和当前保存资料，不为刷新页面重新执行价格准备。 */
+  public com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSharedModuleInfo savedSharedSource(
+      Long itemId, String month, String businessUnit, String organization) {
+    var snapshots = jdbc.queryForList("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=? AND period_month=?",
+        String.class, itemId, month);
+    if (snapshots.isEmpty() || snapshots.getFirst() == null) return null;
+    var evidence = json.read(snapshots.getFirst()).path("evidence");
+    var demands = new TreeMap<String, Set<String>>();
+    for (var gap : evidence.path("PRICE").path("gaps")) {
+      if (gap.size() < 3 || !"MISSING_PRICE".equals(gap.path(1).asText()) || gap.path(2).asText().contains("CONFLICT")) return null;
+      add(demands, gap.path(0).asText(), "BOM");
+    }
+    var product = versions.findActiveProduct(itemId, month).orElse(null);
+    if (product != null) addModules(product, demands);
+    if (demands.isEmpty()) return null;
+    var owners = new ArrayList<com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceOwner>();
+    var sourceEvidence = new ArrayList<Object>();
+    for (String code : demands.keySet()) {
+      var owner = ownership.find(code);
+      if (owner == null || owner.versionId() == null || "CANCELLED".equals(owner.taskStatus())
+          || product != null && Objects.equals(product.getId(), owner.productId())
+          || !Objects.equals(owner.businessUnit(), businessUnit) || !Objects.equals(owner.organizationCode(), organization)
+          || !"CNY".equals(owner.currency())) return null;
+      var masters = materials.selectByLatestBatchAndCodes(List.of(code), null, MaterialOrganization.fromPriceOrgCode(organization).getCode());
+      if (masters.size() != 1 || !Objects.equals(masters.getFirst().getUnit(), owner.unit())) return null;
+      var version = versions.findVersion(owner.versionId()).orElse(null);
+      var saved = version == null || !Objects.equals(version.getProductId(), owner.productId()) ? null : content.prices(version);
+      var row = saved == null || saved.items() == null ? null : saved.items().stream().filter(value ->
+          code.equals(value.materialNo()) && organization.equals(value.organizationCode())
+              && owner.unit().equals(value.unit()) && "CNY".equals(value.currency())).findFirst().orElse(null);
+      if (row == null || !TechnicalDataPriceRules.validate(row).isEmpty()) return null;
+      owners.add(owner); sourceEvidence.add(List.of(owner, row));
+    }
+    var first = owners.getFirst();
+    boolean oneSource = owners.stream().allMatch(owner -> Objects.equals(owner.taskId(), first.taskId()));
+    boolean submitted = owners.stream().allMatch(owner -> TechnicalDataSubmissionState.submitted(owner.moduleStatus()));
+    return new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSharedModuleInfo("PRICE", submitted ? "SUBMITTED" : "SAVED",
+        oneSource ? first.taskId() : null, oneSource ? first.productId() : null,
+        submitted && oneSource ? first.versionId() : null, json.canonicalHash(sourceEvidence), oneSource ? first.assigneeName() : null,
+        "已有资料，" + demands.size() + " 项物料沿用原补录，无需重复填写");
   }
 
   /** Reopening an owned source does not make an already adopted quotation price missing. */
@@ -117,6 +161,7 @@ public class TechnicalDataPriceRequirements {
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var scenario = PricePrepareScenarioContext.oaLocked(product.getOaFormItemId(), task.getApplicableOrgCode());
     List<TechnicalDataPriceRequirement> result = new ArrayList<>();
+    List<Object> sharedEvidence = new ArrayList<>();
     for (var demand : demands.entrySet()) {
       String code = demand.getKey();
       String org = MaterialOrganization.fromPriceOrgCode(task.getApplicableOrgCode()).getCode();
@@ -170,11 +215,31 @@ public class TechnicalDataPriceRequirements {
         status = "REVISION";
         message = "修改原补录来源；已采用的月价保持不变";
       }
+      if ("MISSING".equals(status)) {
+        var owner = ownership.find(code);
+        if (owner != null && !Objects.equals(owner.productId(), product.getId())
+            && !"CANCELLED".equals(owner.taskStatus())
+            && Objects.equals(owner.organizationCode(), task.getApplicableOrgCode())
+            && Objects.equals(owner.businessUnit(), task.getBusinessUnitType())
+            && Objects.equals(owner.unit(), unit) && "CNY".equals(owner.currency())) {
+          var original = owner.versionId() == null ? null : versions.findVersion(owner.versionId()).orElse(null);
+          var saved = original == null || !Objects.equals(original.getProductId(), owner.productId())
+              ? null : content.prices(original);
+          var entry = saved == null || saved.items() == null ? null : saved.items().stream()
+              .filter(row -> code.equals(row.materialNo()) && task.getApplicableOrgCode().equals(row.organizationCode())
+                  && unit.equals(row.unit()) && "CNY".equals(row.currency()))
+              .findFirst().orElse(null);
+          boolean complete = entry != null && TechnicalDataPriceRules.validate(entry).isEmpty();
+          status = complete ? "SHARED" : "ASSIGNED";
+          message = (complete ? "已有资料" : "原任务办理中") + "（原任务 " + owner.taskId() + "），无需重复补录";
+          sharedEvidence.add(List.of(owner, entry == null ? "" : entry));
+        }
+      }
       result.add(new TechnicalDataPriceRequirement(key, code, master.getMaterialName(), master.getMaterialModel(), task.getApplicableOrgCode(),
           unit, "CNY", List.copyOf(demand.getValue()), status, price, message));
       if ("ERROR".equals(status)) issues.add(code + "：" + message);
     }
-    return new TechnicalDataPriceRequirementsResponse(List.copyOf(result), List.copyOf(issues), json.canonicalHash(List.of(result, issues)));
+    return new TechnicalDataPriceRequirementsResponse(List.copyOf(result), List.copyOf(issues), json.canonicalHash(List.of(result, issues, sharedEvidence)));
   }
 
   private void addBom(QuoteTechTask task, QuoteTechProduct product, Map<String, Set<String>> demands, List<String> issues) {

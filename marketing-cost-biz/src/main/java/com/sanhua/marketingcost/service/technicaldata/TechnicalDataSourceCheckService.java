@@ -89,14 +89,18 @@ public class TechnicalDataSourceCheckService {
       if (!missingCodes.isEmpty()) {
         var otherOwners = missingCodes.stream().map(priceOwnership::find).filter(Objects::nonNull)
             .filter(owner -> product.isEmpty() || !Objects.equals(owner.productId(), product.get().getId()))
+            .filter(owner -> Objects.equals(owner.businessUnit(), context.businessUnitType())
+                && Objects.equals(owner.organizationCode(), context.priceOrgCode()))
             .filter(owner -> !"CANCELLED".equals(owner.taskStatus()) || TechnicalDataSubmissionState.submitted(owner.moduleStatus())).toList();
         if (!otherOwners.isEmpty()) evidence.put("PRICE_OWNERS", otherOwners);
         if (otherOwners.size() == missingCodes.size()) {
           String owners = otherOwners.stream().map(owner -> owner.materialNo() + " 已由" + Objects.toString(owner.assigneeName(), "原技术员")
               + "办理（任务 " + owner.taskId() + "）").collect(java.util.stream.Collectors.joining("；"));
           return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
-              "PRICE_WAIT_ORIGINAL_OWNER", owners + "，等待原资料形成可用价格，无需重复分派", reference);
+              otherOwners.stream().allMatch(owner -> owner.versionId() != null) ? "PRICE_SHARED_SAVED" : "PRICE_WAIT_ORIGINAL_OWNER",
+              owners + "，已有办理来源，无需重复补录", reference);
         }
+        otherOwners.forEach(owner -> missingCodes.remove(owner.materialNo()));
       }
       if (!missingCodes.isEmpty()) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.MISSING,
           "PRICE_SOURCE_MISSING", "统一取价后仍有 " + missingCodes.size() + " 项物料缺少可用价格", reference);

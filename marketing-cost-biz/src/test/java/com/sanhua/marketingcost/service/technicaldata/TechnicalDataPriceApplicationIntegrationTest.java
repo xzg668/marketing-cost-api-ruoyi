@@ -27,6 +27,7 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
   @Autowired TechnicalDataVersionContentCodec codec;
   @Autowired TechnicalDataParticipantVersions versions;
   @Autowired TechnicalDataPricePublication publication;
+  @Autowired TechnicalDataAdminDirectSave adminDirect;
   @Autowired com.sanhua.marketingcost.service.impl.TechnicalPriceSourceResolverImpl priceCalculator;
   @Autowired com.sanhua.marketingcost.mapper.PriceFixedItemMapper fixed;
   @Autowired com.sanhua.marketingcost.mapper.PriceLinkedItemMapper linked;
@@ -67,12 +68,63 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     verifyNoInteractions(references);
   }
 
+  @Test void adminDirectSavePublishesValidatedFixedPriceWithoutOaSubmission() {
+    var admin = new TechnicalDataActor(1L, "管理员", Set.of("*:*:*"));
+    var taskId = repository.findProduct(productId).orElseThrow().getTaskId();
+    jdbc.update("UPDATE lp_quote_tech_task SET task_status='UNASSIGNED',assignee_user_id=NULL,assignee_name=NULL WHERE id=?", taskId);
+    jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=NULL,assignee_name=NULL WHERE product_id=?", productId);
+    var request = input("FIXED", 0);
+    request.getItems().getFirst().setUnitPrice(new BigDecimal("83.715929"));
+    var saved = service.save(productId, request, admin);
+    var result = adminDirect.save(taskId, new TechnicalDataAdminDirectSave.Request(saved.expectedVersion()), admin);
+    assertThat(result.effectiveVersionId()).isNotNull();
+    assertThat(jdbc.queryForObject("SELECT fixed_price FROM lp_price_fixed_item WHERE technical_version_id=? AND material_code=? AND technical_publication_status='AVAILABLE'", BigDecimal.class,
+        result.effectiveVersionId(), material)).isEqualByComparingTo("83.715929");
+    assertThat(ownership.find(material).versionId()).isEqualTo(result.effectiveVersionId());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_submission WHERE task_id=?", Integer.class, taskId)).isZero();
+    assertThat(service.get(productId, null, admin).editable()).isFalse();
+  }
+
   @Test void incompleteDraftPersistsButCannotPassSubmissionValidation() {
     var saved = service.save(productId, input("FIXED", 0), WANG);
     assertThat(saved.moduleStatus()).isEqualTo("EDITING");
     assertThat(saved.content().items().getFirst().unitPrice()).isNull();
     assertThat(service.validateCurrent(repository.findProduct(productId).orElseThrow(), repository.findVersion(saved.versionId()).orElseThrow()))
         .anyMatch(message -> message.contains("必须大于 0"));
+  }
+
+  @Test void batchSubmissionRecordsSharedPriceWithoutDuplicateEntryOrPublication() {
+    var request = input("FIXED", 0);
+    request.getItems().getFirst().setUnitPrice(new BigDecimal("23.45"));
+    var original = service.save(productId, request, WANG);
+    var owner = ownership.find(material);
+    Long consumer = product(101L, "王工", "2026-09");
+    when(requirements.check(any(), argThat(row -> consumer.equals(row.getId()))))
+        .thenReturn(check("SHARED", "shared-source"));
+    var consumerProduct = repository.findProduct(consumer).orElseThrow();
+
+    service.prepareSharedReference(consumerProduct.getTaskId(), WANG);
+
+    var saved = service.get(consumer, null, WANG);
+    assertThat(saved.content().items()).isEmpty();
+    assertThat(saved.issues()).isEmpty();
+    assertThat(saved.moduleStatus()).isEqualTo("READY");
+    assertThat(ownership.find(material)).isEqualTo(owner);
+    assertThat(repository.findVersion(original.versionId()).orElseThrow().getVersionStatus()).isEqualTo("DRAFT");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_fixed_item WHERE material_code=?", Integer.class, material)).isZero();
+    assertThat(service.validateCurrent(repository.findProduct(consumer).orElseThrow(),
+        repository.findVersion(saved.versionId()).orElseThrow())).isEmpty();
+
+    var person = new com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository.Recipient(
+        1L,consumerProduct.getTaskId(),1,101L,"王工","wang","FILL",List.of("PRICE"),1L,"todo","CONFIRMED","OPEN",
+        null,"工程部","leader","王总",null,0,0,null,true,null,null,"T-SHARED",null);
+    var frozen = versions.freeze(repository.lockProduct(consumer).orElseThrow(), person, saved.expectedVersion(), 101L);
+    clearInvocations(requirements);
+    var history = service.get(consumer, frozen.getId(), WANG);
+    assertThat(history.requirements().items()).extracting(TechnicalDataPriceRequirement::status).containsExactly("SHARED");
+    assertThat(history.owners()).containsExactly(owner);
+    assertThat(history.editable()).isFalse();
+    verifyNoInteractions(requirements);
   }
 
   @Test void manualFormulaRemainsTextAndDoesNotCarryOldFixedOrReference() {

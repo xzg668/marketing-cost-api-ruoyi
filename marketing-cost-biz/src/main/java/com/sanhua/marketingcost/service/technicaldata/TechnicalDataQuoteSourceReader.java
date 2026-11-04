@@ -135,14 +135,17 @@ public class TechnicalDataQuoteSourceReader {
         form.getBusinessUnitType(), QuoteProductIdentityUtils.resolveCostingCode(item), item.getProductName(), item.getSpec(),
         item.getSunlModel(), product.applicableOrgCode(), product.materialOrganizationCode(), now.toLocalDate(), now);
     var checked = checks.check(context, workspace);
-    var requirements = evaluator.evaluate(checked.facts());
     var shared = sharedSources.describe(product, month, checked.facts());
+    var requirements = TechnicalDataSharedModuleQuery.applySharedSources(evaluator.evaluate(checked.facts()), shared);
     String fingerprint = codec.canonicalHash(Map.of("product", snapshots.create(product).fingerprint(), "month", month, "sharedModules", shared,
         "facts", requirements.stream().map(row -> List.of(row.moduleType(), row.availability().name(), row.reasonCode(),
             Objects.toString(row.sourceReference(), ""))).toList()));
     var response = new TechnicalDataSourceCheckResponse(item.getId(), month, fingerprint, now, requirements, null, shared);
     store.save(workspace.getId(), response, checked.evidence());
-    return new Source(product, checked.facts(), response);
+    var facts = requirements.stream().map(row -> new TechnicalDataSourceFact(
+        TechnicalDataModuleType.valueOf(row.moduleType()), row.availability(), row.reasonCode(), row.reason(),
+        row.sourceReference(), row.checkedAt())).toList();
+    return new Source(product, facts, response);
   }
 
   private TechnicalDataProductSource product(OaForm form, OaFormItem item) {

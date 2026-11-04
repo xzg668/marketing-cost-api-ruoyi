@@ -50,5 +50,17 @@ public record ElectronicDrawingMaterialResolutionResponse(
       String processingMessage,
       boolean canModify,
       String quantityUnit,
-      Long correctedFromSourceNodeId) {}
+      Long correctedFromSourceNodeId,
+      List<U9Child> u9Children) {
+    public Item {
+      u9Children = u9Children == null ? List.of() : List.copyOf(u9Children);
+    }
+  }
+
+  /** 当前制造节点采用的 U9 下级；节点键只在该图库分支内唯一，不能作为图库修正行提交。 */
+  public record U9Child(
+      String nodeKey, String parentNodeKey, Long sourceRawHierarchyId, Long sourceU9BomId,
+      String materialCode, String materialName, String materialSpec, String drawingNo,
+      String shapeAttr, BigDecimal quantity, BigDecimal parentBaseQty, String unit,
+      String bomPurpose, String bomVersion, Integer sortSeq) {}
 }

@@ -105,6 +105,22 @@ public class TechnicalDataManufacturingApplicationService {
         historical ? List.of() : prices.check(context, applicableRaw(saved, source)));
   }
 
+  /** 报价查看入口：未分派也能查看实际制造件行；不创建任务或技术草稿。 */
+  public TechnicalDataManufacturingResponse readQuote(Long itemId, String accountingMonth, TechnicalDataActor actor) {
+    if (actor == null || !actor.canViewSupplementOverview()) throw forbidden("无权查看报价制造件明细");
+    String month;
+    try { month = java.time.YearMonth.parse(accountingMonth).toString(); }
+    catch (RuntimeException exception) { throw invalid("核算月份应为 YYYY-MM"); }
+    String businessUnit = com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType();
+    if (!actor.admin() && (businessUnit == null || businessUnit.isBlank())) throw forbidden("请选择当前业务单元");
+    var context = contexts.loadForCurrentBusinessUnit(itemId, month);
+    var product = repository.findActiveProduct(itemId, month);
+    // 已分派后沿用原版本查看策略：报价员仅看已提交内容，不暴露技术员工作草稿。
+    if (product.isPresent()) return read(product.get().getId(), null, actor);
+    return new TechnicalDataManufacturingResponse(null, 0, null, false, false, sources.inspect(context),
+        null, List.of(), List.of(), false, null, List.of());
+  }
+
   private Manufacturing applicableRaw(Manufacturing saved, Assessment source) {
     if (source == null || saved == null || saved.items() == null || saved.evidence() == null
         || !Objects.equals(saved.evidence().drawingSourceVersionId(), source.sourceVersionId())) return null;

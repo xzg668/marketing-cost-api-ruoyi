@@ -39,6 +39,10 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
   @Autowired private QuoteTechnicalDataRepository repository;
   @Autowired private TechnicalDataSubmissionValidationService validation;
   @Autowired private TechnicalDataParticipantVersions versions;
+  @Autowired private TechnicalDataAdminDirectSave adminDirect;
+  @Autowired private TechnicalDataCostingSources costingSources;
+  @Autowired private TechnicalDataSharedModuleRepository sharedSources;
+  @Autowired private com.sanhua.marketingcost.service.costing.QuoteCostingSubmissionService costingSubmissions;
   @Autowired private TechnicalDataVersionContentCodec codec;
   @Autowired private QuoteBomPreparationRecordMapper preparations;
   @Autowired private JdbcTemplate jdbc;
@@ -53,6 +57,59 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
   @MockBean private ElectronicDrawingU9SubBomPort u9;
   private Long taskId, productId, itemId, sourceId;
   private String key;
+
+  @Test void adminDirectSaveValidatesFreezesAndSuppliesCostingWithoutOa() {
+    jdbc.update("UPDATE lp_quote_tech_task SET assignee_user_id=NULL,assignee_name=NULL,task_status='UNASSIGNED' WHERE id=?", taskId);
+    jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=NULL,assignee_name=NULL WHERE product_id=?", productId);
+    jdbc.update("UPDATE lp_quote_tech_module SET required_flag=0,module_status='NOT_REQUIRED',source_availability='AVAILABLE' WHERE product_id=? AND module_type='PROFILE'", productId);
+    var first = service.read(productId, null, ADMIN);
+    assertThat(first.editable()).isTrue();
+    assertThatThrownBy(() -> adminDirect.save(taskId, new TechnicalDataAdminDirectSave.Request(null), ADMIN))
+        .hasMessageContaining("当前产品版本");
+    var incomplete = adminDirect.save(taskId, new TechnicalDataAdminDirectSave.Request(first.expectedVersion()), ADMIN);
+    assertThat(incomplete.effectiveVersionId()).isNull(); assertThat(incomplete.validation().valid()).isFalse();
+    confirmC();
+    var saved = service.save(productId, request(service.read(productId, null, ADMIN), true), ADMIN);
+    assertThat(saved.issues()).isEmpty();
+    assertThat(service.read(productId, null, ADMIN).saved()).isEqualTo(saved.saved());
+    var result = adminDirect.save(taskId, new TechnicalDataAdminDirectSave.Request(saved.expectedVersion()), ADMIN);
+    assertThat(result.effectiveVersionId()).isNotNull();
+    var effective = repository.findVersion(result.effectiveVersionId()).orElseThrow();
+    assertThat(effective.getVersionStatus()).isEqualTo("SUBMITTED");
+    assertThat(effective.getUpdatedBy()).isEqualTo(1L);
+    assertThat(codec.manufacturing(effective)).isEqualTo(saved.saved());
+    assertThat(service.read(productId, null, ADMIN).editable()).isFalse();
+    assertThat(service.read(productId, null, ADMIN).saved()).isEqualTo(saved.saved());
+    var product = repository.findProduct(productId).orElseThrow();
+    var task = repository.findTask(taskId).orElseThrow();
+    assertThat(TechnicalDataAdminDirectSave.isPublished(task)).isTrue();
+    assertThat(costingSubmissions.hasPendingSubmissions(task.getOaFormId(), itemId)).isFalse();
+    costingSubmissions.requireAccepted(task.getOaFormId(), itemId);
+    var now = LocalDateTime.now();
+    var context = new com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext(task.getOaFormId(), itemId, key,
+        "2026-09", "COMMERCIAL", key, null, null, null, "210", "COMMERCIAL", now.toLocalDate(), now);
+    var selected = costingSources.requireSource(context, sharedSources.module(productId, "MANUFACTURING"));
+    assertThat(selected.version().getId()).isEqualTo(effective.getId());
+    assertThat(manufacturingBom.load(contexts.load(itemId, "COMMERCIAL", "210", "2026-09"))).isNotEmpty()
+        .allSatisfy(row -> assertThat(row.technicalVersionId()).isEqualTo(effective.getId()));
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_submission WHERE task_id=?", Integer.class, taskId)).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_oa_recipient WHERE task_id=?", Integer.class, taskId)).isZero();
+    assertThat(adminDirect.save(taskId, new TechnicalDataAdminDirectSave.Request(saved.expectedVersion()), ADMIN).effectiveVersionId()).isEqualTo(effective.getId());
+    var later = request(saved, true);
+    later.setExpectedVersion(service.read(productId, null, ADMIN).expectedVersion());
+    assertThatThrownBy(() -> service.save(productId, later, ADMIN)).hasMessageContaining("未分派");
+  }
+
+  @Test void directSaveRejectsAssignedTasksAndNonAdminWithoutPublishingAnything() {
+    var input = new TechnicalDataAdminDirectSave.Request(repository.findProduct(productId).orElseThrow().getRowVersion());
+    assertThatThrownBy(() -> adminDirect.save(taskId, input, ADMIN)).hasMessageContaining("已分派");
+    assertThatThrownBy(() -> adminDirect.save(taskId, input, WANG)).hasMessageContaining("只有管理员");
+    assertThatThrownBy(() -> adminDirect.save(taskId, input,
+        new TechnicalDataActor(1L, "OA", Set.of("*:*:*"), repository.findTask(taskId).orElseThrow().getOaFormId())))
+        .hasMessageContaining("只有管理员");
+    assertThat(repository.findProduct(productId).orElseThrow().getEffectiveVersionId()).isNull();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE product_id=? AND version_status='SUBMITTED'", Integer.class, productId)).isZero();
+  }
 
   @BeforeEach void fixture() throws Exception {
     key = "TW09-" + UUID.randomUUID().toString().substring(0, 8);
@@ -121,6 +178,34 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     assertThat(service.save(productId, request(saved, true), WANG).bomComposed()).isTrue();
   }
 
+  @Test void missingDrawingNetWeightUsesMatchedU9WeightForDisplaySavingAndHistoricalVersion() {
+    confirmC();
+    jdbc.update("UPDATE lp_electronic_drawing_source_node SET reference_weight=NULL,reference_weight_unit=NULL WHERE supplement_version_id=? AND resolved_material_code=?", sourceId, key + "-B");
+    jdbc.update("UPDATE lp_material_master_raw SET global_seg_3_theoretical_net_weight='10.5' WHERE organization_code='COMMERCIAL' AND material_code=?", key + "-B");
+    var current = service.read(productId, null, WANG);
+    assertThat(current.source().nodes().stream().filter(row -> (key + "-B").equals(row.parentMaterialNo())))
+        .hasSize(2).allSatisfy(row -> {
+          assertThat(row.sourceNetWeight()).isEqualByComparingTo("10.5");
+          assertThat(row.sourceNetWeightUnit()).isEqualTo("g");
+        });
+    var saved = service.save(productId, request(current, true), WANG);
+    assertThat(saved.saved().items().stream().filter(row -> (key + "-B").equals(row.parentMaterialNo())))
+        .hasSize(2).allSatisfy(row -> {
+          var input = TechnicalDataManufacturingRules.calculationInput(row);
+          assertThat(input.netWeightG()).isEqualByComparingTo("10.5");
+          assertThat(input.grossWeightG()).isEqualByComparingTo("12");
+          assertThat(row.netWeightKg()).isEqualByComparingTo("0.0105");
+        });
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_electronic_drawing_source_node WHERE supplement_version_id=? AND resolved_material_code=? AND reference_weight IS NOT NULL", Long.class, sourceId, key + "-B")).isZero();
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
+        "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
+    jdbc.update("UPDATE lp_material_master_raw SET global_seg_3_theoretical_net_weight='99' WHERE organization_code='COMMERCIAL' AND material_code=?", key + "-B");
+    var historical = service.read(productId, frozen.getId(), WANG);
+    assertThat(historical.saved()).isEqualTo(saved.saved());
+    assertThat(historical.historical()).isTrue();
+  }
+
   @Test void deletingDraftRawClearsCompositionAndCannotSubmitAnEmptyGapWhileFrozenSnapshotSurvivesReturn() {
     confirmC(); var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
     var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
@@ -170,6 +255,66 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     var saved = service.save(productId, request(state, true), WANG);
     assertThat(repository.findVersion(saved.versionId()).orElseThrow().getUpdatedBy()).isEqualTo(101L);
     assertThat(jdbc.queryForObject("SELECT assignee_user_id FROM lp_quote_tech_module WHERE product_id=? AND module_type='MANUFACTURING'", Long.class, productId)).isEqualTo(101L);
+  }
+
+  @Test void quoteViewerCanReadUnassignedManufacturingRowsWithoutCreatingTasksOrVersions() {
+    jdbc.update("UPDATE lp_quote_tech_product SET active_flag=0,active_lock_key=NULL WHERE id=?", productId);
+    jdbc.update("UPDATE lp_quote_tech_task SET active_flag=0,active_lock_key=NULL WHERE id=?", taskId);
+    var before = jdbc.queryForMap("SELECT (SELECT COUNT(*) FROM lp_quote_tech_task) tasks, (SELECT COUNT(*) FROM lp_quote_tech_data_version) versions, (SELECT COUNT(*) FROM lp_quote_bom_preparation_record) preparations");
+    for (int attempt = 0; attempt < 2; attempt++) {
+      var viewed = service.readQuote(itemId, "2026-09", ADMIN);
+      assertThat(viewed.productId()).isNull(); assertThat(viewed.saved()).isNull();
+      assertThat(viewed.editable()).isFalse(); assertThat(viewed.historical()).isFalse();
+      assertThat(viewed.source().sourceVersionId()).isEqualTo(sourceId);
+      assertThat(viewed.source().nodes()).extracting(node -> node.state().name())
+          .containsExactly("U9_READY", "MISSING_RAW", "MISSING_RAW", "WAIT_FINANCE");
+      assertThat(viewed.source().nodes().get(1).parentMaterialNo()).isEqualTo(key + "-B");
+    }
+    assertThat(service.readQuote(itemId, "2026-10", ADMIN).source().sourceVersionId()).isNull();
+    assertThat(jdbc.queryForMap("SELECT (SELECT COUNT(*) FROM lp_quote_tech_task) tasks, (SELECT COUNT(*) FROM lp_quote_tech_data_version) versions, (SELECT COUNT(*) FROM lp_quote_bom_preparation_record) preparations")).isEqualTo(before);
+  }
+
+  @Test void quoteViewerReadsSubmittedManufacturingDetailsButNeverTheTechnicianDraft() {
+    confirmC();
+    var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    assertThat(service.readQuote(itemId, "2026-09", ADMIN).saved()).isNull();
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
+        "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
+    var snapshot = codec.versionContentJson(frozen, codec.readReferenceSnapshot(frozen.getReferenceSnapshotJson()), List.of(), List.of(), List.of());
+    jdbc.update("""
+        INSERT INTO lp_quote_tech_submission(task_id,product_id,technical_version_id,submission_round,request_id,
+          expected_task_version,expected_product_version,content_schema_version,content_fingerprint,content_snapshot_json,
+          summary_json,assignee_user_id,submitted_by,prepared_at,submission_status,module_types_json)
+        VALUES(?,?,?,1,?,0,0,2,?,?,'[]',101,101,NOW(),'PREPARED','["DRAWING_BOM","MANUFACTURING"]')
+        """,taskId,productId,frozen.getId(),key,frozen.getContentFingerprint(),snapshot);
+    jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='SENDING' WHERE technical_version_id=?",frozen.getId());
+    jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='SENT',sent_at=NOW() WHERE technical_version_id=?",frozen.getId());
+    jdbc.update("UPDATE lp_quote_tech_data_version SET version_status='SUBMITTED' WHERE id=?",frozen.getId());
+    var viewed = service.readQuote(itemId, "2026-09", ADMIN);
+    assertThat(viewed.versionId()).isEqualTo(frozen.getId());
+    assertThat(viewed.editable()).isFalse(); assertThat(viewed.historical()).isTrue();
+    assertThat(viewed.saved()).isEqualTo(saved.saved());
+    assertThat(viewed.saved().items()).allSatisfy(row -> {
+      assertThat(row.rawMaterialNo()).isEqualTo(key + "-RAW");
+      assertThat(row.netLengthMm()).isEqualByComparingTo("120");
+      assertThat(row.grossWeightKg()).isEqualByComparingTo("0.012");
+    });
+    var deniedSave = request(saved, true); deniedSave.setExpectedVersion(viewed.expectedVersion());
+    assertThatThrownBy(() -> service.save(productId, deniedSave, ADMIN)).hasMessageContaining("未分派");
+  }
+
+  @Test void quoteManufacturingReadKeepsActorBusinessUnitAndMonthBoundaries() {
+    assertThatThrownBy(() -> service.readQuote(itemId, "2026-09", WANG)).hasMessageContaining("无权");
+    assertThatThrownBy(() -> service.readQuote(itemId, "2026-09", new TechnicalDataActor(1L,"OA",Set.of("*:*:*"),1L))).hasMessageContaining("无权");
+    assertThatThrownBy(() -> service.readQuote(itemId, "invalid", ADMIN)).hasMessageContaining("YYYY-MM");
+    var viewer = new TechnicalDataActor(2L,"报价员",Set.of("ingest:quote:cost-run:execute"));
+    assertThatThrownBy(() -> service.readQuote(itemId, "2026-09", viewer)).hasMessageContaining("业务单元");
+    var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("viewer","unused",List.of());
+    auth.setDetails(java.util.Map.of("businessUnitType","HOUSEHOLD"));
+    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+    try { assertThatThrownBy(() -> service.readQuote(itemId, "2026-09", viewer)).hasMessageContaining("无权访问"); }
+    finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
   }
 
   @Test void fulfilledFormalRequirementStopsConsumingRetainedTechnicalDraft() {

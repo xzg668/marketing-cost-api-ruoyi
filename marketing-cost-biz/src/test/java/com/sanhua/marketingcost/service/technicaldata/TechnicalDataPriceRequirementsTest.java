@@ -27,8 +27,9 @@ class TechnicalDataPriceRequirementsTest {
   private final TechnicalDataTaskRepository tasks = mock(TechnicalDataTaskRepository.class);
   private final TechnicalDataVersionContentCodec content = mock(TechnicalDataVersionContentCodec.class);
   private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
+  private final TechnicalDataPriceOwnership ownership = mock(TechnicalDataPriceOwnership.class);
   private final TechnicalDataPriceRequirements service = new TechnicalDataPriceRequirements(preparation, prices, materials,
-      repository, tasks, content, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), jdbc);
+      repository, tasks, content, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), jdbc, ownership);
   private final QuoteTechTask task = new QuoteTechTask();
   private final QuoteTechProduct product = new QuoteTechProduct();
   private final QuoteTechDataVersion draft = new QuoteTechDataVersion();
@@ -69,6 +70,30 @@ class TechnicalDataPriceRequirementsTest {
     when(content.solder(draft)).thenReturn(solder());
     var second=service.checkModuleReferences(task,product);
     assertThat(second.items()).isEmpty(); assertThat(second.fingerprint()).isNotEqualTo(first.fingerprint());
+  }
+
+  @Test void anotherProductsSavedPriceIsSharedWithoutBecomingAnEffectivePrice() {
+    when(tasks.findModules(2L)).thenReturn(List.of(module("SOLDER")));
+    when(content.solder(draft)).thenReturn(solder("PART"));
+    var owner = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceOwner(
+        "PART", 41L, 42L, 43L, "王工", "READY", "PENDING", 44L, "210", "COMMERCIAL", "只", "CNY");
+    when(ownership.find("PART")).thenReturn(owner);
+    var original = new QuoteTechDataVersion(); original.setId(44L); original.setProductId(42L); original.setVersionStatus("DRAFT");
+    when(repository.findVersion(44L)).thenReturn(Optional.of(original));
+    when(content.prices(original)).thenReturn(new Prices(List.of(new PriceItem("original", "PART", "210", "只", "CNY",
+        "FIXED", new BigDecimal("12.5"), null, null, null, null, null, null))));
+    var result = service.checkModuleReferences(task, product);
+    assertThat(result.issues()).isEmpty();
+    assertThat(result.items()).singleElement().satisfies(row -> {
+      assertThat(row.status()).isEqualTo("SHARED");
+      assertThat(row.requiresEntry()).isFalse();
+      assertThat(row.unitPrice()).isNull();
+      assertThat(row.message()).contains("已有资料", "43");
+    });
+    when(prices.calculateMaterialUnitPrice(anyString(), any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(MakePartMaterialPriceResolveResult.ok("PART", "FIXED", new BigDecimal("12.5"), "已确认补录价", null));
+    assertThat(service.checkModuleReferences(task, product).items()).singleElement()
+        .satisfies(row -> assertThat(row.status()).isEqualTo("AVAILABLE"));
   }
 
   @org.junit.jupiter.params.ParameterizedTest

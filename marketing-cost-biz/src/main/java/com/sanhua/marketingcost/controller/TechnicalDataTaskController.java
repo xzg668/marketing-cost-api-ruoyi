@@ -37,6 +37,22 @@ public class TechnicalDataTaskController {
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataDocumentSubmissionService documents;
   private final TechnicalDataActorProvider actorProvider;
   private final TechnicalDataWorkflowService workflowService;
+  @Autowired private com.sanhua.marketingcost.service.technicaldata.TechnicalDataAdminDirectSave adminDirect;
+
+  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
+  @PostMapping("/quote-items/{itemId}/admin-entry")
+  public CommonResult<TechnicalDataTaskResponse> startAdminEntry(@PathVariable Long itemId,
+      @RequestParam String accountingMonth) {
+    return execute(() -> applicationService.startAdminEntry(itemId, accountingMonth, actorProvider.current()));
+  }
+
+  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
+  @PostMapping("/tasks/{taskId}/admin-direct-save")
+  public CommonResult<com.sanhua.marketingcost.service.technicaldata.TechnicalDataAdminDirectSave.Result> adminDirectSave(
+      @PathVariable long taskId,
+      @RequestBody com.sanhua.marketingcost.service.technicaldata.TechnicalDataAdminDirectSave.Request request) {
+    return execute(() -> adminDirect.save(taskId, request, actorProvider.current()));
+  }
 
   public TechnicalDataTaskController(TechnicalDataTaskApplicationService applicationService,
       com.sanhua.marketingcost.service.technicaldata.TechnicalDataSubmissionValidationService validation,

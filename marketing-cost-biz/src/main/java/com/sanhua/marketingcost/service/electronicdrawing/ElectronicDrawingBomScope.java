@@ -173,6 +173,18 @@ public class ElectronicDrawingBomScope {
         }
         var action = decision.effectiveShape() == QuoteMaterialShape.OUTSOURCE
             ? actions.resolve(decision).excludedDirectChildMaterialCodes() : Set.<String>of();
+        // 图纸已经列出的层级和用量是本次报价依据；只在图纸到此结束时接 U9 下级。
+        if (!lower.isEmpty()) {
+          branches.put(row.getId(), new Branch(row, material, State.DRAWING_READY,
+              DRAWING_NODE.equals(material.sourceCategory()) ? "无 U9 料号，保留图号并沿图库下级处理" : "按图纸下级及数量继续处理", null));
+          for (var child : lower) visit(child, nodeContext, action);
+          if (lower.stream().allMatch(child -> branches.get(child.getId()) != null
+              && branches.get(child.getId()).state() == State.EXCLUDED)) {
+            branches.put(row.getId(), new Branch(row, material, State.ERROR,
+                "图纸下级均被现有核算规则排除，请核实图纸及物料属性", null));
+          }
+          return;
+        }
         SubBomResult bom = null;
         if (!DRAWING_NODE.equals(material.sourceCategory())) {
           bom = cache.computeIfAbsent(material.materialCode(), code -> u9.query(new SubBomQuery(context.oaNo(),
@@ -185,25 +197,16 @@ public class ElectronicDrawingBomScope {
                 || !Objects.equals(context.materialOrgCode(), bom.materialOrganizationCode()))
               throw new IllegalStateException("U9 下级返回的产品、组织或明细无效");
             branches.put(row.getId(), new Branch(row, material, State.U9_READY, "沿用 U9 下级，无需补录", bom));
-            for (var child : lower) exclude(child, "已由 U9 下级替换，无需确认原图库行"); return;
+            return;
           }
           if (bom.status() != ElectronicDrawingU9SubBomPort.Status.NOT_FOUND) {
             branches.put(row.getId(), new Branch(row, material, State.ERROR,
                 bom.message() == null ? "U9 下级查询未取得明确结论" : bom.message(), bom)); return;
           }
         }
-        boolean hasRetainedChild = lower.stream().anyMatch(child -> text(child.getResolvedMaterialCode()) == null
-            || !action.contains(child.getResolvedMaterialCode()));
-        if (hasRetainedChild) {
-          branches.put(row.getId(), new Branch(row, material, State.DRAWING_READY,
-              DRAWING_NODE.equals(material.sourceCategory()) ? "无 U9 料号，保留图号并沿图库下级处理" : "沿图库下级继续检查", bom));
-          for (var child : lower) visit(child, nodeContext, action);
-        } else {
-          var state = decision.effectiveShape() == QuoteMaterialShape.MANUFACTURE ? State.MISSING_RAW : State.ERROR;
-          branches.put(row.getId(), new Branch(row, material, state,
-              state == State.MISSING_RAW ? "实际保留的制造件缺原材料关系，请补录" : "委外或虚拟件缺少可用下级", bom));
-          for (var child : lower) exclude(child, "形态规则已排除该下级");
-        }
+        var state = decision.effectiveShape() == QuoteMaterialShape.MANUFACTURE ? State.MISSING_RAW : State.ERROR;
+        branches.put(row.getId(), new Branch(row, material, state,
+            state == State.MISSING_RAW ? "实际保留的制造件缺原材料关系，请补录" : "委外或虚拟件缺少可用下级", bom));
       }
     }
     var walker = new Walker();

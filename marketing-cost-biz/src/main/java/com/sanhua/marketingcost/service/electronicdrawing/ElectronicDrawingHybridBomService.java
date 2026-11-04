@@ -327,7 +327,6 @@ public class ElectronicDrawingHybridBomService {
         hybrid.u9PurchaseLeafCount(),
         hybrid.electronicDrawingPurchaseLeafCount(),
         hybrid.quotationLeafCount(),
-        hybrid.replacedElectronicDescendantCount(),
         hybrid.u9QueryCount(),
         idempotent,
         hybrid.nodes());
@@ -377,7 +376,6 @@ public class ElectronicDrawingHybridBomService {
       int u9PurchaseLeafCount,
       int electronicDrawingPurchaseLeafCount,
       int quotationLeafCount,
-      int replacedElectronicDescendantCount,
       int u9QueryCount,
       boolean idempotent,
       List<Node> nodes) {

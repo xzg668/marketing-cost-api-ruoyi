@@ -29,7 +29,7 @@ class TechnicalDataManufacturingSourceQueryTest {
   private final QuoteBomSupplementVersionMapper versions = mock(QuoteBomSupplementVersionMapper.class);
   private final TechnicalDataManufacturingSourceQuery query = new TechnicalDataManufacturingSourceQuery(
       sources, com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingTestScope.create(materials, u9),
-      new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), versions);
+      new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), versions, materials);
   private final ElectronicDrawingWorkContext context = new ElectronicDrawingWorkContext(11L, 2, 21L, 31L,
       10L, 11L, "TASK", "OA", "TOP", null, null, null, null, null, "FULL_BOM", "2026-09",
       "210", "COMMERCIAL", "COMMERCIAL", "210", true, true, "EDITING", "MATERIALS_MATCHED", null, null, null);
@@ -62,13 +62,15 @@ class TechnicalDataManufacturingSourceQueryTest {
     verify(u9, times(2)).query(any());
   }
 
-  @Test void u9ReplacementDoesNotCreateFalseMissingTasksForDiscardedDrawingDescendants() {
+  @Test void drawingChildrenRemainPendingAndCannotBeSkippedUsingParentU9() {
     when(sources.findByVersionId(31L)).thenReturn(List.of(node(1, "A", null), node(2, null, "1")));
     when(materials.selectByLatestBatchAndCodes(any(), any(), any())).thenReturn(List.of(material("A")));
-    when(u9.query(any())).thenReturn(available("A"));
+    lenient().when(u9.query(any())).thenReturn(available("A"));
     var result = query.inspect(context);
-    assertThat(result.nodes()).hasSize(1); assertThat(result.hasUnresolved()).isFalse();
+    assertThat(result.nodes()).hasSize(2); assertThat(result.hasUnresolved()).isTrue();
     assertThat(result.hasMissing()).isFalse();
+    assertThat(result.nodes()).extracting(row -> row.state().name()).containsExactly("DRAWING_READY", "WAIT_FINANCE");
+    verifyNoInteractions(u9);
   }
 
   @Test void timeoutAndWrongMonthNeverBecomeMissingRawRelationships() {
@@ -99,6 +101,39 @@ class TechnicalDataManufacturingSourceQueryTest {
     assertThat(query.matchesFingerprint(restarted, oldFingerprint)).isTrue();
     row.setReferenceWeight(new BigDecimal("11"));
     assertThat(query.matchesFingerprint(query.inspect(context), oldFingerprint)).isFalse();
+  }
+
+  @Test void missingDrawingWeightUsesMatchedManufacturingMaterialsTheoryInGramsWithoutChangingSource() {
+    var source = node(1, "A", null);
+    source.setReferenceWeight(null); source.setReferenceWeightUnit(null);
+    var material = material("A"); material.setGlobalSeg3TheoreticalNetWeight("10.5");
+    when(sources.findByVersionId(31L)).thenReturn(List.of(source));
+    when(materials.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL"))).thenReturn(List.of(material));
+    when(u9.query(any())).thenReturn(SubBomResult.failure(Status.NOT_FOUND, "A", "无下级"));
+    var result = query.inspect(context);
+    assertThat(result.nodes().getFirst().sourceNetWeight()).isEqualByComparingTo("10.5");
+    assertThat(result.nodes().getFirst().sourceNetWeightUnit()).isEqualTo("g");
+    assertThat(result.nodes().getFirst().quantityPerParent()).isEqualByComparingTo("2");
+    assertThat(source.getReferenceWeight()).isNull();
+    assertThat(source.getReferenceWeightUnit()).isNull();
+    material.setGlobalSeg3TheoreticalNetWeight("11");
+    assertThat(query.inspect(context).fingerprint()).isNotEqualTo(result.fingerprint());
+    material.setGlobalSeg3TheoreticalNetWeight("invalid");
+    assertThat(query.inspect(context).nodes().getFirst().sourceNetWeight()).isNull();
+    material.setGlobalSeg3TheoreticalNetWeight("0");
+    assertThat(query.inspect(context).nodes().getFirst().sourceNetWeight()).isNull();
+  }
+
+  @Test void providedDrawingWeightKeepsItsValueAndUnit() {
+    var source = node(1, "A", null); source.setReferenceWeight(new BigDecimal("0.010")); source.setReferenceWeightUnit("kg");
+    var material = material("A"); material.setGlobalSeg3TheoreticalNetWeight("99");
+    when(sources.findByVersionId(31L)).thenReturn(List.of(source));
+    when(materials.selectByLatestBatchAndCodes(any(), any(), any())).thenReturn(List.of(material));
+    when(u9.query(any())).thenReturn(SubBomResult.failure(Status.NOT_FOUND, "A", "无下级"));
+    var result = query.inspect(context);
+    assertThat(result.nodes().getFirst().sourceNetWeight()).isEqualByComparingTo("0.010");
+    assertThat(result.nodes().getFirst().sourceNetWeightUnit()).isEqualTo("kg");
+    verify(materials, times(1)).selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL"));
   }
 
   private ElectronicDrawingSourceNode node(long id, String code, String parent) {

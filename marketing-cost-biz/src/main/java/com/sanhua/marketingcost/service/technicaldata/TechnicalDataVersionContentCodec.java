@@ -27,6 +27,12 @@ import org.springframework.stereotype.Component;
 /** Builds the immutable reference snapshot and the canonical content fingerprint. */
 @Component
 public class TechnicalDataVersionContentCodec {
+  public com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceSharedSnapshot sharedPrices(String json) {
+    return read(json, com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceSharedSnapshot.class);
+  }
+  public String sharedPricesJson(com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceSharedSnapshot snapshot) {
+    return write(snapshot);
+  }
   public com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSalaryContent.ItemEvidence salaryEvidence(QuoteTechSalaryItem item) {
     if (item.getSourceReferenceId() == null || !(item.getSourceReferenceId().startsWith("CMS_SALARY:") || item.getSourceReferenceId().startsWith("SALARY_UPLOAD:"))) return null;
     return read(item.getSourceSnapshotJson(), com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSalaryContent.ItemEvidence.class);

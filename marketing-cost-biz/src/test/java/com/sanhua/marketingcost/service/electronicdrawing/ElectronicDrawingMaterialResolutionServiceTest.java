@@ -48,6 +48,7 @@ class ElectronicDrawingMaterialResolutionServiceTest {
   @Mock private ElectronicDrawingMaterialMatcher matcher;
   @Mock private MaterialMasterRawMapper materialMapper;
   @Mock private ElectronicDrawingActorProvider actorProvider;
+  @Mock private ElectronicDrawingU9SubBomPort u9;
 
   private ElectronicDrawingMaterialResolutionService service;
   private ElectronicDrawingWorkContext context;
@@ -59,7 +60,7 @@ class ElectronicDrawingMaterialResolutionServiceTest {
     service = new ElectronicDrawingMaterialResolutionService(
         contextPort, versionMapper, sourceNodeRepository,
         matcher, materialMapper, actorProvider,
-        ElectronicDrawingTestScope.create(materialMapper, org.mockito.Mockito.mock(ElectronicDrawingU9SubBomPort.class)));
+        ElectronicDrawingTestScope.create(materialMapper, u9));
     context = context(4);
     version = version();
     finance = new ElectronicDrawingActor(8801L, "报价员甲");
@@ -69,6 +70,39 @@ class ElectronicDrawingMaterialResolutionServiceTest {
   @AfterEach
   void clearAuthentication() {
     SecurityContextHolder.clearContext();
+  }
+
+  @Test
+  void readIncludesActualU9ChildrenWithoutChangingDrawingSourceOrRequiringComposition() {
+    var diaphragm = copy(node(240L, "G1:R5", "MPS5A-02004", ElectronicDrawingSourceNode.MATCH_AUTO),
+        ElectronicDrawingSourceNode.MATCH_AUTO, "1064000300093", "SYSTEM");
+    arrangeUserTarget(List.of(diaphragm));
+    var material = material("1064000300093");
+    material.setShapeAttr("制造件");
+    when(materialMapper.selectByLatestBatchAndCodes(anyCollection(), eq(null), eq("COMMERCIAL")))
+        .thenReturn(List.of(material));
+    var raw = new ElectronicDrawingU9SubBomPort.U9Node("U9SRC:272522", null, null, 272522L,
+        "301240123", "不锈钢带", "SUS301,H,t0.15×21", null, null, "采购件", null, null, null,
+        "主制造", "F001", new BigDecimal("0.000701"), BigDecimal.ONE, "千克", 10);
+    when(u9.query(any())).thenReturn(ElectronicDrawingU9SubBomPort.SubBomResult.available(
+        "1064000300093", "210", "COMMERCIAL", List.of(raw)));
+
+    for (int read = 0; read < 2; read++) {
+      var response = service.state(101L, "2026-08");
+      assertThat(response.totalCount()).isOne();
+      assertThat(response.bomComposed()).isFalse();
+      assertThat(response.items().getFirst().processingState()).isEqualTo("U9_READY");
+      var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().valueToTree(response);
+      var child = json.path("items").get(0).path("u9Children").path(0);
+      assertThat(child.path("materialCode").asText()).isEqualTo("301240123");
+      assertThat(child.path("quantity").decimalValue()).isEqualByComparingTo("0.000701");
+      assertThat(child.path("parentBaseQty").decimalValue()).isEqualByComparingTo("1");
+      assertThat(child.path("unit").asText()).isEqualTo("千克");
+      assertThat(child.path("sourceU9BomId").asLong()).isEqualTo(272522L);
+    }
+    verify(sourceNodeRepository, never()).updateResolution(any(), any(), any(), any(), any(), any());
+    verify(contextPort, never()).touch(any(), any(), any(), any(), any());
+    verifyNoInteractions(matcher);
   }
 
   @Test

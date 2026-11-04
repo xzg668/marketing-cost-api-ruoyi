@@ -135,5 +135,45 @@ class QuoteOaPdfDetailTableParserFiSr005Test {
         row(cell(">>辅助信息", 30)));
   }
 
+  @Test
+  void parsesUnlabelledTableWithHeadersStartingAboveTheFirstCompleteLabels() {
+    // Like the browser printout: no “明细表” anchor, and 序号/三花型号 wrap above 料号/规格/备注.
+    QuotePdfDocument document = document(
+        "wrapped.pdf",
+        row(cell("序", 30), cell("产品名", 90), cell("客户图", 220), cell("三花型", 460),
+            cell("运输费", 740), cell("三花配", 860), cell("含运输", 980),
+            cell("不含运", 1100), cell("成本有", 1220)),
+        row(cell("料号", 340), cell("规格", 600), cell("备注", 1340),
+            cell("[元/只]", 740), cell("套量[万", 860), cell("费总成", 980), cell("输费总", 1100)),
+        row(cell("号", 30), cell("称", 90), cell("号", 220), cell("号", 460),
+            cell("只]", 860), cell("本（不含税）", 980), cell("成本（不含税）", 1100), cell("效期", 1220)),
+        row(cell("1", 30), cell("压力控制器", 90), cell("25100008", 220),
+            cell("1064100050088", 340), cell("MPS5AH343", 460), cell("MPS5AH343", 600),
+            cell("0.3738", 740), cell("0.1070", 860), cell("13.571", 980), cell("13.197", 1100), cell("3个月", 1220)),
+        row(cell("", 30)),
+        row(cell("2", 30), cell("压力控制器", 90), cell("25100009", 220),
+            cell("1064100050090", 340), cell("MPS4AH014", 460), cell("MPS4AH014", 600)),
+        row(cell(">>技术员", 30)));
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SR_005_MASS);
+
+    parser.parse(context(QuoteExcelTemplateType.FI_SR_005_MASS, document), request);
+
+    assertThat(request.getItems()).hasSize(2);
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getMaterialNo)
+        .containsExactly("1064100050088", "1064100050090");
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getSunlModel)
+        .containsExactly("MPS5AH343", "MPS4AH014");
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getProductName)
+        .containsExactly("压力控制器", "压力控制器");
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getBusinessType)
+        .containsExactly("批量品", "批量品");
+    var first = request.getItems().get(0);
+    assertThat(first.getShippingFee()).isEqualTo("0.3738");
+    assertThat(first.getSupportQty()).isEqualTo("0.1070");
+    assertThat(first.getTotalWithShip()).isEqualTo("13.571");
+    assertThat(first.getTotalNoShip()).isEqualTo("13.197");
+    assertThat(first.getValidMonth()).isEqualTo("3");
+  }
+
   private record TemplateCase(QuoteExcelTemplateType templateType, String businessType) {}
 }

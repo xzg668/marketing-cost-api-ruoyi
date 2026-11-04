@@ -50,6 +50,9 @@ public interface QuoteTechTaskMapper extends BaseMapper<QuoteTechTask> {
   @Select("SELECT * FROM lp_quote_tech_task WHERE id=#{taskId} FOR UPDATE")
   QuoteTechTask selectByIdForUpdate(@Param("taskId") Long taskId);
 
+  @Select("SELECT t.* FROM lp_quote_tech_task t JOIN lp_quote_tech_product p ON p.task_id=t.id WHERE p.id=#{productId}")
+  QuoteTechTask selectByProductId(@Param("productId") Long productId);
+
   @Update("""
       UPDATE lp_quote_tech_task
          SET assignee_user_id=#{assigneeUserId},assignee_name=#{assigneeName},

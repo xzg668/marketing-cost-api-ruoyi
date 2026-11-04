@@ -11,12 +11,17 @@ import org.springframework.stereotype.Component;
 public class TechnicalDataReadPolicy {
 
   private final JdbcTemplate jdbc;
+  private final com.sanhua.marketingcost.mapper.QuoteTechTaskMapper tasks;
 
-  public TechnicalDataReadPolicy(JdbcTemplate jdbc) {
-    this.jdbc = jdbc;
+  public TechnicalDataReadPolicy(JdbcTemplate jdbc, com.sanhua.marketingcost.mapper.QuoteTechTaskMapper tasks) {
+    this.jdbc = jdbc; this.tasks = tasks;
   }
 
   public boolean ownsDraft(QuoteTechModule module, TechnicalDataActor actor) {
+    if (actor != null && actor.admin() && !actor.oaSession() && module.getAssigneeUserId() == null) {
+      var task = task(module.getProductId());
+      if (actor.canFillUnassigned(task)) return true;
+    }
     return (
       actor != null && actor.userId() != null &&
       !actor.canViewSupplementOverview() &&
@@ -35,13 +40,18 @@ public class TechnicalDataReadPolicy {
       ? module.getCurrentVersionId() != null
         ? module.getCurrentVersionId()
         : product.getCurrentEditVersionId()
-      : submittedVersion(product.getId(), module.getModuleType(), null);
+      : TechnicalDataAdminDirectSave.isPublished(task(product.getId()))
+          ? module.getCurrentVersionId() : submittedVersion(product.getId(), module.getModuleType(), null);
     if (requested != null && !Objects.equals(requested, selected)) {
       Long submitted = submittedVersion(product.getId(), module.getModuleType(), requested);
       if (submitted == null) throw forbidden();
       selected = submitted;
     }
     return selected;
+  }
+
+  private com.sanhua.marketingcost.entity.QuoteTechTask task(Long productId) {
+    return tasks.selectByProductId(productId);
   }
 
   /** 只处理查询对象，不写回数据库；隐藏草稿状态、参考内容及校验信息。 */

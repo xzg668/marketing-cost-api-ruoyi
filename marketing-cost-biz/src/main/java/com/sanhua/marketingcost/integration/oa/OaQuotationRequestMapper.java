@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.integration.oa;
 import static com.sanhua.marketingcost.integration.oa.OaQuotationFields.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sanhua.marketingcost.dto.ingest.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -60,8 +61,8 @@ public class OaQuotationRequestMapper {
             : sc5 ? SC005_MAIN : sc6 ? SC006_MAIN : SC020_MAIN;
     List<Field> details =
         sr ? batch ? SR_BATCH_ITEM : SR_NEW_ITEM : sc5 ? SC005_ITEM : sc6 ? SC006_ITEM : SC020_ITEM;
-    validateFields(main, headers, "mainData");
     validateStorageValues(main, headers, true, sr && batch, process, "mainData");
+    main = mappedFields(main, headers);
     // FI-SR-005 在现有核算里属于商用的家代商口径，不是 HOUSEHOLD 数据隔离域。
     if (!peer.businessUnits().contains("COMMERCIAL"))
       throw OaIntegrationException.invalid("BUSINESS_UNIT_DENIED", "调用方无当前报价业务单元权限");
@@ -81,7 +82,7 @@ public class OaQuotationRequestMapper {
     missing(issues, main, sr ? "sqrq" : "sqsj", "申请日期", "SOURCE_FIELD_MISSING", null, null);
     if (value(main, "sqbm") == null && value(main, "sqcs") == null)
       missing(issues, main, "sqbm", "申请部门/处室", "SOURCE_FIELD_MISSING", null, null);
-    String salesKey = sr ? "sftghwshxs" : "sftghwckfzdkh";
+    String salesKey = overseasSalesField(main, sr);
     if (sr || sc5 || sc6) {
       yesNo(main, salesKey, "mainData." + salesKey);
       missing(issues, main, salesKey, "海外销售方式", "SOURCE_FIELD_MISSING", null, null);
@@ -97,21 +98,27 @@ public class OaQuotationRequestMapper {
     for (int i = 0; i < rows.size(); i++) {
       JsonNode row = rows.get(i);
       String path = "detailData[" + i + "]";
-      object(row, path, Set.of("tableKey", "rowId", "rowIndex", "fields"));
+      object(row, path, sr && batch
+          ? Set.of("tableKey", "rowId", "rowIndex", "fields", "plpmxb")
+          : Set.of("tableKey", "rowId", "rowIndex", "fields"));
       String table = text(row, "tableKey", 64), rowId = text(row, "rowId", 128);
-      if (!expectedTable.equals(table)) fail(path + ".tableKey", "当前类型应使用" + expectedTable);
+      if (!expectedTable.equals(table) && !(sr && batch && "批量品明细表".equals(table)))
+        fail(path + ".tableKey", "当前类型应使用" + expectedTable);
       long ordinal = positive(row.path("rowIndex"), path + ".rowIndex");
       if (ordinal > 1000 || !orders.add((int) ordinal))
         fail(path + ".rowIndex", "行序号须为1至1000且不能重复");
-      String externalId = codec.canonicalHash(List.of(table, rowId));
+      // 表名别称不改变产品行身份；原表名仍留在来源字段和回执中。
+      String externalId = codec.canonicalHash(List.of(expectedTable, rowId));
       if (!identities.add(externalId)) fail(path + ".rowId", "同一明细表的行标识不能重复");
-      JsonNode f = row.path("fields");
-      validateFields(f, details, path + ".fields");
-      validateStorageValues(f, details, false, sr && batch, process, path + ".fields");
+      String fieldsKey = detailFieldsKey(row, sr && batch, path);
+      String fieldsPath = path + "." + fieldsKey;
+      JsonNode f = row.path(fieldsKey);
+      validateStorageValues(f, details, false, sr && batch, process, fieldsPath);
+      f = mappedFields(f, details);
       QuoteIngestItemRequest item = item(f, main, process, business, sr, sc5, sc6, batch);
       item.setExternalLineId(externalId);
       item.setSeq((int) ordinal);
-      item.setExtraFields(extras(f, details, path + ".fields"));
+      item.setExtraFields(extras(f, details, fieldsPath));
       item.getExtraFields().add(extra("OA_TABLE_KEY", "原明细表", table, "TEXT", path + ".tableKey"));
       item.getExtraFields().add(extra("OA_ROW_ID", "原明细行", rowId, "TEXT", path + ".rowId"));
       if (item.getAnnualVolume() != null)
@@ -122,14 +129,14 @@ public class OaQuotationRequestMapper {
                     "预计年用量单位",
                     "TEN_THOUSAND_PIECES",
                     "TEXT",
-                    path + ".fields"));
-      item.setExtraFees(fees(f, details, path + ".fields"));
+                    fieldsPath));
+      item.setExtraFees(fees(f, details, fieldsPath));
       if (item.getMaterialNo() == null
           && item.getSunlModel() == null
           && item.getCustomerDrawing() == null)
         issues.add(
             new OaQuotationResponse.InputIssue(
-                path + ".fields.lh",
+                fieldsPath + ".lh",
                 table,
                 rowId,
                 "PRODUCT_UNRESOLVED",
@@ -148,6 +155,28 @@ public class OaQuotationRequestMapper {
         List.copyOf(issues));
   }
 
+  private String detailFieldsKey(JsonNode row, boolean srBatch, String path) {
+    if (!srBatch || !row.hasNonNull("plpmxb")) return "fields";
+    if (!row.hasNonNull("fields")) return "plpmxb";
+    if (!row.path("fields").equals(row.path("plpmxb")))
+      fail(path, "fields与plpmxb内容不一致，无法确定产品明细");
+    return "fields";
+  }
+
+  private JsonNode mappedFields(JsonNode source, List<Field> definitions) {
+    // 原文独立留存；其他表单的附加字段不能经共用映射分支影响本单核算。
+    return ((ObjectNode) source).deepCopy().retain(definitions.stream().map(Field::key).toList());
+  }
+
+  private String overseasSalesField(JsonNode main, boolean sr) {
+    if (!sr) return "sftghwckfzdkh";
+    String original = value(main, "sftghwshxs");
+    String intermediate = value(main, "sftghwshxszjzd");
+    if (original != null && intermediate != null && !original.equals(intermediate))
+      fail("mainData.sftghwshxszjzd", "两个海外销售标识的值不一致，请核对原单");
+    return original == null && intermediate != null ? "sftghwshxszjzd" : "sftghwshxs";
+  }
+
   private QuoteIngestHeaderRequest header(
       JsonNode m, String process, boolean sr, boolean sc5, boolean sc6) {
     QuoteIngestHeaderRequest h = new QuoteIngestHeaderRequest();
@@ -164,7 +193,7 @@ public class OaQuotationRequestMapper {
     h.setCustomer(value(m, "khmc"));
     h.setProductAttr(value(m, sc6 ? "cpsx1" : "cpsx"));
     h.setPriceLinkMode(value(m, sr ? "xsjgldqk" : sc5 ? "tjldfs" : "xsjgsfld"));
-    h.setOverseasSalesMode(value(m, sr ? "sftghwshxs" : "sftghwckfzdkh"));
+    h.setOverseasSalesMode(value(m, overseasSalesField(m, sr)));
     h.setTradeTerms(value(m, "mytk"));
     h.setExchangeRate(value(m, "hl"));
     h.setCopperPrice(value(m, sr ? "hsstjj" : sc5 ? "djtjg" : "hsstjjhs"));
@@ -237,14 +266,19 @@ public class OaQuotationRequestMapper {
   private List<QuoteExtraFieldRequest> extras(JsonNode node, List<Field> definitions, String path) {
     List<QuoteExtraFieldRequest> result = new ArrayList<>();
     for (Field f : definitions) {
-      if (node.has(f.key()))
+      if (node.has(f.key())) {
+        JsonNode original = node.path(f.key());
+        String sourceValue = original.isContainerNode() ? original.toString() : value(node, f.key());
+        // 展示列最多 2000 字；更长的附加信息完整保留在原报文，不截断、不阻止接收。
+        if (sourceValue != null && sourceValue.length() > 2000) continue;
         result.add(
             extra(
                 f.key(),
                 f.label(),
-                value(node, f.key()),
-                f.number() ? "NUMBER" : "TEXT",
+                sourceValue,
+                f.number() ? "NUMBER" : original.isContainerNode() ? "JSON" : "TEXT",
                 path + "." + f.key()));
+      }
     }
     return result;
   }
@@ -292,31 +326,13 @@ public class OaQuotationRequestMapper {
     return out;
   }
 
-  private void validateFields(JsonNode node, List<Field> definitions, String path) {
-    object(
-        node,
-        path,
-        definitions.stream().map(Field::key).collect(java.util.stream.Collectors.toSet()));
-    for (Field f : definitions) {
-      String at = path + "." + f.key();
-      JsonNode value = node.get(f.key());
-      // OA 省略未填写的业务字段时，与显式 null 相同；原始报文仍按收到的内容留存。
-      if (value == null || value.isNull()) continue;
-      if (f.number()) {
-        BigDecimal parsed = decimal(value, at, f.label());
-        if (parsed == null) continue;
-        BigDecimal n = parsed.stripTrailingZeros();
-        if (Math.max(n.scale(), 0) > 6 || (long) n.precision() - n.scale() > 12)
-          fail(at, f.label() + "超出数据库数值精度（最多12位整数、6位小数）");
-      } else if (!value.isTextual() || value.textValue().length() > 2000)
-        fail(at, f.label() + "须为不超过2000字的单个字符串或null");
-    }
-  }
-
   /** 原文虽有独立留存，标准列也不能静默截断或四舍五入后进入核算。 */
   private static void validateStorageValues(
       JsonNode node, List<Field> definitions, boolean header, boolean srBatch, String process,
       String path) {
+    if (!node.isObject()) fail(path, "须为JSON对象");
+    Set<String> definedFields = definitions.stream().map(Field::key)
+        .collect(java.util.stream.Collectors.toSet());
     Set<String> numericFields = definitions.stream().filter(Field::number).map(Field::key)
         .collect(java.util.stream.Collectors.toSet());
     Set<String> prices =
@@ -358,6 +374,8 @@ public class OaQuotationRequestMapper {
             entry -> {
               String key = entry.getKey();
               JsonNode value = entry.getValue();
+              // 不参与当前表单映射的附加字段（如 SR 的 djtjg）只随原报文保存。
+              if (!definedFields.contains(key) || value.isNull()) return;
               if (numericFields.contains(key)) {
                 BigDecimal parsed = decimal(value, path + "." + key, key);
                 if (parsed == null) return;
@@ -377,8 +395,8 @@ public class OaQuotationRequestMapper {
                   fail(
                       path + "." + key,
                       "超出核算数据列精度，最多" + integerDigits + "位整数、" + scale + "位小数；请核对原单数值");
-              } else if (value.isTextual()) {
-                int limit = 2000;
+              } else {
+                int limit = 0;
                 if (header) {
                   if (Set.of(
                           "sqr", "sqdw", "sqbm", "sqcs", "ssgs", "frzz", "syb", "cpsyb", "sssybdx",
@@ -393,6 +411,11 @@ public class OaQuotationRequestMapper {
                   if (Set.of("bzfs", "cpxz").contains(key)
                       || process.equals("FI-SC-020") && key.equals("khbm")) limit = 128;
                 }
+                if (Set.of("sqsj", "sqrq", "cbsxrq", "sfscbj", "sfyrzxq", "sfzbxqjzdbhcp",
+                        "sftghwshxs", "sftghwshxszjzd", "sftghwckfzdkh", "cbyxqy1", "cbyxq1", "xpjgyxq", "cbyxq")
+                    .contains(key)) limit = 2000;
+                if (limit == 0) return;
+                if (!value.isTextual()) fail(path + "." + key, "须为单个字符串或null");
                 if (value.textValue().length() > limit)
                   fail(path + "." + key, "超出核算数据列长度，最多" + limit + "字");
               }

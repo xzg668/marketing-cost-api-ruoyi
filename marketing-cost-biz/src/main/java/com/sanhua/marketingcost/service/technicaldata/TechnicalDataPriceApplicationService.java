@@ -46,10 +46,15 @@ public class TechnicalDataPriceApplicationService {
     boolean historical = versionId != null || version != null && !"DRAFT".equals(version.getVersionStatus());
     // 已送审/批准资料只读冻结内容；跨月查看原资料不能触发原月份的价格准备。
     var check = historical ? null : requirements.check(scope.task(), scope.product());
+    var sharedSnapshot = historical ? codec.readReferenceSnapshot(version.getReferenceSnapshotJson()).stream()
+        .filter(row -> "PRICE".equals(row.moduleType()) && "TECH_PRICE_SHARED".equals(row.referenceSourceType()))
+        .map(row -> codec.sharedPrices(row.referenceSnapshotJson())).findFirst().orElse(null) : null;
+    if (sharedSnapshot != null) check = sharedSnapshot.requirements();
     var content = codec.prices(version);
     var issues = !historical && check != null ? issues(content, check) : List.<String>of();
-    var owners = check == null ? List.<TechnicalDataPriceOwner>of() : check.items().stream()
-        .filter(TechnicalDataPriceRequirement::requiresEntry).map(row -> ownership.find(row.materialNo())).filter(Objects::nonNull)
+    var owners = sharedSnapshot != null ? sharedSnapshot.owners() : check == null ? List.<TechnicalDataPriceOwner>of() : check.items().stream()
+        .filter(row -> row.requiresEntry() || Set.of("SHARED", "ASSIGNED").contains(row.status()))
+        .map(row -> ownership.find(row.materialNo())).filter(Objects::nonNull)
         .filter(owner -> Objects.equals(owner.businessUnit(), scope.task().getBusinessUnitType())
             && Objects.equals(owner.organizationCode(), scope.task().getApplicableOrgCode())).toList();
     return new TechnicalDataPriceResponse(scope.task().getId(), productId, scope.product().getRowVersion(), selected,
@@ -78,7 +83,9 @@ public class TechnicalDataPriceApplicationService {
     if (!Objects.equals(request.getRequirementsFingerprint(), check.fingerprint())) throw conflict("价格需求或来源已变化，请重新检查；本次输入仍保留");
     if (!check.issues().isEmpty()) throw invalid(String.join("；", check.issues()));
     var missing = check.items().stream().filter(TechnicalDataPriceRequirement::requiresEntry).toList();
-    if (missing.isEmpty()) throw conflict("当前已无缺价，无需继续补录，请重新检查资料");
+    boolean sharedOnly = missing.isEmpty() && check.items().stream().anyMatch(row -> "SHARED".equals(row.status()))
+        && check.items().stream().allMatch(row -> Set.of("AVAILABLE", "SHARED").contains(row.status()));
+    if (missing.isEmpty() && !sharedOnly) throw conflict("当前已无缺价，无需继续补录，请重新检查资料");
     ownership.require(scope.module().getId(), scope.task().getBusinessUnitType(), missing);
     Map<String, TechnicalDataPriceRequirement> byKey = new LinkedHashMap<>();
     missing.forEach(row -> byKey.put(row.itemKey(), row));
@@ -117,8 +124,20 @@ public class TechnicalDataPriceApplicationService {
     if (repository.updateDraftVersion(draft, draft.getRowVersion(), now) != 1) throw conflict("价格草稿已变化，请刷新后保存");
     var module = scope.module(); module.setCurrentVersionId(draft.getId()); module.setEntryMode("MANUAL");
     module.setModuleStatus(issues.isEmpty() ? "READY" : "EDITING");
-    module.setLastValidationCode(issues.isEmpty() ? "PRICE_COMPLETE" : "PRICE_INCOMPLETE");
-    module.setLastValidationMessage(issues.isEmpty() ? "缺价项填写完整，待本人提交审批" : String.join("；", issues));
+    module.setLastValidationCode(issues.isEmpty() ? sharedOnly ? "PRICE_SHARED_COMPLETE" : "PRICE_COMPLETE" : "PRICE_INCOMPLETE");
+    module.setLastValidationMessage(issues.isEmpty() ? sharedOnly ? "已有资料，无需重复补录" : "缺价项填写完整，待确认提交" : String.join("；", issues));
+    var sharedRows = check.items().stream().filter(row -> "SHARED".equals(row.status())).toList();
+    if (!sharedRows.isEmpty()) {
+      var sharedOwners = sharedRows.stream().map(row -> ownership.find(row.materialNo())).filter(Objects::nonNull).toList();
+      module.setReferenceSourceType("TECH_PRICE_SHARED");
+      module.setReferenceSourceId(sharedOwners.stream().map(row -> String.valueOf(row.taskId())).distinct().collect(java.util.stream.Collectors.joining(",")));
+      module.setReferenceFingerprint(check.fingerprint());
+      module.setReferenceSnapshotJson(codec.sharedPricesJson(new TechnicalDataPriceSharedSnapshot(
+          new TechnicalDataPriceRequirementsResponse(sharedRows, List.of(), check.fingerprint()), sharedOwners)));
+    } else if ("TECH_PRICE_SHARED".equals(module.getReferenceSourceType())) {
+      module.setReferenceSourceType(null); module.setReferenceSourceId(null);
+      module.setReferenceFingerprint(null); module.setReferenceSnapshotJson(null);
+    }
     if (repository.updateModule(module, module.getRowVersion(), now) != 1) throw conflict("价格模块已变化，请刷新后保存");
     scope.product().setCurrentEditVersionId(draft.getId()); scope.product().setProductStatus("EDITING");
     if (repository.updateProductPointers(scope.product(), scope.product().getRowVersion(), now) != 1) throw conflict("产品资料已变化，请刷新后保存");
@@ -143,6 +162,25 @@ public class TechnicalDataPriceApplicationService {
     if (!check.issues().isEmpty()) throw invalid(String.join("；", check.issues()));
     var module = tasks.findModules(productId).stream().filter(row -> "PRICE".equals(row.getModuleType())).findFirst().orElseThrow();
     ownership.require(module.getId(), task.getBusinessUnitType(), check.items());
+  }
+
+  /** 整单提交时只记录已有资料的引用，不要求消费产品再打开价格表保存一遍。 */
+  @Transactional
+  public void prepareSharedReference(Long taskId, TechnicalDataActor actor) {
+    var products = tasks.findProducts(taskId);
+    if (products.size() != 1) return;
+    var product = products.getFirst();
+    var scope = scope(product.getId(), actor, null);
+    if (!actor.canEditModule(scope.task(), scope.module())) return;
+    var version = product.getCurrentEditVersionId() == null ? null : repository.findVersion(product.getCurrentEditVersionId()).orElse(null);
+    var current = codec.prices(version);
+    if (current != null && current.items() != null && !current.items().isEmpty()) return;
+    var checked = requirements.check(scope.task(), product);
+    if (!checked.issues().isEmpty() || checked.items().stream().noneMatch(row -> "SHARED".equals(row.status()))
+        || checked.items().stream().anyMatch(row -> !Set.of("AVAILABLE", "SHARED").contains(row.status()))) return;
+    var request = new TechnicalDataPriceSaveRequest();
+    request.setExpectedVersion(product.getRowVersion()); request.setRequirementsFingerprint(checked.fingerprint()); request.setItems(List.of());
+    save(product.getId(), request, actor);
   }
 
   public List<String> validateCurrent(QuoteTechProduct product, QuoteTechDataVersion version) {
@@ -173,6 +211,8 @@ public class TechnicalDataPriceApplicationService {
 
   private List<String> issues(Prices content, TechnicalDataPriceRequirementsResponse check) {
     List<String> result = new ArrayList<>(check.issues());
+    check.items().stream().filter(row -> "ASSIGNED".equals(row.status()))
+        .forEach(row -> result.add(row.materialNo() + " 的原资料尚未补齐，请在原任务完成"));
     Map<String, PriceItem> entries = new HashMap<>();
     if (content != null && content.items() != null) content.items().forEach(row -> entries.put(row.itemKey(), row));
     for (var demand : check.items()) if (demand.requiresEntry()) {

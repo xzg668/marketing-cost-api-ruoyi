@@ -66,15 +66,23 @@ public class QuoteOaPdfDetailTableParser {
       start = firstContainingLine(lines, table.getStartAnchors());
     }
     if (start < 0) {
+      int headerStart = -1;
       for (int i = 0; i < lines.size(); i++) {
         if (matchingHeaderColumnCount(lines.get(i), fields) >= 3) {
-          start = Math.max(0, i - 1);
+          headerStart = i;
+          // A printed header can start above the first line containing complete column labels.
+          // Keep its adjacent wrapped lines, including when the table starts at the top of a page.
+          while (headerStart > 0
+              && isWrappedHeaderContinuation(lines.get(headerStart - 1), lines.get(headerStart))) {
+            headerStart--;
+          }
           break;
         }
       }
-    }
-    if (start < 0) {
-      return null;
+      if (headerStart < 0) {
+        return null;
+      }
+      start = headerStart - 1;
     }
     int end = lines.size();
     for (int i = start + 1; i < lines.size(); i++) {
@@ -84,6 +92,21 @@ public class QuoteOaPdfDetailTableParser {
       }
     }
     return new TableRange(start, end);
+  }
+
+  private boolean isWrappedHeaderContinuation(TableLine previous, TableLine current) {
+    if (previous.pageIndex() != current.pageIndex()
+        || previous.tokens().isEmpty()
+        || current.tokens().isEmpty()) {
+      return false;
+    }
+    if (!previous.tokens().stream().allMatch(token -> isLikelyDenseHeaderToken(token.getText()))) {
+      return false;
+    }
+    float previousY = previous.tokens().stream().map(QuotePdfToken::getY).max(Float::compare).orElse(0f);
+    float currentY = current.tokens().stream().map(QuotePdfToken::getY).min(Float::compare).orElse(0f);
+    float lineHeight = previous.tokens().stream().map(QuotePdfToken::getHeight).max(Float::compare).orElse(0f);
+    return currentY - previousY <= lineHeight * 2;
   }
 
   private int standaloneTableStart(List<TableLine> lines, List<String> anchors) {
@@ -507,11 +530,6 @@ public class QuoteOaPdfDetailTableParser {
         && (normalizedLabel.startsWith("费用元只") || normalizedLabel.startsWith("费元只"))) {
       return "shippingFee";
     }
-    if (normalizedLabel.contains("总成本")
-        && normalizedLabel.contains("不含税")
-        && !normalizedLabel.contains("材料")) {
-      return "totalNoShip";
-    }
     if (normalizedLabel.contains("不含运输费总成本")
         || normalizedLabel.contains("不含运输费总成")
         || normalizedLabel.contains("不含运费总成本")
@@ -524,12 +542,20 @@ public class QuoteOaPdfDetailTableParser {
         || normalizedLabel.contains("含运费总价")) {
       return "totalWithShip";
     }
+    if (normalizedLabel.contains("总成本")
+        && normalizedLabel.contains("不含税")
+        && !normalizedLabel.contains("材料")) {
+      return "totalNoShip";
+    }
     if (normalizedLabel.contains("运输费") || normalizedLabel.contains("运费")) {
       return "shippingFee";
     }
     if (normalizedLabel.contains("年用量")
         || (normalizedLabel.contains("年用") && normalizedLabel.contains("量"))) {
       return "annualVolume";
+    }
+    if (normalizedLabel.contains("配套量")) {
+      return "supportQty";
     }
     if (normalizedLabel.contains("包装方式")) {
       return "packageMethod";
@@ -641,10 +667,11 @@ public class QuoteOaPdfDetailTableParser {
     item.setSunlModel(joinDenseColumn(tokens, layout.column("sunlModel"), false));
     item.setSpec(joinDenseColumn(tokens, layout.column("spec"), false));
     item.setShippingFee(joinDenseColumn(tokens, layout.column("shippingFee"), true));
+    item.setSupportQty(joinDenseColumn(tokens, layout.column("supportQty"), true));
     item.setAnnualVolume(joinDenseColumn(tokens, layout.column("annualVolume"), true));
     item.setTotalWithShip(joinDenseColumn(tokens, layout.column("totalWithShip"), true));
     item.setTotalNoShip(joinDenseColumn(tokens, layout.column("totalNoShip"), true));
-    item.setValidMonth(joinDenseColumn(tokens, layout.column("validMonth"), true));
+    item.setValidMonth(joinDenseMonthColumn(tokens, layout.column("validMonth")));
     item.setPackageMethod(joinDenseColumn(tokens, layout.column("packageMethod"), false));
     if (!StringUtils.hasText(item.getBusinessType()) && StringUtils.hasText(template.getDefaultBusinessType())) {
       item.setBusinessType(template.getDefaultBusinessType());
@@ -671,6 +698,18 @@ public class QuoteOaPdfDetailTableParser {
       value.append(text);
     }
     return trimToNull(value.toString());
+  }
+
+  private String joinDenseMonthColumn(List<QuotePdfToken> tokens, DenseColumn column) {
+    if (column != null) {
+      for (QuotePdfToken token : tokens) {
+        String text = trimToNull(token.getText());
+        if (column.contains(token) && text != null && text.matches("\\d+(?:个)?月")) {
+          return text.replaceFirst("(?:个)?月$", "");
+        }
+      }
+    }
+    return joinDenseColumn(tokens, column, true);
   }
 
   private String joinDenseTextColumn(List<QuotePdfToken> tokens, DenseColumn column) {
@@ -757,6 +796,8 @@ public class QuoteOaPdfDetailTableParser {
             "序",
             "号",
             "产品",
+            "产品名",
+            "称",
             "名称",
             "客户",
             "图号",
@@ -777,6 +818,35 @@ public class QuoteOaPdfDetailTableParser {
             "用",
             "量",
             "成本",
+            "不含运",
+            "输费总",
+            "三花配",
+            "套量[万",
+            "只]",
+            "（不含",
+            "（国际",
+            "[元/只]",
+            "必填该",
+            "字段）",
+            "本（不",
+            "本（不含税）",
+            "成本（不含税）",
+            "含税）",
+            "税）",
+            "直接材",
+            "料费",
+            "直接人",
+            "工费",
+            "制造费",
+            "企业管",
+            "理费",
+            "成本有",
+            "效期",
+            "包装方",
+            "式",
+            "批量",
+            "品每",
+            "柜数",
             "有效",
             "期",
             "方式")

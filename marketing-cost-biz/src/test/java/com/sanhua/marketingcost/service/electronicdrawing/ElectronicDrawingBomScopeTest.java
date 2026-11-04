@@ -42,15 +42,38 @@ class ElectronicDrawingBomScopeTest {
     verifyNoInteractions(u9);
   }
 
-  @Test void availableU9SubtreeReplacesUnmatchedDrawingRows() {
+  @Test void drawingChildrenStillRequireMatchingEvenWhenParentHasU9() {
     when(materials.selectByLatestBatchAndCodes(any(), any(), any())).thenReturn(List.of(material("M", "制造件")));
-    when(u9.query(any())).thenReturn(SubBomResult.available("M", "210", "COMMERCIAL", List.of(
+    lenient().when(u9.query(any())).thenReturn(SubBomResult.available("M", "210", "COMMERCIAL", List.of(
         new U9Node("RAW", null, 1L, null, "RAW", "铜棒", null, null, null, "采购件", null, null, null,
             "主制造", "1", BigDecimal.ONE, BigDecimal.ONE, "kg", 1))));
     var result = scope.inspect(context, List.of(node(1, "M", null), node(2, null, "1")), LocalDate.of(2026, 10, 1));
-    assertThat(result.pendingIds()).isEmpty();
+    assertThat(result.pendingIds()).containsExactly(2L);
     assertThat(result.nodes()).hasSize(1);
-    assertThat(result.branches().get(2L).state()).isEqualTo(ElectronicDrawingBomScope.State.EXCLUDED);
+    assertThat(result.branches().get(1L).state()).isEqualTo(ElectronicDrawingBomScope.State.DRAWING_READY);
+    assertThat(result.branches().get(2L).state()).isEqualTo(ElectronicDrawingBomScope.State.WAIT_FINANCE);
+    verifyNoInteractions(u9);
+  }
+
+  @Test void drawingStructureWinsAndOnlyManufacturedDrawingLeavesQueryU9() {
+    when(materials.selectByLatestBatchAndCodes(any(), any(), any())).thenReturn(List.of(
+        material("SWITCH", "制造件"), material("DIAPHRAGM", "制造件"), material("PLATE", "采购件")));
+    when(u9.query(any())).thenAnswer(call -> {
+      SubBomQuery request = call.getArgument(0);
+      assertThat(request.parentMaterialCode()).isEqualTo("DIAPHRAGM");
+      return SubBomResult.available("DIAPHRAGM", "210", "COMMERCIAL", List.of(
+          new U9Node("RAW", null, 1L, null, "301240123", "不锈钢带", null, null, null, "采购件",
+              null, null, null, "主制造", "1", new BigDecimal("0.000701"), BigDecimal.ONE, "千克", 1)));
+    });
+    var part = node(2, "DIAPHRAGM", "1"); part.setQty(new BigDecimal("7"));
+    var result = scope.inspect(context, List.of(node(1, "SWITCH", null), part, node(3, "PLATE", "1")),
+        LocalDate.of(2026, 10, 1));
+    assertThat(result.nodes()).hasSize(3);
+    assertThat(result.branches().get(1L).state()).isEqualTo(ElectronicDrawingBomScope.State.DRAWING_READY);
+    assertThat(result.branches().get(2L).state()).isEqualTo(ElectronicDrawingBomScope.State.U9_READY);
+    assertThat(result.nodes().get(1).quantity()).isEqualByComparingTo("7");
+    assertThat(result.branches().get(3L).state()).isEqualTo(ElectronicDrawingBomScope.State.PURCHASE);
+    verify(u9, times(1)).query(any());
   }
 
   @Test void purchaseStopsUnmatchedChildrenAndTimeoutDoesNotBecomeRawSupplement() {

@@ -17,6 +17,7 @@ import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
 import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
+import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaContext;
 import java.time.OffsetDateTime;
@@ -175,7 +176,8 @@ public class QuoteFinalSubmissionService {
         // 最终成本已包含一次材料费差额；TOTAL 仅为财务正常成本，不作为对外提交金额。
         result.add(new CostLine(item.getId(), product, version.getId(), version.getVersionNo(), version.getFinalQuoteAmount().toPlainString(),
             shipping, version.getSourceRevision(), version.getTechDataInputJson(), item.getBusinessType(), rowIds.get(item.getId()), item.getSeq(), "READY", null));
-      } catch (IllegalArgumentException | IllegalStateException | EffectiveTechnicalDataException failure) {
+      } catch (IllegalArgumentException | IllegalStateException | EffectiveTechnicalDataException
+          | QuoteIngestException failure) {
         result.add(new CostLine(item.getId(), product, null, null, null, shipping, null, null, item.getBusinessType(),
             rowIds.get(item.getId()), item.getSeq(), item.getConfirmedCostVersionId() != null ? "STALE" : "NOT_READY", failure.getMessage()));
       }

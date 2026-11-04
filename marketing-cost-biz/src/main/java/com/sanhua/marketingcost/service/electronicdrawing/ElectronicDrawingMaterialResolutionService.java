@@ -422,7 +422,21 @@ public class ElectronicDrawingMaterialResolutionService {
         branch == null ? null : branch.message(),
         canModify,
         node.getQuantityUnit(),
-        node.getCorrectedFromSourceNodeId());
+        node.getCorrectedFromSourceNodeId(),
+        u9Children(branch));
+  }
+
+  private static List<ElectronicDrawingMaterialResolutionResponse.U9Child> u9Children(
+      ElectronicDrawingBomScope.Branch branch) {
+    if (branch == null || branch.state() != ElectronicDrawingBomScope.State.U9_READY
+        || branch.subBom() == null) return List.of();
+    // 复用同一次范围检查已采用的子 BOM，不再次查询或把 U9 行写入图库原文。
+    return branch.subBom().nodes().stream().map(child ->
+        new ElectronicDrawingMaterialResolutionResponse.U9Child(
+            child.nodeKey(), child.parentNodeKey(), child.sourceRawHierarchyId(), child.sourceU9BomId(),
+            child.materialCode(), child.materialName(), child.materialSpec(), child.drawingNo(),
+            child.shapeAttr(), child.qtyPerParent(), child.parentBaseQty(), child.unit(),
+            child.bomPurpose(), child.bomVersion(), child.sortSeq())).toList();
   }
 
   private static ElectronicDrawingMaterialSearchResponse.Option searchOption(

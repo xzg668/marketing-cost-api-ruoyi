@@ -1,8 +1,8 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingSourceNodeRepository;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
-import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 
 /** 只查公共 BOM、工资、包装和制造资料；不依赖价格生成，组树阶段可安全复用。 */
 @Service
@@ -22,6 +21,7 @@ public class TechnicalDataPublicSourceCheck {
   private final TechnicalDataSalarySourceQuery salary;
   private final OaMessageCodec codec;
   private final ElectronicDrawingWorkflowContextPort drawingContexts;
+  private final ElectronicDrawingSourceNodeRepository drawingSources;
   private final TechnicalDataManufacturingSourceQuery manufacturing;
   private final TechnicalDataPackageSourceCheck packaging;
   private final com.sanhua.marketingcost.service.NetLossRateQuery netLoss;
@@ -33,12 +33,14 @@ public class TechnicalDataPublicSourceCheck {
       ElectronicDrawingWorkflowContextPort drawingContexts,
       TechnicalDataManufacturingSourceQuery manufacturing,
       TechnicalDataPackageSourceCheck packaging,
-      com.sanhua.marketingcost.service.NetLossRateQuery netLoss, TechnicalDataSharedModules shared) {
+      com.sanhua.marketingcost.service.NetLossRateQuery netLoss, TechnicalDataSharedModules shared,
+      ElectronicDrawingSourceNodeRepository drawingSources) {
     this.shared = shared;
     this.u9 = u9;
     this.salary = salary;
     this.codec = codec;
     this.drawingContexts = drawingContexts;
+    this.drawingSources = drawingSources;
     this.manufacturing = manufacturing;
     this.packaging = packaging;
     this.netLoss = netLoss;
@@ -111,24 +113,21 @@ public class TechnicalDataPublicSourceCheck {
   private TechnicalDataSourceFact checkDrawing(QuoteBomReadContext context, String u9Reference) {
     try {
       // 已分派或跨报价共享的技术资料仍走原负责人的提交、确认校验。
-      // 当前报价直接取得并完成组树的图库，不再因 U9 缺失而重复分派。
+      // 图库模块只检查明细是否取得；料号匹配、制造件原料和组树完整性由各自核算检查负责。
       if (shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM") == null) {
         var drawing = drawingContexts.load(context.oaFormItemId(), context.businessUnitType(),
             context.priceOrgCode(), context.accountingMonth());
         if (drawing != null && drawing.active() && drawing.sourceVersionId() != null) {
-          boolean ready = StringUtils.hasText(drawing.compositionFingerprint())
-              && (drawing.published()
-                  || ElectronicDrawingWorkflowStage.COMPOSED.equals(drawing.workflowStage())
-                  || ElectronicDrawingWorkflowStage.PUBLISHED.equals(drawing.workflowStage()));
+          boolean hasDetails = !drawingSources.findByVersionId(drawing.sourceVersionId()).isEmpty();
           String reference = codec.write(Map.of(
               "sourceVersionId", drawing.sourceVersionId(),
               "workflowStage", Objects.toString(drawing.workflowStage(), ""),
               "compositionFingerprint", Objects.toString(drawing.compositionFingerprint(), "")));
           return fact(context, TechnicalDataModuleType.DRAWING_BOM,
-              ready ? TechnicalDataAvailability.AVAILABLE : TechnicalDataAvailability.MISSING,
-              ready ? "DRAWING_SOURCE_AVAILABLE" : "DRAWING_SOURCE_PENDING",
-              ready ? "本报价已取得并确认图库明细，已生成 BOM，无需重复补录"
-                  : "已有图库来源，请在产品核算页核实确认、料号匹配和 BOM 处理状态",
+              hasDetails ? TechnicalDataAvailability.AVAILABLE : TechnicalDataAvailability.MISSING,
+              hasDetails ? "DRAWING_SOURCE_AVAILABLE" : "DRAWING_SOURCE_PENDING",
+              hasDetails ? "已有电子图库明细表，制造件原材料等核算资料单独检查"
+                  : "尚无电子图库明细表，当前图库来源版本没有明细",
               reference);
         }
       }
