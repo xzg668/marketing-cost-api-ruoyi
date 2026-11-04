@@ -66,9 +66,10 @@ class MonthlyRepriceContractIntegrationTest {
     oldResult=jdbc.queryForMap("SELECT * FROM lp_monthly_reprice_result WHERE id=1");
     oldVersion=jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=1");
     new ResourceDatabasePopulator(new ClassPathResource("db/V348__monthly_reprice_1130_contract.sql")).execute(ds);
+    new ResourceDatabasePopulator(new ClassPathResource("db/V359__monthly_price_folder_import.sql")).execute(ds);
     var config = new com.baomidou.mybatisplus.core.MybatisConfiguration();
     config.setMapUnderscoreToCamelCase(true);
-    for (var type : List.of(MonthlyRepriceContractMapper.class,MonthlyRepriceBatchMapper.class,MonthlyRepriceResultMapper.class,MonthlyRepriceWorkflowMapper.class,QuotePricingPeriodMapper.class)) config.addMapper(type);
+    for (var type : List.of(MonthlyRepriceContractMapper.class,MonthlyRepriceBatchMapper.class,MonthlyRepriceResultMapper.class,MonthlyRepriceWorkflowMapper.class,QuotePricingPeriodMapper.class,MonthlyPriceImportMapper.class)) config.addMapper(type);
     var factory = new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();
     factory.setConfiguration(config); factory.setDataSource(ds);
     var sql = new SqlSessionTemplate(factory.getObject());
@@ -79,19 +80,30 @@ class MonthlyRepriceContractIntegrationTest {
     pricingPeriods=new ConfirmedQuotePricingPeriod(sql.getMapper(QuotePricingPeriodMapper.class),properties);
     service=new MonthlyRepriceContractService(mapper,manager,new ObjectMapper(),codec,properties,
         org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService.class,
-            org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)));
+            org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)),
+        sql.getMapper(MonthlyPriceImportMapper.class));
     control=new MonthlyQuotationControl(ds);workflow=sql.getMapper(MonthlyRepriceWorkflowMapper.class);
     dispatch=new MonthlyRepriceDispatchService(mapper,workflow,service,
         org.mockito.Mockito.mock(MonthlyRepriceCheckService.class),manager);
   }
   @AfterAll static void stop() { MYSQL.stop(); }
   @BeforeEach void clean() {
+    jdbc.update("DELETE FROM lp_monthly_price_import");
     for (String table : List.of("lp_cost_run_part_item","lp_cost_run_cost_item","lp_cost_run_task","lp_cost_run_batch")) jdbc.update("DELETE FROM "+table);
     for (String table : List.of("lp_monthly_reprice_result","lp_monthly_reprice_batch","lp_quote_cost_run_version")) jdbc.update("DELETE FROM "+table+" WHERE id<>1");
     properties.setGoLiveMonths(Map.of("COMMERCIAL",LIVE.toString(),"HOUSEHOLD",LIVE.toString()));
     auth("COMMERCIAL","ROLE_BU_DIRECTOR");
   }
   @AfterEach void logout() { SecurityContextHolder.clearContext(); }
+
+  @Test void unfinishedFolderStopsRepricingUntilAllFilesAreCompleted() {
+    var source=source("COMMERCIAL",3990);
+    jdbc.update("INSERT INTO lp_monthly_price_import(business_unit_type,pricing_month,request_key,status,revision,created_by,created_at,updated_at) VALUES('COMMERCIAL',?,'folder-guard','PARTIAL',1,'test',NOW(),NOW())",MONTH.toString());
+    assertThatThrownBy(()->start(source)).hasMessageContaining("价格文件夹尚未处理完成");
+    assertThat(service.blocksQuotation("COMMERCIAL")).isFalse();
+    jdbc.update("UPDATE lp_monthly_price_import SET status='COMPLETE'");
+    assertThat(start(source).getStatus()).isEqualTo("QUEUED");
+  }
 
   @Test void ordinaryPricingMonthChangesOnlyAfterDirectorConfirmsTheWholeBatch() {
     var source=source("COMMERCIAL",3010);

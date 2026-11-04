@@ -55,6 +55,7 @@ public class TechnicalDataManufacturingApplicationService {
   private final ElectronicDrawingWorkflowOrchestrator workflow;
   private final TransactionTemplate transaction;
   private final TechnicalDataMaterialPriceQuery prices;
+  private final TechnicalDataManufacturingPrices missingPrices;
 
   public TechnicalDataManufacturingApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataVersionContentCodec codec,
@@ -63,7 +64,9 @@ public class TechnicalDataManufacturingApplicationService {
       MakePartScrapMappingService scraps, MakePartNoScrapConfirmationService noScrap,
       ElectronicDrawingHybridBomService hybridBom, ElectronicDrawingWorkflowOrchestrator workflow,
       PlatformTransactionManager transactionManager, TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy,
-      ElectronicDrawingManufacturingRevision revisions, TechnicalDataUnchangedModuleReuse reuse) {
+      ElectronicDrawingManufacturingRevision revisions, TechnicalDataUnchangedModuleReuse reuse,
+      TechnicalDataManufacturingPrices missingPrices) {
+    this.missingPrices = missingPrices;
     this.reuse = reuse;
     this.revisions = revisions;
     this.readPolicy=readPolicy;
@@ -227,6 +230,7 @@ public class TechnicalDataManufacturingApplicationService {
     scope.product().setCurrentEditVersionId(draft.getId()); scope.product().setProductStatus("EDITING");
     if (repository.updateProductPointers(scope.product(), scope.product().getRowVersion(), now) != 1) throw conflict("产品资料已变化");
     if ("PENDING".equals(scope.task().getTaskStatus())) repository.markTaskInProgress(scope.task().getId(), actor.userId(), now);
+    missingPrices.refresh(scope.task(), scope.product(), actor, now);
     return true;
   }
 

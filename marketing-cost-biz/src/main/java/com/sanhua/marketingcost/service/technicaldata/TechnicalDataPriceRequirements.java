@@ -45,8 +45,12 @@ public class TechnicalDataPriceRequirements {
   public TechnicalDataPriceRequirementsResponse check(QuoteTechTask task, QuoteTechProduct product) {
     var demands = new TreeMap<String, Set<String>>();
     List<String> issues = new ArrayList<>();
-    addBom(task, product, demands, issues);
-    addModules(product, demands);
+    // 制造件保存产生的补价先处理已知原料/废料，不以整棵 BOM 完成为前置条件。
+    // 核算发现的普通 PRICE 需求仍按正式计价 BOM 检查。
+    boolean manufacturingPrices = tasks.findModules(product.getId()).stream().anyMatch(module ->
+        "PRICE".equals(module.getModuleType()) && TechnicalDataManufacturingPrices.ownsRequirement(module));
+    addModules(product, demands, manufacturingPrices ? Set.of("MANUFACTURING") : Set.of("MANUFACTURING", "SOLDER", "PACKAGE"));
+    if (!manufacturingPrices) addBom(task, product, demands, issues);
     var revisions = ownedRevisions(task, product);
     revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
     return resolve(task, product, demands, issues, revisions.keySet());
@@ -55,6 +59,12 @@ public class TechnicalDataPriceRequirements {
   public TechnicalDataPriceRequirementsResponse checkModuleReferences(QuoteTechTask task, QuoteTechProduct product) {
     var demands = new TreeMap<String, Set<String>>();
     addModules(product, demands);
+    return resolve(task, product, demands, new ArrayList<>(), Set.of());
+  }
+
+  public TechnicalDataPriceRequirementsResponse checkManufacturingReferences(QuoteTechTask task, QuoteTechProduct product) {
+    var demands = new TreeMap<String, Set<String>>();
+    addModules(product, demands, Set.of("MANUFACTURING"));
     return resolve(task, product, demands, new ArrayList<>(), Set.of());
   }
 
@@ -126,7 +136,12 @@ public class TechnicalDataPriceRequirements {
   }
 
   private void addModules(QuoteTechProduct product, Map<String, Set<String>> demands) {
+    addModules(product, demands, Set.of("MANUFACTURING", "SOLDER", "PACKAGE"));
+  }
+
+  private void addModules(QuoteTechProduct product, Map<String, Set<String>> demands, Set<String> types) {
     for (var module : tasks.findModules(product.getId())) {
+      if (!types.contains(module.getModuleType())) continue;
       Long versionId = module.getCurrentVersionId();
       if (versionId == null) continue;
       var version = versions.findVersion(versionId).orElseThrow();

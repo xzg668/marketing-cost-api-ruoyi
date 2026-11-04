@@ -66,6 +66,7 @@ public final class OriginalRangeRuleSnapshot {
     }
   }
 
+  @com.fasterxml.jackson.annotation.JsonIgnoreProperties("ruleSetRevision")
   public record SavedRule(String version, List<Rule> sources, String inputFingerprint) {
     public Rule rule() {
       return sources.getFirst();

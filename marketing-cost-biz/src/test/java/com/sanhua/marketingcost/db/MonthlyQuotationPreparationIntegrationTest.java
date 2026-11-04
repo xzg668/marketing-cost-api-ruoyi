@@ -493,6 +493,26 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     } catch(Exception failure) {throw new AssertionError(failure);}
   }
 
+  @Test void folderRunsThroughRealCosting() throws Exception {
+    org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("folder.browser.state") != null);
+    String key="FOLDER-FLOW-"+UUID.randomUUID().toString().substring(0,8),material=key+"-PART";
+    String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    var date=YearMonth.parse(month).atDay(25).atTime(12,0);
+    jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,'COMMERCIAL',80000)",key);
+    long form=jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?",Long.class,key);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,business_unit_type) VALUES(?,?,'COMMERCIAL')",form,key);
+    long item=jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+    ordinarySources(key,material,form,date);
+    buildOriginalFixture(form,item,key,month,date,material,Map.of());
+    byte[] finance;
+    try(var input=getClass().getResourceAsStream("/finance-factor/commercial-original.xlsx")){finance=input.readAllBytes();}
+    var context=new com.sanhua.marketingcost.dto.FinanceFactorImportContext("COMMERCIAL","210",month,null,"CU_90000");
+    var preview=inquiryFinance.preview(finance,"商用基价.xlsx",context);
+    inquiryFinance.publish(finance,"商用基价.xlsx",context,preview.previewFingerprint(),"folder-fixture");
+    repriceProperties.setGoLiveMonths(Map.of("COMMERCIAL",month));
+    MonthlyPriceFolderBrowserAcceptance.await(jdbc,httpPort,jwt,key,form,item,material,month);
+  }
+
   @Test void inquiryRunsThroughRealCostingAndMonthlyRepriceRefreshesOldRules() throws Exception {
     String key="INQ-FLOW-"+UUID.randomUUID().toString().substring(0,8),material=key+"-PART";
     String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();

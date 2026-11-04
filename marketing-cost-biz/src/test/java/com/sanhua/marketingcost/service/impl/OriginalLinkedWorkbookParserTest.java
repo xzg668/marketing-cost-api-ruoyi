@@ -90,6 +90,60 @@ class OriginalLinkedWorkbookParserTest {
     return parser.parse(out.toByteArray(), "原稿.xlsx", "COMMERCIAL", Set.of("AVG|1#CU"));
   }
 
+  @Test
+  void combinedMainIsAuthoritativeAndMissingPricesRemainAccountedFor() throws Exception {
+    try (var book = workbook("(90+8.5)/1.13")) {
+      var combined = book.cloneSheet(book.getSheetIndex("ImportData"), "合并联动价表");
+      combined.getRow(1).getCell(0).setCellValue(211);
+      combined.getRow(1).getCell(7).setBlank();
+      book.getSheet("ImportData").getRow(1).getCell(6).setCellFormula("1/0");
+      var empty = combined.createRow(2);
+      empty.createCell(1).setCellValue("NO-PRICE");
+      var parsed = parse(book);
+      assertThat(parsed.errors()).isEmpty();
+      assertThat(parsed.rules()).hasSize(1);
+      assertThat(parsed.rules().getFirst().identity().orgCode()).isEqualTo("210");
+      assertThat(parsed.rules().getFirst().taxIncluded()).isFalse();
+      assertThat(parsed.notices()).extracting(n -> n.code())
+          .containsExactlyInAnyOrder("ORGANIZATION_CORRECTED", "TAX_INFERRED", "NO_PRICE");
+      combined.getRow(1).getCell(0).setCellValue(220);
+      assertThat(parse(book).rules().getFirst().identity().orgCode()).isEqualTo("220");
+      combined.getRow(1).getCell(6).setCellFormula("90+8.5");
+      assertThat(parse(book).errors().getFirst().message()).contains("税");
+    }
+  }
+
+  @Test
+  void financialSchemeTableBindsActualFactorsEvenBeforeTheirCatalogIsPublished() throws Exception {
+    try (var book = workbook("(因素!AB5+因素!Z6+8.5)/1.13")) {
+      var factors = book.getSheet("因素");
+      var header = factors.createRow(3);
+      header.createCell(22).setCellValue("基价名称");
+      header.createCell(23).setCellValue("基价代号");
+      header.createCell(24).setCellValue("计量单位");
+      header.createCell(25).setCellValue("上月均价（含税）");
+      header.createCell(26).setCellValue("联动基价调整-90000元/吨");
+      var copper = factors.createRow(4);
+      copper.createCell(22).setCellValue("1#电解铜");
+      copper.createCell(23).setCellValue("1#Cu");
+      copper.createCell(24).setCellValue("元/公斤");
+      copper.createCell(25).setCellValue(110);
+      copper.createCell(26).setCellValue(-0.18);
+      copper.createCell(27).setCellValue(90);
+      var tin = factors.createRow(5);
+      tin.createCell(22).setCellValue("1#锡");
+      tin.createCell(23).setCellValue("1#Sn");
+      tin.createCell(24).setCellValue("元/公斤");
+      tin.createCell(25).setCellValue(386.721);
+      factors.createRow(8).createCell(2).setCellFormula("1/0");
+      var parsed = parse(book);
+      assertThat(parsed.errors()).isEmpty();
+      assertThat(parsed.rules().getFirst().factors().values())
+          .extracting(OriginalLinkedWorkbookParser.FactorInput::canonicalKey)
+          .containsExactlyInAnyOrder("AVG|1#CU", "AVG|1#SN");
+    }
+  }
+
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
   void errorMaterialCellsCannotSilentlyDisappearFromTheBatch(boolean formula) throws Exception {

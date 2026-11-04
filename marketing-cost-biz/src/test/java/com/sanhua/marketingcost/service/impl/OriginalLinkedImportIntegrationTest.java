@@ -231,7 +231,7 @@ class OriginalLinkedImportIntegrationTest {
   }
 
   @Test
-  void identicalDuplicateSourcesAreRetainedButConflictingSameIdentityIsRejected() throws Exception {
+  void identicalSourcesMergeAndDifferentRulesPublishTogetherWithoutLosingHistory() throws Exception {
     byte[] identical;
     try (var book =
             org.apache.poi.ss.usermodel.WorkbookFactory.create(
@@ -261,11 +261,13 @@ class OriginalLinkedImportIntegrationTest {
       book.getCreationHelper().createFormulaEvaluator().evaluateAll();
       book.write(out);
       var conflict = command(out.toByteArray());
-      var failed = service.preview(conflict);
-      assertThat(failed.isCanConfirm()).isFalse();
-      assertThatThrownBy(() -> service.confirm(confirmed(conflict, failed)))
-          .hasMessageContaining("不同规则");
-      assertThat(count("lp_price_linked_item")).isOne();
+      var revisedPreview = service.preview(conflict);
+      assertThat(revisedPreview.isCanConfirm()).isTrue();
+      service.confirm(confirmed(conflict, revisedPreview));
+      assertThat(count("lp_price_linked_item")).isEqualTo(3);
+      var current = com.sanhua.marketingcost.service.pricing.LinkedPriceRuleVersions.current(items.selectList(null));
+      assertThat(current).hasSize(2);
+      assertThat(current).extracting(PriceLinkedItem::getSourceRowNumber).containsExactlyInAnyOrder(2, 3);
     }
   }
 

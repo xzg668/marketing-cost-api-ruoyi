@@ -123,7 +123,7 @@ public class OriginalRangeImportService {
                       .collect(java.util.stream.Collectors.toSet());
               if (!replay.isEmpty()
                   && replay.size() == organizations(checked).size()
-                  && checked.sources().keySet().stream()
+                  && checked.sources().values().stream().map(rows -> rows.getFirst().identity().identityKey())
                       .allMatch(
                           key -> {
                             var prior = checked.previous().get(key);
@@ -150,7 +150,37 @@ public class OriginalRangeImportService {
   }
 
   private Prepared prepare(Command command, Scope scope) {
+    return prepare(command, scope, null);
+  }
+
+  public Publication stageSelectedInTransaction(Command command, Set<String> selectedRows) {
+    if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+      throw new IllegalStateException("选择发布必须与文件夹处理结果在同一事务内保存");
+    if (selectedRows == null || selectedRows.isEmpty()) throw new IllegalArgumentException("未选择区间原稿来源行");
+    Scope scope = scope(command);
+    identities.lockForFinancePublication(scope.businessUnit());
+    Prepared checked = prepare(command, scope, selectedRows);
+    if (!checked.preview().canConfirm())
+      throw new IllegalArgumentException("所选区间行无法发布：" + checked.preview().errors());
+    if (checked.preview().businessRowCount() != selectedRows.size())
+      throw new IllegalArgumentException("所选来源行包含无价或缺失定位，未发布");
+    var selectedKeys = checked.sources().values().stream().map(rows -> rows.getFirst().identity().identityKey()).collect(java.util.stream.Collectors.toSet());
+    boolean replay = selectedKeys.stream().allMatch(key -> {
+      var prior = checked.previous().get(key);
+      return prior != null && checked.inputFingerprint().equals(snapshots.read(prior).inputFingerprint());
+    });
+    if (replay) return new Publication(checked.previous().values().stream()
+        .filter(r -> selectedKeys.contains(r.getRuleIdentityKey()))
+        .map(PriceRangeFactorRule::getSourceUploadBatchId).distinct().toList(),
+        checked.preview().businessRowCount(), checked.sources().size(), true);
+    return save(command, scope, checked, "STAGED");
+  }
+
+  private Prepared prepare(Command command, Scope scope, Set<String> selectedRows) {
     var parsed = parser.parse(command.bytes(), command.fileName(), scope.businessUnit());
+    if (selectedRows != null) parsed = new OriginalRangeWorkbookParser.ParsedWorkbook(
+        parsed.rules().stream().filter(r -> selectedRows.contains(r.sheet() + "!" + r.row())).toList(),
+        parsed.errors().stream().filter(e -> e.row() == null || selectedRows.contains(e.sheet() + "!" + e.row())).toList());
     List<OriginalRangeWorkbookParser.RowError> errors = new ArrayList<>(parsed.errors());
     List<PreviewRow> rows = new ArrayList<>();
     Map<String, PriceFactorContext> financial = new TreeMap<>();
@@ -179,7 +209,7 @@ public class OriginalRangeImportService {
                   .eq(PriceRangeFactorRule::getBusinessUnitType, scope.businessUnit())
                   .eq(PriceRangeFactorRule::getPricingMonth, scope.month())
                   .in(PriceRangeFactorRule::getRuleIdentityKey, incomingIdentities)
-                  .eq(PriceRangeFactorRule::getRuleStatus, "PUBLISHED"))) {
+                  .in(PriceRangeFactorRule::getRuleStatus, selectedRows != null ? List.of("PUBLISHED", "STAGED") : List.of("PUBLISHED")))) {
         // 不让MySQL对大JSON来源快照做文件排序；只读取本次身份并显式选最高修订。
         previous.merge(
             item.getRuleIdentityKey(),
@@ -187,18 +217,11 @@ public class OriginalRangeImportService {
             (left, right) -> left.getVersionNo() >= right.getVersionNo() ? left : right);
       }
     Map<String, List<Rule>> sources = new LinkedHashMap<>();
+    var signatures = new com.sanhua.marketingcost.service.pricing.OriginalRuleSignature(json, calculator);
     Map<String, Long> previousIds = new TreeMap<>();
     for (Rule rule : parsed.rules()) {
       String key = rule.identity().identityKey();
-      var group = sources.computeIfAbsent(key, ignored -> new ArrayList<>());
-      if (!group.isEmpty() && !sameRule(group.getFirst(), rule)) {
-        errors.add(
-            new OriginalRangeWorkbookParser.RowError(
-                rule.sheet(),
-                rule.row(),
-                rule.identity().materialCode(),
-                "同一业务身份存在不同区间规则，不能按文件顺序覆盖"));
-      }
+      var group = sources.computeIfAbsent(key + ":" + signatures.range(rule), ignored -> new ArrayList<>());
       group.add(rule);
       previousIds.put(key, previous.containsKey(key) ? previous.get(key).getId() : 0L);
       OriginalRangeRuleCalculator.Result result = null;
@@ -236,7 +259,8 @@ public class OriginalRangeImportService {
                     context.financial().revision(),
                     context.financial().scope())));
     String inputFingerprint =
-        hash(List.of(fileHash, command.fileName(), scope, OriginalRangeRuleSnapshot.VERSION));
+        hash(List.of(fileHash, command.fileName(), scope, OriginalRangeRuleSnapshot.VERSION,
+            selectedRows == null ? List.of() : selectedRows.stream().sorted().toList()));
     boolean replay = unchangedImport(sources, previous, fileHash);
     var preview =
         new Preview(
@@ -257,7 +281,7 @@ public class OriginalRangeImportService {
                             row.error()))
                 .toList(),
             List.copyOf(errors),
-            Collections.unmodifiableMap(financial));
+            Collections.unmodifiableMap(financial), parsed.notices());
     return new Prepared(preview, sources, previous, financial, inputFingerprint);
   }
 
@@ -279,7 +303,7 @@ public class OriginalRangeImportService {
                 .map(FactorUploadBatch::getId)
                 .collect(java.util.stream.Collectors.toSet());
     return !sources.isEmpty()
-        && sources.keySet().stream()
+        && sources.values().stream().map(rows -> rows.getFirst().identity().identityKey())
             .allMatch(
                 key -> {
                   var prior = previous.get(key);
@@ -287,16 +311,14 @@ public class OriginalRangeImportService {
                 });
   }
 
-  private boolean sameRule(Rule a, Rule b) {
-    // 当前财务单价相等不能证明两条区间规则相同；比较全部档位及错误状态。
-    return a.taxIncluded() == b.taxIncluded()
-        && a.factorKey().equals(b.factorKey())
-        && a.factorUnit() == b.factorUnit()
-        && a.bands().equals(b.bands());
+  private Publication save(Command command, Scope scope, Prepared prepared) {
+    return save(command, scope, prepared, "PUBLISHED");
   }
 
-  private Publication save(Command command, Scope scope, Prepared prepared) {
+  private Publication save(Command command, Scope scope, Prepared prepared, String status) {
     LocalDateTime now = LocalDateTime.now();
+    var revisions = com.sanhua.marketingcost.service.pricing.OriginalRuleRevisions.ranges(rules, scope.businessUnit(), scope.month());
+    var groupRevisions = new java.util.HashMap<String, Integer>();
     Map<String, FactorUploadBatch> saved = new LinkedHashMap<>();
     for (String org : organizations(prepared)) {
       var batch = new FactorUploadBatch();
@@ -311,7 +333,7 @@ public class OriginalRangeImportService {
       batch.setSourceWorkbook(command.bytes());
       batch.setContentHash(prepared.preview().previewFingerprint());
       batch.setParserVersion(OriginalRangeRuleSnapshot.VERSION);
-      batch.setStatus("PUBLISHED");
+      batch.setStatus(status);
       var auth = SecurityContextHolder.getContext().getAuthentication();
       batch.setUploadedBy(auth == null ? "system" : auth.getName());
       batch.setLinkedRowCount(
@@ -331,7 +353,7 @@ public class OriginalRangeImportService {
                   .count());
       batch.setStartedAt(now);
       batch.setFinishedAt(now);
-      batch.setPublishedAt(now);
+      batch.setPublishedAt(status.equals("PUBLISHED") ? now : null);
       batch.setCreatedAt(now);
       batch.setUpdatedAt(now);
       batches.insert(batch);
@@ -341,7 +363,6 @@ public class OriginalRangeImportService {
       Rule rule = sourceRows.getFirst();
       var key = rule.identity();
       var batch = saved.get(key.orgCode());
-      var prior = prepared.previous().get(key.identityKey());
       var item = new PriceRangeFactorRule();
       item.setBusinessUnitType(key.businessUnitType());
       item.setOrgCode(key.orgCode());
@@ -355,18 +376,21 @@ public class OriginalRangeImportService {
       item.setFactorName(rule.factorKey());
       item.setFactorUnit(rule.factorUnit().name());
       item.setPricingMonth(scope.month());
-      item.setVersionNo(prior == null ? 1 : prior.getVersionNo() + 1);
+      int nextRevision = revisions.merge(key.identityKey(), 1, Integer::sum);
+      int groupRevision = groupRevisions.computeIfAbsent(key.identityKey(), ignored -> nextRevision);
+      item.setVersionNo(nextRevision);
       item.setRuleIdentityKey(key.identityKey());
-      item.setRuleStatus("PUBLISHED");
+      item.setRuleStatus(status);
       item.setSourceUploadBatchId(batch.getId());
       item.setImportBatchNo(batch.getBatchNo());
       item.setSourceFile(command.fileName());
       item.setSourceSheet(rule.sheet());
-      item.setSourceInputSnapshotJson(snapshots.write(sourceRows, prepared.inputFingerprint()));
+      item.setSourceInputSnapshotJson(com.sanhua.marketingcost.service.pricing.OriginalRuleGroups.withRevision(
+          snapshots.write(sourceRows, prepared.inputFingerprint()), groupRevision));
       var proof = calculator.extrapolation(rule);
       item.setExtrapolationJson(proof == null ? null : serialize(proof));
       item.setEffectiveFrom(YearMonth.parse(scope.month()).atDay(1));
-      item.setCurrentFlag(1);
+      item.setCurrentFlag(status.equals("PUBLISHED") ? 1 : 0);
       item.setCreatedAt(now);
       item.setUpdatedAt(now);
       rules.insert(item);
@@ -384,7 +408,7 @@ public class OriginalRangeImportService {
         row.setFactorRuleId(item.getId());
         row.setFactorCode(rule.factorKey());
         row.setImportBatchNo(batch.getBatchNo());
-        row.setCurrentFlag(1);
+        row.setCurrentFlag(status.equals("PUBLISHED") ? 1 : 0);
         row.setOrderType("区间");
         row.setSourceName("供管部原稿");
         row.setRangeLow(band.bounds().low());
@@ -489,7 +513,8 @@ public class OriginalRangeImportService {
       boolean canConfirm,
       List<PreviewRow> rows,
       List<OriginalRangeWorkbookParser.RowError> errors,
-      Map<String, PriceFactorContext> financial) {}
+      Map<String, PriceFactorContext> financial,
+      List<com.sanhua.marketingcost.formula.workbook.OriginalPriceTable.RowNotice> notices) {}
 
   public record PreviewRow(
       Rule rule,

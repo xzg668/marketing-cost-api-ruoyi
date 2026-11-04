@@ -61,6 +61,7 @@ public final class OriginalLinkedWorkbookParser {
       java.util.function.Function<String, Set<String>> catalog, ImportContext context) {
     List<Rule> rules = new ArrayList<>();
     List<RowError> errors = new ArrayList<>();
+    List<RowNotice> notices = new ArrayList<>();
     try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
       var layouts = LinkedApprovalTable.layouts(workbook);
       Map<SourceRow, String> factorProblems = new LinkedHashMap<>();
@@ -75,17 +76,22 @@ public final class OriginalLinkedWorkbookParser {
           try {
             material = materialCode(at(row, main, "物料代码"));
             if (material.isBlank()) continue;
+            Cell price = at(row, main, "单价");
+            if (emptyPrice(price)) {
+              notices.add(new RowNotice(main.sheet().getSheetName(), index + 1, material,
+                  "NO_PRICE", "主表单价为空，未导入；原行和料号保留在核对清单"));
+              continue;
+            }
             if ("固定".equals(text(at(row, main, "订单类型")))) {
               throw new IllegalArgumentException("联动原稿中包含固定价记录，请通过固定价入口导入；本批不发布任何记录");
             }
-            Cell price = at(row, main, "单价");
             if (price == null || price.getCellType() != CellType.FORMULA) {
               throw new IllegalArgumentException("主价格格缺少实际公式，不能用文字说明或缓存价替代");
             }
             var identity =
                 new MaterialPriceRuleKey(
                     businessUnit,
-                    layout.approval() ? context.orgCode() : text(at(row, main, "组织")),
+                    layout.approval() ? context.orgCode() : organization(at(row, main, "组织")),
                     material,
                     text(at(row, main, "供应商代码")),
                     text(at(row, main, "供应商名称")),
@@ -143,28 +149,40 @@ public final class OriginalLinkedWorkbookParser {
                     price.getCellFormula(),
                     text(at(row, main, "联动公式")),
                     price.getCellStyle().getDataFormatString(),
-                    layout.approval() ? LinkedApprovalTable.taxIncluded(row, main) : taxIncluded(at(row, main, "是否含税")),
+                    layout.approval() ? LinkedApprovalTable.taxIncluded(row, main) : taxIncluded(at(row, main, "是否含税"), price),
                     compiled,
                     Map.copyOf(required),
                     original));
+            if (!layout.approval()) {
+              if (!identity.orgCode().equals(text(at(row, main, "组织"))))
+                notices.add(new RowNotice(main.sheet().getSheetName(), index + 1, material,
+                    "ORGANIZATION_CORRECTED", "组织" + text(at(row, main, "组织")) + "按210读取"));
+              if (text(at(row, main, "是否含税")).isBlank())
+                notices.add(new RowNotice(main.sheet().getSheetName(), index + 1, material,
+                    "TAX_INFERRED", "实际单价公式已除以1.13，按未税价读取"));
+            }
           } catch (RuntimeException error) {
             errors.add(
                 new RowError(main.sheet().getSheetName(), index + 1, material, error.getMessage()));
           }
         }
       }
-      if (rules.isEmpty() && errors.isEmpty())
+      if (rules.isEmpty() && errors.isEmpty() && notices.isEmpty())
         errors.add(new RowError(null, null, null, "未读取到主价格记录"));
     } catch (Exception error) {
       errors.add(new RowError(null, null, null, fileName + "：" + error.getMessage()));
     }
-    return new ParsedWorkbook(List.copyOf(rules), List.copyOf(errors));
+    return new ParsedWorkbook(List.copyOf(rules), List.copyOf(errors), List.copyOf(notices));
   }
 
   /** 只读取主表组织，确保财务目录按原稿实际组织隔离。 */
   public Set<String> organizations(byte[] bytes) { return organizations(bytes, null); }
 
   public Set<String> organizations(byte[] bytes, String approvalOrgCode) {
+    return organizations(bytes, approvalOrgCode, null);
+  }
+
+  public Set<String> organizations(byte[] bytes, String approvalOrgCode, Set<String> selectedRows) {
     try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
       Set<String> result = new LinkedHashSet<>();
       for (var layout : LinkedApprovalTable.layouts(workbook)) {
@@ -172,12 +190,13 @@ public final class OriginalLinkedWorkbookParser {
           throw new IllegalArgumentException("审批原稿未列组织，请选择适用组织（商用或板换）");
         Header main = layout.header();
         for (int i = main.row() + 1; i <= main.sheet().getLastRowNum(); i++) {
+          if (selectedRows != null && !selectedRows.contains(main.sheet().getSheetName() + "!" + (i + 1))) continue;
           Row row = main.sheet().getRow(i);
           Cell material = at(row, main, "物料代码");
           if (!materialCode(material).isBlank())
             result.add(
                 com.sanhua.marketingcost.enums.MaterialOrganization.fromPriceOrgCode(
-                        layout.approval() ? approvalOrgCode : text(at(row, main, "组织")))
+                        layout.approval() ? approvalOrgCode : organization(at(row, main, "组织")))
                     .getPriceOrgCode());
         }
       }
@@ -202,7 +221,7 @@ public final class OriginalLinkedWorkbookParser {
       FactorCell factor = entry.getValue();
       if (!publicKeys.contains(factor.canonicalKey())
           && !(board && BoardStainlessGrade.fromFactorKey(factor.canonicalKey()) != null)
-          && !"APPROVAL_PUBLIC_FACTOR".equals(factor.bindingBasis())) continue;
+          && !Set.of("APPROVAL_PUBLIC_FACTOR", "FINANCE_FACTOR_TABLE").contains(factor.bindingBasis())) continue;
       // 每个源格独立保留原输入；多个Cu源格在运行时指向同一个财务身份。
       String variable = "factor_" + variables.size();
       variables.put(entry.getKey(), variable);
@@ -233,6 +252,7 @@ public final class OriginalLinkedWorkbookParser {
   private Map<Address, FactorCell> factorCells(Workbook workbook, Map<SourceRow, String> problems) {
     Map<Address, FactorCell> factors = new LinkedHashMap<>();
     for (Sheet sheet : workbook) {
+      Set<Integer> financialRows = addFinancialTable(sheet, factors);
       Header header = header(sheet, Set.of("简称", "取价来源", "价格"));
       if (header != null) {
         for (int i = header.row() + 1; i <= sheet.getLastRowNum(); i++) {
@@ -275,7 +295,7 @@ public final class OriginalLinkedWorkbookParser {
                         value.equals("1#电解铜")
                             || value.startsWith("漆包线：铜价")
                             || value.startsWith("铜均价按入库月"));
-        if (copperRow) {
+        if (copperRow && !financialRows.contains(row.getRowNum())) {
           List<Cell> numbers = cells.stream().filter(cell -> numeric(cell) != null).toList();
           if (numbers.size() == 1)
             addFactor(
@@ -292,6 +312,38 @@ public final class OriginalLinkedWorkbookParser {
       }
     }
     return factors;
+  }
+
+  /** 财务方案表可能与采购行情并排；仅按有名称、代号、单位的表头定位其价格列。 */
+  private Set<Integer> addFinancialTable(Sheet sheet, Map<Address, FactorCell> factors) {
+    Header table = header(sheet, Set.of("基价名称", "基价代号", "计量单位"));
+    if (table == null) return Set.of();
+    Set<Integer> priceColumns = new LinkedHashSet<>();
+    for (var entry : table.columns().entrySet()) {
+      if (entry.getValue() <= table.columns().get("计量单位")) continue;
+      if (entry.getKey().contains("均价") || entry.getKey().contains("现货价"))
+        priceColumns.add(entry.getValue());
+      if (entry.getKey().contains("基价调整")) {
+        // 方案标题横跨“变化比例、基价”两列；比例不能成为价格输入。
+        priceColumns.add(entry.getValue() + 1);
+      }
+    }
+    Set<Integer> recognized = new LinkedHashSet<>();
+    for (int i = table.row() + 1; i <= sheet.getLastRowNum(); i++) {
+      Row row = sheet.getRow(i);
+      String name = text(at(row, table, "基价名称"));
+      String shortName = text(at(row, table, "基价代号"));
+      String unit = text(at(row, table, "计量单位"));
+      if (name.contains("汇率")) break;
+      if (shortName.isBlank() || unit.isBlank()) continue;
+      String key = canonicalKeys.build("平均价", shortName);
+      for (int column : priceColumns) {
+        var address = new Address(sheet.getSheetName(), new CellReference(i, column).formatAsString());
+        factors.put(address, new FactorCell(address, key, unit, key, "FINANCE_FACTOR_TABLE"));
+      }
+      recognized.add(i);
+    }
+    return recognized;
   }
 
   private void addFactor(
@@ -380,5 +432,7 @@ public final class OriginalLinkedWorkbookParser {
 
   public record RowError(String sheet, Integer row, String materialCode, String message) {}
 
-  public record ParsedWorkbook(List<Rule> rules, List<RowError> errors) {}
+  public record ParsedWorkbook(List<Rule> rules, List<RowError> errors, List<RowNotice> notices) {
+    public ParsedWorkbook(List<Rule> rules, List<RowError> errors) { this(rules, errors, List.of()); }
+  }
 }

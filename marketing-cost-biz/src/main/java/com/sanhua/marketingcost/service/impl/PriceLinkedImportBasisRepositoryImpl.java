@@ -36,6 +36,7 @@ public class PriceLinkedImportBasisRepositoryImpl
         .eq(PriceLinkedItem::getSourceKind,"TECH_SUPPLEMENTAL").eq(PriceLinkedItem::getTechnicalVersionId,identity.getTechnicalVersionId())
         .eq(PriceLinkedItem::getTechnicalItemKey,identity.getTechnicalItemKey()).orderByDesc(PriceLinkedItem::getTechnicalRevision).last("LIMIT 1"));
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+        .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED")
         .eq(PriceLinkedItem::getPricingMonth, identity.getPricingMonth())
         .eq(PriceLinkedItem::getMaterialCode, identity.getMaterialCode())
         .eq(PriceLinkedItem::getBusinessUnitType, identity.getBusinessUnitType())

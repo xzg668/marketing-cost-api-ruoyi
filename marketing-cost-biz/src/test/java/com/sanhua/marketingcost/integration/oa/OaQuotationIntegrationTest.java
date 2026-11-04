@@ -10,6 +10,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.Set;
 import java.util.ArrayList;
 import java.sql.SQLException;
@@ -52,6 +57,8 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   @Autowired ObjectMapper json;
   @Autowired com.sanhua.marketingcost.service.quotefinal.QuoteFinalSubmissionService finalSubmission;
   @Autowired com.sanhua.marketingcost.service.costing.ProductCostingContextResolver costingContexts;
+  @Autowired QuotationPriceSessions priceSessions;
+  @Autowired MonthlyOdsPriceSource odsPrices;
   @SpyBean OaMessageRepository repository;
   @Autowired com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalReturnClient returnClient;
 
@@ -138,6 +145,57 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
     assertThat(service.receive(PEER, raw)).isEqualTo(result);
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?",
         Integer.class, source.path("formNo").asText())).isEqualTo(1);
+  }
+
+  @Test
+  @org.springframework.test.context.jdbc.Sql("/fixtures/oa-annual-usage-supplier-schema.sql")
+  void srBatchAnnualUsagePersistsAndFeedsTheRealTierPriceSession() throws Exception {
+    var source = OaQuotationRequestMapperTest.srBatchPush();
+    String identity = "SR-ANNUAL-" + UUID.randomUUID();
+    source.put("requestId", identity).put("formNo", identity);
+    ((ObjectNode) source.path("mainData")).put("sftghwshxs", "是");
+    String material = "ANNUAL-" + UUID.randomUUID();
+    // Monthly bands: 1,070/year matches [0,100); 1,890/year matches [100,200).
+    for (var band : new String[][] {{"0", "100", "20"}, {"100", "200", "10"}, {"200", null, "5"}}) {
+      jdbc.update("INSERT INTO ods_sy_v_mm_material_jt_price_cg05_df "
+          + "(company_name,material_code,material_name,spec,supply_code,supply_name,unit,price,eff_date,exp_date,source,jieti_down,jieti_up,dt) "
+          + "VALUES('浙江三花商用制冷有限公司',?,'annual fixture','SPEC','ANNUAL-S1','annual fixture','只',?,'2026-01-01','2026-12-31','SR-ANNUAL',?,?,'2026-10-24')",
+          material, new BigDecimal(band[2]), new BigDecimal(band[0]), band[1] == null ? null : new BigDecimal(band[1]));
+    }
+    long monthlyBefore = jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price", Long.class);
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+        .contentType("application/json").content(source.toString()))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED")).andReturn();
+    var receipt = json.readTree(response.getResponse().getContentAsByteArray());
+    for (var mapping : receipt.at("/data/itemMappings")) {
+      long itemId = mapping.path("quoteItemId").asLong();
+      boolean third = mapping.path("rowId").asText().endsWith("3");
+      String annual = third ? "0.1890" : "0.1070";
+      assertThat(jdbc.queryForObject("SELECT annual_volume FROM oa_form_item WHERE id=?", BigDecimal.class, itemId))
+          .isEqualByComparingTo(annual);
+      assertThat(jdbc.queryForObject("SELECT support_qty FROM oa_form_item WHERE id=?", BigDecimal.class, itemId))
+          .isEqualByComparingTo(annual);
+      String product = jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?", String.class, itemId);
+      var session = priceSessions.open(new QuotationPriceSessions.Request(identity, "COMMERCIAL", product,
+          "2026-10", LocalDateTime.of(2026, 10, 25, 0, 0),
+          new SupplierPriceReviewContext(itemId).forOrganization("210"), new QuotationPriceSession.Scope()));
+      assertThat(session.context().annualUsage().unit()).isEqualTo("TEN_THOUSAND_PIECES");
+      var pieces = session.context().annualUsage().piecesIfKnown();
+      assertThat(pieces).isEqualByComparingTo(third ? "1890" : "1070");
+      var request = new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.of(2026, 10),
+          "COMMERCIAL", material, "SPEC", "只", "CNY", TaxBasis.EXCLUDED, null), "210",
+          NonCuConditions.empty(), new BigDecimal("999"), pieces);
+      var candidates = odsPrices.tiers(session.context(), Set.of(request));
+      assertThat(candidates.problems()).isEmpty();
+      assertThat(candidates.values().get(request).selection().fact().price()).isEqualByComparingTo(third ? "10" : "20");
+    }
+    assertThat(service.receive(PEER, source.toString())).isEqualTo(receipt);
+    long formId = receipt.at("/data/quoteId").asLong();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_form_item_extra_field WHERE oa_form_id=? AND field_code='ANNUAL_VOLUME_UNIT'",
+        Integer.class, formId)).isEqualTo(3);
+    assertThat(jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
+        String.class, identity)).isEqualTo(source.toString());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price", Long.class)).isEqualTo(monthlyBefore);
   }
 
   @Test

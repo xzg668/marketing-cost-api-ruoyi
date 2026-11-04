@@ -70,7 +70,11 @@ public class SupplierPriceSelectionService {
   private Selection selectPolicy(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
       List<SupplierSupplyRatio> active,java.util.function.Supplier<SupplierPriceDecision> readDecision,
       boolean packagingHighestFallback){
+    int originalCount = candidates.size();
+    candidates = highestPerSupplier(candidates);
     // A unique valid quotation is sufficient; a zero/missing ratio is not a price invalidation.
+    if (candidates.size() == 1 && originalCount > 1) return new Selection(candidates.getFirst(), null,
+        "SAME_SUPPLIER_HIGH", "同一供应商存在多条有效价格，取最高价", null);
     if (candidates.size() == 1) return new Selection(candidates.getFirst(), null,
         "SINGLE", "单一供应商，直接取价", null);
     if (samePrice(candidates)) {
@@ -135,6 +139,21 @@ public class SupplierPriceSelectionService {
         status,
         message,
         review);
+  }
+
+  private static List<SupplierPriceCandidate> highestPerSupplier(List<SupplierPriceCandidate> candidates) {
+    var groups = new java.util.LinkedHashMap<String, List<SupplierPriceCandidate>>();
+    for (var candidate : candidates) {
+      String code = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(candidate.supplierCode());
+      String name = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(candidate.supplierName());
+      String supplier = code == null && name == null ? "NO_SUPPLIER:" + candidate.key()
+          : com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.supplierIdentity(code, name);
+      groups.computeIfAbsent(supplier, ignored -> new java.util.ArrayList<>()).add(candidate);
+    }
+    return groups.values().stream().map(group -> group.stream().max(
+        java.util.Comparator.comparing(SupplierPriceCandidate::unitPrice)
+            .thenComparing(SupplierPriceCandidate::key, java.util.Comparator.nullsFirst(String::compareTo)))
+        .orElseThrow()).toList();
   }
 
   private static boolean samePrice(List<SupplierPriceCandidate> candidates) {

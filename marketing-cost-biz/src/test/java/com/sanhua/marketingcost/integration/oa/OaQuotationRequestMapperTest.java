@@ -127,9 +127,12 @@ class OaQuotationRequestMapperTest {
         .containsExactly("SR-MATERIAL-1", "SR-MATERIAL-2", "SR-MATERIAL-3");
     assertThat(request.getItems()).extracting(item -> item.getSupportQty())
         .containsExactly("0.1070", "0.1070", "0.1890");
+    assertThat(request.getItems()).extracting(item -> item.getAnnualVolume())
+        .containsExactly("0.1070", "0.1070", "0.1890");
     assertThat(request.getItems()).allSatisfy(item -> {
-      assertThat(item.getAnnualVolume()).isNull();
       assertThat(item.getShippingFee()).isEqualTo("0.3738");
+      assertThat(item.getExtraFields()).filteredOn(field -> "ANNUAL_VOLUME_UNIT".equals(field.getFieldCode()))
+          .singleElement().satisfies(field -> assertThat(field.getFieldValue()).isEqualTo("TEN_THOUSAND_PIECES"));
     });
     assertThat(request.getItems().getFirst().getExtraFields()).anySatisfy(field -> {
       assertThat(field.getFieldCode()).isEqualTo("lh");
@@ -141,6 +144,17 @@ class OaQuotationRequestMapperTest {
         .contains("mainData.sftghwshxs");
     assertThat(new QuoteIngestRequestValidator().validate(request).getErrors()).isEmpty();
     assertThat(source).isEqualTo(before);
+  }
+
+  @Test
+  void srBatchAbsentUsageRemainsAbsentWithoutInventingQuantityOrUnit() throws Exception {
+    var source = srBatchPush();
+    for (var row : source.path("detailData")) ((ObjectNode) row.path("plpmxb")).remove("yjnylwz");
+    assertThat(mapper.map(source, PEER).quote().request().getItems()).allSatisfy(item -> {
+      assertThat(item.getSupportQty()).isNull();
+      assertThat(item.getAnnualVolume()).isNull();
+      assertThat(item.getExtraFields()).noneMatch(field -> "ANNUAL_VOLUME_UNIT".equals(field.getFieldCode()));
+    });
   }
 
   @Test
@@ -333,7 +347,7 @@ class OaQuotationRequestMapperTest {
     assertThat(sc20.getSus304WeightG()).isEqualTo("200");
     var sr = mapper.map(sample(4), PEER).quote().request().getItems().getFirst();
     assertThat(sr.getSupportQty()).isEqualTo("1.2");
-    assertThat(sr.getAnnualVolume()).isNull();
+    assertThat(sr.getAnnualVolume()).isEqualTo("1.2");
     var r = sample(6);
     ((ObjectNode) r.path("detailData").get(0).path("fields"))
         .put("hysfzcbbhs", 196.278)

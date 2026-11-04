@@ -7,6 +7,10 @@ import java.util.List;
 /** 联动价 Excel 只读预检结果；该对象本身不承载任何数据库实体。 */
 public final class PriceLinkedType2ImportPreviewResponse {
 
+  private java.util.List<com.sanhua.marketingcost.formula.workbook.OriginalPriceTable.RowNotice> notices = java.util.List.of();
+  public java.util.List<com.sanhua.marketingcost.formula.workbook.OriginalPriceTable.RowNotice> getNotices() { return notices; }
+  public void setNotices(java.util.List<com.sanhua.marketingcost.formula.workbook.OriginalPriceTable.RowNotice> value) { notices = java.util.List.copyOf(value); }
+
   private String previewFingerprint;
   private String expressionVersion;
   private java.util.Map<String, com.sanhua.marketingcost.service.pricing.PriceFactorContext>

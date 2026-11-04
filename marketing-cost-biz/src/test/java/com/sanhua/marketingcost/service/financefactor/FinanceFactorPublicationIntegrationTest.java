@@ -777,9 +777,9 @@ class FinanceFactorPublicationIntegrationTest {
     var october = publishCommercial(original);
     var oldPrices = prices.selectList(null);
     int oldBatches = count("SELECT COUNT(*) FROM lp_factor_upload_batch");
-    var file = monthlyExport("COMMERCIAL", "210", "2026-11");
+    var file = monthlyExport("COMMERCIAL", "210", "2026-10");
     assertThat(file.sourceMonth()).isEqualTo("2026-10");
-    assertThat(file.fileName()).contains("商用", "2026-10", "2026-11");
+    assertThat(file.fileName()).isEqualTo("商用财务基价_2026-10.xlsx");
     assertThat(count("SELECT COUNT(*) FROM lp_factor_upload_batch")).isEqualTo(oldBatches);
     assertThat(prices.selectList(null)).usingRecursiveComparison().isEqualTo(oldPrices);
     var parser = new FinanceFactorWorkbookParser(new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()));
@@ -797,6 +797,12 @@ class FinanceFactorPublicationIntegrationTest {
     assertThat(prices.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery(FactorMonthlyPrice.class)
         .eq(FactorMonthlyPrice::getSourceUploadBatchId, october.batchId()))).usingRecursiveComparison().isEqualTo(oldPrices);
     assertThat(service.publish(edited, file.fileName(), november, preview.previewFingerprint(), "monthly-finance").batchId()).isEqualTo(saved.batchId());
+    var novemberFile = monthlyExport("COMMERCIAL", "210", "2026-11");
+    assertThat(novemberFile.sourceMonth()).isEqualTo("2026-11");
+    assertThat(novemberFile.fileName()).isEqualTo("商用财务基价_2026-11.xlsx");
+    var novemberValues = parser.parse(novemberFile.bytes(), novemberFile.fileName(), "210", null).values();
+    assertThat(novemberValues.stream().filter(v -> v.canonicalKey().equals("AVG|PCU") && v.schemeCode().equals("CU_90000"))
+        .findFirst().orElseThrow().price()).isEqualByComparingTo("120.1234567890123456");
   }
 
   @Test
@@ -805,7 +811,9 @@ class FinanceFactorPublicationIntegrationTest {
     byte[] original = FinanceFactorWorkbookParserTest.fixture("plate");
     var first = service.preview(original, "board.xlsx", board);
     service.publish(original, "board.xlsx", board, first.previewFingerprint(), "finance");
-    var file = monthlyExport("COMMERCIAL", "220", "2026-11");
+    var file = monthlyExport("COMMERCIAL", "220", "2026-10");
+    assertThat(file.sourceMonth()).isEqualTo("2026-10");
+    assertThat(file.fileName()).isEqualTo("板换财务基价_2026-10.xlsx");
     var parser = new FinanceFactorWorkbookParser(new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()));
     var parsed = parser.parse(file.bytes(), file.fileName(), "220", null);
     assertThat(parsed.values()).hasSize(16);assertThat(parsed.problems()).isEmpty();
@@ -830,7 +838,7 @@ class FinanceFactorPublicationIntegrationTest {
     var adjustment = new FinanceFactorCuAdjustmentService(prices, batches, identities, sources, service);
     var checked = adjustment.preview(cu.getId(), new java.math.BigDecimal("100000"), "月末财务调整", "COMMERCIAL");
     adjustment.publish(cu.getId(), new java.math.BigDecimal("100000"), "月末财务调整", "COMMERCIAL", checked.previewFingerprint(), "finance");
-    var file = monthlyExport("COMMERCIAL", "210", "2026-11");
+    var file = monthlyExport("COMMERCIAL", "210", "2026-10");
     assertThat(file.revision()).isEqualTo(2);
     var parsed = new FinanceFactorWorkbookParser(new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()))
         .parse(file.bytes(), file.fileName(), "210", null);
@@ -840,22 +848,23 @@ class FinanceFactorPublicationIntegrationTest {
   }
 
   @Test
-  void monthlyExportIsExactPreviousMonthAndNeverCrossesOrganizationBusinessUnitOrYear() throws Exception {
+  void monthlyExportUsesSelectedMonthAndNeverFallsBackOrCrossesOrganizationBusinessUnitOrYear() throws Exception {
     byte[] original = FinanceFactorWorkbookParserTest.fixture("commercial");
-    publishCommercial(original);publishForMonth(original, "2026-12");
-    assertThat(monthlyExport("COMMERCIAL", "210", "2027-01").sourceMonth()).isEqualTo("2026-12");
-    assertThat(monthlyExport("COMMERCIAL", "210", "2026-11").sourceMonth()).isEqualTo("2026-10");
-    assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "210", "2026-12")).hasMessageContaining("2026-11", "没有已发布");
-    assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "220", "2026-11")).hasMessageContaining("板换", "没有已发布");
-    assertThatThrownBy(() -> monthlyExport("HOUSEHOLD", "210", "2026-11")).hasMessageContaining("没有已发布");
+    publishCommercial(original);publishForMonth(original, "2026-12");publishForMonth(original, "2027-01");
+    assertThat(monthlyExport("COMMERCIAL", "210", "2027-01").sourceMonth()).isEqualTo("2027-01");
+    assertThat(monthlyExport("COMMERCIAL", "210", "2026-12").sourceMonth()).isEqualTo("2026-12");
+    assertThat(monthlyExport("COMMERCIAL", "210", "2026-10").sourceMonth()).isEqualTo("2026-10");
+    assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "210", "2026-11")).hasMessageContaining("2026-11", "没有已发布");
+    assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "220", "2026-10")).hasMessageContaining("板换", "没有已发布");
+    assertThatThrownBy(() -> monthlyExport("HOUSEHOLD", "210", "2026-10")).hasMessageContaining("没有已发布");
   }
 
-  private FinanceFactorWorkbookExportService.ExportFile monthlyExport(String businessUnit, String organization, String targetMonth) {
+  private FinanceFactorWorkbookExportService.ExportFile monthlyExport(String businessUnit, String organization, String selectedMonth) {
     var transaction = new org.springframework.transaction.support.TransactionTemplate(transactions);
     transaction.setReadOnly(true);
     transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
     return transaction.execute(status -> new FinanceFactorWorkbookExportService(batches, prices, identities, sources)
-        .previousMonth(new FinanceFactorImportContext(businessUnit, organization, targetMonth, null, null)));
+        .selectedMonth(new FinanceFactorImportContext(businessUnit, organization, selectedMonth, null, null)));
   }
 
   private static byte[] changeExportedPrice(byte[] bytes, com.sanhua.marketingcost.dto.FinanceFactorWorkbook.Value value, String price) throws Exception {

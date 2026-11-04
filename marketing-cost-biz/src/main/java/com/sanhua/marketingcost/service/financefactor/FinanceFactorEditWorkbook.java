@@ -27,12 +27,12 @@ final class FinanceFactorEditWorkbook {
 
   static byte[] write(String businessUnit, String organization, String month, int revision,
       String defaultScheme, List<Value> values) {
-    if (values.isEmpty()) throw new IllegalStateException("上月发布没有可导出的财务基价");
+    if (values.isEmpty()) throw new IllegalStateException("所选月份发布没有可导出的财务基价");
     var columns = values.stream().map(v -> new Column(v.schemeCode(), v.condition())).distinct()
         .sorted(Comparator.comparing((Column c) -> !c.scheme().equals(defaultScheme))).toList();
     validateColumns(columns, organization);
     if (columns.stream().noneMatch(c -> c.scheme().equals(defaultScheme)))
-      throw new IllegalStateException("上月财务发布的默认方案缺失，不能导出");
+      throw new IllegalStateException("所选月份财务发布的默认方案缺失，不能导出");
     var rows = new LinkedHashMap<String, Map<Column, Value>>();
     for (Value value : values) {
       new FactorPriceScope(businessUnit, organization, month, value.schemeCode(), value.condition());

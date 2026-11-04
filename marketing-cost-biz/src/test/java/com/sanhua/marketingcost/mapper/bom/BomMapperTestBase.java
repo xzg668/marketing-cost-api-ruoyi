@@ -290,6 +290,7 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V344__monthly_material_price_single_table.sql", "V344");
       runScriptViaMysqlCli("/db/V354__invoice_price_import.sql", "V354");
       runScriptViaMysqlCli("/db/V356__inquiry_price_sources.sql", "V356");
+      runScriptViaMysqlCli("/db/V359__monthly_price_folder_import.sql", "V359");
       // One-time initialization of this fresh disposable database, including monthly reverse reads.
       runScriptViaMysqlCli("/db/V345__monthly_price_reference_lookup_index.sql", "V345");
       runScriptViaMysqlCli("/monthly-reprice/mrp06-contract-base.sql", "MRP06-contract-base");

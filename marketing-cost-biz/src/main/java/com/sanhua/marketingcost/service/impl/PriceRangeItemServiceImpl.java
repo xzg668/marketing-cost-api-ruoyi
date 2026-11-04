@@ -44,6 +44,8 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       int page,
       int pageSize) {
     var query = Wrappers.lambdaQuery(PriceRangeItem.class);
+    query.notExists("SELECT 1 FROM lp_price_range_factor_rule draft_rule WHERE draft_rule.id=lp_price_range_item.factor_rule_id"
+        + " AND draft_rule.rule_status IN ('STAGED','NOT_SELECTED')");
     if (StringUtils.hasText(materialCode)) {
       query.like(PriceRangeItem::getMaterialCode, materialCode.trim());
     }

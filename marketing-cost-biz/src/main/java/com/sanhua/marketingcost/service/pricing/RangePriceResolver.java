@@ -706,7 +706,7 @@ public class RangePriceResolver implements PriceResolver {
           MaterialPriceMonthSelector.MATERIAL_MONTH_PRICE_MISSING,
           "料号=" + material + "，核算月=" + context.getPricingMonth() + "：没有适用原稿月份，不能取未来月");
     }
-    var versions = new java.util.LinkedHashMap<String, PriceRangeFactorRule>();
+    var versions = new java.util.ArrayList<PriceRangeFactorRule>();
     for (var rule : dated) {
       if (!months.sourceMonth().equals(rule.getPricingMonth())) continue;
       String key = rule.getRuleIdentityKey();
@@ -714,16 +714,14 @@ public class RangePriceResolver implements PriceResolver {
         return PriceResolveResult.miss(
             "MATERIAL_RULE_IDENTITY_MISSING", "料号=" + material + "：月度行情规则缺少业务身份");
       }
-      var previous = versions.get(key);
-      if (previous == null || rule.getVersionNo() > previous.getVersionNo())
-        versions.put(key, rule);
+      versions.add(rule);
     }
     if (versions.isEmpty()) {
       return PriceResolveResult.miss(
           MaterialPriceMonthSelector.MATERIAL_MONTH_PRICE_MISSING,
           MaterialPriceMonthSelector.missingMessage(material, org, months));
     }
-    var candidates = List.copyOf(versions.values());
+    var candidates = OriginalRuleGroups.ranges(versions);
     var first = candidates.getFirst();
     if (!CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())
         && candidates.stream()

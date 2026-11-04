@@ -34,6 +34,7 @@ public final class OriginalLinkedRuleSnapshot {
     }
   }
 
+  @com.fasterxml.jackson.annotation.JsonIgnoreProperties("ruleSetRevision")
   public record SavedRule(
       Rule rule, java.util.List<Rule> duplicateSources, String inputVersionFingerprint) {}
 

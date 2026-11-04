@@ -201,7 +201,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       String pricingMonth, String materialCode, boolean includeHistory) {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
     var query =
-        Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC");
+        Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED");
     if (StringUtils.hasText(resolvedMonth)) {
       query.eq(PriceLinkedItem::getPricingMonth, resolvedMonth);
     }
@@ -217,7 +218,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
                   + " newer.business_unit_type=lp_price_linked_item.business_unit_type AND"
                   + " newer.pricing_month=lp_price_linked_item.pricing_month AND"
                   + " newer.rule_identity_key=lp_price_linked_item.rule_identity_key AND"
-                  + " newer.rule_revision>lp_price_linked_item.rule_revision");
+                  + " COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(newer.source_input_snapshot_json,'$.ruleSetRevision')) AS UNSIGNED),newer.rule_revision)>COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(lp_price_linked_item.source_input_snapshot_json,'$.ruleSetRevision')) AS UNSIGNED),lp_price_linked_item.rule_revision)");
     }
     query.orderByAsc(PriceLinkedItem::getId);
     return itemMapper.selectList(query).stream().map(this::toDto).toList();
@@ -228,7 +229,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       String pricingMonth, String materialCode, boolean includeHistory, int page, int pageSize) {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
     var query =
-        Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC");
+        Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED");
     if (StringUtils.hasText(resolvedMonth)) {
       query.eq(PriceLinkedItem::getPricingMonth, resolvedMonth);
     }
@@ -244,7 +246,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
                   + " newer.business_unit_type=lp_price_linked_item.business_unit_type AND"
                   + " newer.pricing_month=lp_price_linked_item.pricing_month AND"
                   + " newer.rule_identity_key=lp_price_linked_item.rule_identity_key AND"
-                  + " newer.rule_revision>lp_price_linked_item.rule_revision");
+                  + " COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(newer.source_input_snapshot_json,'$.ruleSetRevision')) AS UNSIGNED),newer.rule_revision)>COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(lp_price_linked_item.source_input_snapshot_json,'$.ruleSetRevision')) AS UNSIGNED),lp_price_linked_item.rule_revision)");
     }
     query.orderByAsc(PriceLinkedItem::getId);
     Page<PriceLinkedItem> result =
@@ -1905,6 +1907,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     var query =
         Wrappers.lambdaQuery(PriceLinkedItem.class)
             .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED")
             .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
             .eq(PriceLinkedItem::getMaterialCode, trim(row.getMaterialCode()))
             .eq(PriceLinkedItem::getDeleted, 0);
@@ -2117,6 +2120,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
             Wrappers.lambdaQuery(PriceLinkedItem.class)
                 .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
                 .select(PriceLinkedItem::getPricingMonth)
+                .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED")
                 .orderByDesc(PriceLinkedItem::getPricingMonth)
                 .last("LIMIT 1"));
     return latest == null ? null : latest.getPricingMonth();
@@ -2127,6 +2131,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     var query =
         Wrappers.lambdaQuery(PriceLinkedItem.class)
             .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED")
             .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
             .eq(PriceLinkedItem::getMaterialCode, row.getMaterialCode());
     if (StringUtils.hasText(row.getSupplierCode())) {

@@ -10,8 +10,6 @@ public final class LinkedPriceRuleVersions {
   private static final Comparator<PriceLinkedItem> IMPORT_ORDER=Comparator
       .comparing(PriceLinkedItem::getCreatedAt,Comparator.nullsFirst(LocalDateTime::compareTo))
       .thenComparing(PriceLinkedItem::getId,Comparator.nullsFirst(Long::compareTo));
-  private static final Comparator<PriceLinkedItem> REVISION_ORDER=Comparator
-      .comparing(PriceLinkedItem::getRuleRevision).thenComparing(IMPORT_ORDER);
 
   private LinkedPriceRuleVersions() {}
 
@@ -26,8 +24,10 @@ public final class LinkedPriceRuleVersions {
     var heads=new ArrayList<PriceLinkedItem>();
     for(var versions:byIdentity.values()) {
       // Pairwise switching between revision and time creates cycles. Choose once for the whole identity.
-      var order=versions.stream().allMatch(row->row.getRuleRevision()!=null)?REVISION_ORDER:IMPORT_ORDER;
-      heads.add(versions.stream().max(order).orElseThrow());
+      if (versions.stream().allMatch(row -> row.getRuleRevision() != null)) {
+        int latest = versions.stream().mapToInt(OriginalRuleGroups::revision).max().orElseThrow();
+        heads.addAll(versions.stream().filter(row -> OriginalRuleGroups.revision(row) == latest).toList());
+      } else heads.add(versions.stream().max(IMPORT_ORDER).orElseThrow());
     }
     // Revisions belong to an identity, so different suppliers' revision numbers are not comparable.
     return heads.stream().sorted(IMPORT_ORDER.reversed()).toList();

@@ -49,7 +49,7 @@ public class TechnicalDataRequirementRefreshService {
       return "当前 BOM 组织为 " + organization + "，原补录任务组织为 " + task.getApplicableOrgCode()
           + "；原任务已有分派或填报记录，已保留，请先核实原任务";
     }
-    if (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0
+    if (!unassigned(task) && task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0
         && !"PUBLISHED".equals(task.getExternalTaskStatus())) return "原任务的待办变更尚待 OA 确认，保留当前资料";
     var current = modules.selectByTaskId(task.getId());
     if (Set.of("SUBMITTED", "APPROVED", "PENDING").contains(task.getTaskStatus())) {
@@ -79,7 +79,13 @@ public class TechnicalDataRequirementRefreshService {
   private boolean unassigned(QuoteTechTask task) {
     return "UNASSIGNED".equals(task.getTaskStatus())
         && task.getAssigneeUserId() == null
-        && task.getOaFlowId() == null;
+        // 接收 OA 报价时已绑定流程/版本，并不表示技术资料已经分派。
+        && Boolean.FALSE.equals(jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM lp_quote_tech_oa_recipient WHERE task_id=?
+              AND (active_flag=1 OR dispatch_status<>'REJECTED' OR latest_submission_id IS NOT NULL))
+              OR EXISTS(SELECT 1 FROM lp_quote_tech_module m JOIN lp_quote_tech_product p ON p.id=m.product_id
+                WHERE p.task_id=? AND m.assignee_user_id IS NOT NULL)
+            """, Boolean.class, task.getId(), task.getId()));
   }
 
   private boolean canRetireEmptyTask(QuoteTechTask task) {
@@ -119,7 +125,7 @@ public class TechnicalDataRequirementRefreshService {
   }
 
   public void refresh(QuoteTechTask task, List<TechnicalDataModuleRequirement> requirements) {
-    if (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0) {
+    if (!unassigned(task) && task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0) {
       registerAdditionalRequirements(task, modules.selectByTaskId(task.getId()), requirements);
       return;
     }

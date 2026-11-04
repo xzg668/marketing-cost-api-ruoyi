@@ -63,8 +63,9 @@ public class OriginalLinkedPublicationSource {
   }
 
   public static final class BindingBatch {
-    private final Map<Long, Map<String, OriginalLinkedWorkbookParser.Rule>> rules = new HashMap<>();
+    private final Map<Long, OriginalLinkedWorkbookParser.ParsedWorkbook> rules = new HashMap<>();
     private final Map<String, Set<String>> catalogs = new HashMap<>();
+    private final Set<Long> legacySnapshots = new java.util.HashSet<>();
   }
 
   public OriginalLinkedWorkbookParser.Rule read(PriceLinkedItem item, BindingBatch batch) {
@@ -82,7 +83,8 @@ public class OriginalLinkedPublicationSource {
               if (bytes == null) {
                 if (VERSION.equals(source.getParserVersion()))
                   throw new IllegalArgumentException("原稿工作簿来源缺失：批次=" + id);
-                return Map.of();
+                batch.legacySnapshots.add(id);
+                return new OriginalLinkedWorkbookParser.ParsedWorkbook(java.util.List.of(), java.util.List.of());
               }
               if (!PriceLinkedImportFileDigest.sha256(bytes).equals(source.getFileSha256()))
                 throw new IllegalArgumentException("原稿工作簿与来源摘要不一致：批次=" + id);
@@ -99,27 +101,17 @@ public class OriginalLinkedPublicationSource {
                                       identities.findFinanceManagedKeys(
                                           item.getBusinessUnitType(), org))),
                       savedContext(bytes, item.getOrgCode(), id));
-              if (!workbook.errors().isEmpty()) {
-                var error = workbook.errors().getFirst();
-                throw new IllegalArgumentException(
-                    "原稿财务因素绑定失败：批次="
-                        + id
-                        + "，"
-                        + error.sheet()
-                        + "!"
-                        + error.row()
-                        + "，物料="
-                        + error.materialCode()
-                        + "："
-                        + error.message());
-              }
-              Map<String, OriginalLinkedWorkbookParser.Rule> values = new LinkedHashMap<>();
-              for (var rule : workbook.rules())
-                values.putIfAbsent(rule.identity().identityKey(), rule);
-              return values;
+              return workbook;
             });
-    if (parsed.isEmpty()) return original;
-    var resolved = parsed.get(item.getRuleIdentityKey());
+    for (var error : parsed.errors())
+      if (error.row() == null || (original.sheet().equals(error.sheet()) && original.row() == error.row()))
+        throw new IllegalArgumentException("原稿财务因素绑定失败：批次=" + item.getSourceUploadBatchId()
+            + "，" + error.sheet() + "!" + error.row() + "：" + error.message());
+    if (batch.legacySnapshots.contains(item.getSourceUploadBatchId())) return original;
+    // 同一身份可能有多个待确认的来源行；只能重读实际已选行，不能回到工作簿第一条。
+    var resolved = parsed.rules().stream().filter(r -> r.sheet().equals(original.sheet())
+        && r.row() == original.row() && r.identity().identityKey().equals(item.getRuleIdentityKey()))
+        .findFirst().orElse(null);
     if (resolved == null) throw new IllegalArgumentException("原稿工作簿中找不到已发布规则：" + item.getId());
     return resolved;
   }

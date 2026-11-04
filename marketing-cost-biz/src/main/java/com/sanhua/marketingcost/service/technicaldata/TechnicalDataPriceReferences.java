@@ -25,6 +25,7 @@ public class TechnicalDataPriceReferences {
     if (keyword == null || keyword.isBlank() || keyword.length() > 100) throw new IllegalArgumentException("请输入料号或型号");
     if (!List.of("CODE", "MODEL").contains(searchBy)) throw new IllegalArgumentException("不支持的查询方式");
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .notIn(PriceLinkedItem::getRuleStatus, "STAGED", "NOT_SELECTED")
         .eq(PriceLinkedItem::getBusinessUnitType, task.getBusinessUnitType());
     if ("CODE".equals(searchBy)) query.eq(PriceLinkedItem::getMaterialCode, keyword.trim());
     else query.like(PriceLinkedItem::getSpecModel, keyword.trim());
@@ -35,6 +36,8 @@ public class TechnicalDataPriceReferences {
   public TechnicalDataPriceReference require(QuoteTechTask task, Long id, String fingerprint) {
     var row = id == null ? null : rows.selectById(id);
     if (row == null || !Objects.equals(row.getBusinessUnitType(), task.getBusinessUnitType())) throw new IllegalArgumentException("参考公式不存在或不属于当前业务单元");
+    if ("STAGED".equals(row.getRuleStatus()) || "NOT_SELECTED".equals(row.getRuleStatus()))
+      throw new IllegalArgumentException("该参考公式尚未生效");
     var value = snapshot(row);
     if (!Objects.equals(value.fingerprint(), fingerprint)) throw new TechnicalDataTaskException(
         TechnicalDataTaskErrorCode.VERSION_CONFLICT, "参考公式已变化，请重新查询；本次输入仍保留");

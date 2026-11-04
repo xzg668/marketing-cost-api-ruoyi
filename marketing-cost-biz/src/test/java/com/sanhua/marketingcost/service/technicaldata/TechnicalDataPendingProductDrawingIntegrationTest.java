@@ -20,6 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Tag("integration")
 @Transactional
 class TechnicalDataPendingProductDrawingIntegrationTest extends OriginalPricingIntegrationTestBase {
+  @Autowired TechnicalDataTaskApplicationService tasks;
+  @Autowired TechnicalDataRequirementRefreshService refresh;
+  @Autowired QuoteTechTaskMapper taskMapper;
+  @Autowired QuoteTechProductMapper productMapper;
+  @Autowired QuoteTechModuleMapper moduleMapper;
+  private static final TechnicalDataActor ADMIN = new TechnicalDataActor(1L, "管理员", java.util.Set.of("*:*:*"));
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   @Autowired TechnicalDataPendingProductQuery pending;
@@ -105,6 +111,87 @@ class TechnicalDataPendingProductDrawingIntegrationTest extends OriginalPricingI
     jdbc.update("DELETE FROM lp_electronic_drawing_source_node WHERE supplement_version_id=?",sourceId);
     assertThat(pending.count("ALL",null,"2026-10",null,oaNo)).isEqualTo(1);
     assertMissing();
+  }
+
+  @Test void existingUnassignedTaskReadsCurrentDrawingInListAndDetailWithoutRewritingDrafts() {
+    var task = staleTask();
+    var before = jdbc.queryForList("SELECT * FROM lp_quote_tech_module WHERE product_id=?", task[1]);
+    for (int i=0;i<2;i++) {
+      var list = tasks.workbench(1,20,null,"2026-10",null,oaNo,ADMIN);
+      assertThat(list.records()).hasSize(1);
+      assertDrawingAvailable(list.records().getFirst().product());
+      assertDrawingAvailable(tasks.detail(task[0],ADMIN).products().getFirst());
+    }
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_tech_module WHERE product_id=?", task[1])).isEqualTo(before);
+  }
+
+  @Test void rejectedOaDispatchDoesNotMeanTheEmptyTaskHasBeenAssigned() {
+    var task=staleTask();
+    jdbc.update("UPDATE lp_quote_tech_task SET oa_assignment_version=3 WHERE id=?",task[0]);
+    jdbc.update("""
+        INSERT INTO lp_quote_tech_oa_recipient(task_id,assignment_version,assignee_user_id,assignee_name,
+          external_user_id,module_types_json,dispatch_status,active_flag)
+        VALUES(?,3,1,'测试技术员','TEST','["DRAWING_BOM"]','REJECTED',0)
+        """,task[0]);
+    assertDrawingAvailable(tasks.detail(task[0],ADMIN).products().getFirst());
+    var check=new TechnicalDataModuleRequirement("DRAWING_BOM",false,"DRAWING_SOURCE_AVAILABLE","图库已接收",
+        TechnicalDataAvailability.AVAILABLE,"source:"+sourceId,LocalDateTime.now());
+    refresh.refresh(taskMapper.selectById(task[0]),List.of(check));
+    assertThat(jdbc.queryForObject("SELECT required_flag FROM lp_quote_tech_module WHERE product_id=? AND module_type='DRAWING_BOM'",Integer.class,task[1])).isZero();
+  }
+
+  @Test void uncertainOrConfirmedDispatchKeepsTheOriginalScope() {
+    var task=staleTask();
+    jdbc.update("UPDATE lp_quote_tech_task SET oa_assignment_version=3 WHERE id=?",task[0]);
+    jdbc.update("""
+        INSERT INTO lp_quote_tech_oa_recipient(task_id,assignment_version,assignee_user_id,assignee_name,
+          external_user_id,module_types_json,dispatch_status,active_flag)
+        VALUES(?,3,1,'测试技术员','TEST','["DRAWING_BOM"]','UNKNOWN',0)
+        """,task[0]);
+    for (String state:List.of("UNKNOWN","QUEUED","CONFIRMED")) {
+      jdbc.update("UPDATE lp_quote_tech_oa_recipient SET dispatch_status=? WHERE task_id=?",state,task[0]);
+      assertThat(tasks.detail(task[0],ADMIN).products().getFirst().modules()).allSatisfy(m -> assertThat(m.required()).isTrue());
+    }
+  }
+
+  @Test void existingTaskNeverTreatsWrongMonthOrMissingNodesAsReceivedDrawing() {
+    var task=staleTask();
+    jdbc.update("UPDATE lp_quote_bom_supplement_version SET period_month='2026-09' WHERE id=?",sourceId);
+    assertThat(tasks.detail(task[0],ADMIN).products().getFirst().modules()).allSatisfy(m -> assertThat(m.required()).isTrue());
+    jdbc.update("UPDATE lp_quote_bom_supplement_version SET period_month='2026-10' WHERE id=?",sourceId);
+    jdbc.update("DELETE FROM lp_electronic_drawing_source_node WHERE supplement_version_id=?",sourceId);
+    assertThat(tasks.detail(task[0],ADMIN).products().getFirst().modules()).allSatisfy(m -> assertThat(m.required()).isTrue());
+  }
+
+  @Test void assignedDrawingScopeIsNotSilentlyChangedByReadOnlyDisplay() {
+    var task=staleTask();
+    jdbc.update("UPDATE lp_quote_tech_task SET task_status='PENDING',assignee_user_id=1,assignee_name='测试技术员' WHERE id=?",task[0]);
+    jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=1,assignee_name='测试技术员' WHERE product_id=?",task[1]);
+    assertThat(tasks.detail(task[0],ADMIN).products().getFirst().modules()).allSatisfy(m -> assertThat(m.required()).isTrue());
+  }
+
+  private void assertDrawingAvailable(com.sanhua.marketingcost.dto.technicaldata.TechnicalDataProductResponse product) {
+    assertThat(product.modules()).filteredOn(m -> m.moduleType().equals("DRAWING_BOM")).singleElement().satisfies(m -> {
+      assertThat(m.required()).isFalse();assertThat(m.moduleStatus()).isEqualTo("NOT_REQUIRED");
+      assertThat(m.sourceAvailability()).isEqualTo("AVAILABLE");assertThat(m.requirementReasonCode()).isEqualTo("DRAWING_SOURCE_AVAILABLE");
+    });
+    assertThat(product.modules()).filteredOn(m -> m.moduleType().equals("MANUFACTURING")).singleElement().satisfies(m -> assertThat(m.required()).isTrue());
+  }
+
+  private Long[] staleTask() {
+    var task=new QuoteTechTask();task.setTaskNo(oaNo);task.setOaNo(oaNo);task.setOaFormItemId(itemId);
+    task.setOaFormId(jdbc.queryForObject("SELECT oa_form_id FROM oa_form_item WHERE id=?",Long.class,itemId));
+    task.setAccountingMonth("2026-10");task.setBusinessUnitType("COMMERCIAL");task.setApplicableOrgCode("210");
+    task.setTaskStatus("UNASSIGNED");task.setActiveLockKey("ITEM:"+itemId+":MONTH:2026-10");taskMapper.insert(task);
+    var product=new QuoteTechProduct();product.setTaskId(task.getId());product.setOaFormItemId(itemId);
+    product.setContentSchemaVersion(2);product.setMaterialNo(oaNo);product.setQuoteNo(oaNo);product.setAccountingMonth("2026-10");
+    product.setActiveLockKey("ITEM:"+itemId+":MONTH:2026-10");product.setSourceSnapshotJson("{}");product.setSourceFingerprint("a".repeat(64));productMapper.insert(product);
+    for(String type:List.of("DRAWING_BOM","MANUFACTURING")) {
+      var m=new QuoteTechModule();m.setProductId(product.getId());m.setModuleType(type);m.setRequiredFlag(1);
+      m.setRequirementReasonCode(type.equals("DRAWING_BOM")?"DRAWING_SOURCE_PENDING":"MANUFACTURING_RAW_MISSING");
+      m.setRequirementReason("旧检查缺口");m.setSourceAvailability("MISSING");m.setSourceCheckedAt(LocalDateTime.now());moduleMapper.insert(m);
+    }
+    return new Long[]{task.getId(),product.getId()};
   }
 
   private void assertMissing() {

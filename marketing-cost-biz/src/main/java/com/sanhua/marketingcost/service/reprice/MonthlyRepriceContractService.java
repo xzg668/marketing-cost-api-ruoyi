@@ -30,16 +30,19 @@ public class MonthlyRepriceContractService {
   private final MonthlyPriceDocumentCodec codec;
   private final MonthlyRepriceProperties properties;
   private final com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices;
+  private final com.sanhua.marketingcost.mapper.MonthlyPriceImportMapper priceFolders;
 
   public MonthlyRepriceContractService(MonthlyRepriceContractMapper mapper,
       PlatformTransactionManager manager, ObjectMapper json, MonthlyPriceDocumentCodec codec,
       MonthlyRepriceProperties properties,
-      com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices) {
+      com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices,
+      com.sanhua.marketingcost.mapper.MonthlyPriceImportMapper priceFolders) {
     this.mapper = mapper;
     this.json = json;
     this.codec = codec;
     this.properties = properties;
     this.inquiryPrices = inquiryPrices;
+    this.priceFolders = priceFolders;
     transaction = new TransactionTemplate(manager);
     transaction.setTimeout(30);
   }
@@ -78,6 +81,7 @@ public class MonthlyRepriceContractService {
       throw new IllegalArgumentException("月份必须为四位年份及两位月份");
     if (month.isBefore(goLive)) throw new IllegalArgumentException("调价月份早于实际上线月份");
     return transaction.execute(tx -> {
+      requireFolderComplete(unit, month.toString());
       String no = "MRP1130-" + UUID.randomUUID();
       mapper.reserve(no, unit, month.toString(), goLive.toString(), actor);
       var batch = mapper.month(unit, month.toString());
@@ -148,6 +152,7 @@ public class MonthlyRepriceContractService {
   public MonthlyRepriceBatch retry(String no) {
     return transaction.execute(tx -> {
       var batch = required(no); requireOperator(batch.getBusinessUnitType());
+      requireFolderComplete(batch.getBusinessUnitType(), batch.getPricingMonth());
       if (state(batch) != State.FAILED) throw new IllegalStateException("仅失败批次可重试");
       var tasks = mapper.tasks(no);
       if (tasks.stream().anyMatch(t -> "RUNNING".equals(t.getStatus())))
@@ -160,6 +165,11 @@ public class MonthlyRepriceContractService {
       syncQueue(no);
       return mapper.lock(no);
     });
+  }
+
+  private void requireFolderComplete(String unit, String month) {
+    if (priceFolders.unfinished(unit, month) > 0)
+      throw new IllegalStateException("该月份价格文件夹尚未处理完成，请先修正报错并补齐上月规则");
   }
 
   /** Result and task point to the same complete, batch-owned version in one transaction. */

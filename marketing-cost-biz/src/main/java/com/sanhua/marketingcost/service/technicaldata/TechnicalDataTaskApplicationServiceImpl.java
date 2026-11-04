@@ -459,6 +459,9 @@ public class TechnicalDataTaskApplicationServiceImpl
     if (submission!=null) messageCodec.read(submission.getModuleTypesJson()).forEach(node -> submittedTypes.add(node.asText()));
     var modulesByProduct = repository.findModules(products.stream().map(QuoteTechProduct::getId).toList())
         .stream().collect(Collectors.groupingBy(QuoteTechModule::getProductId));
+    var currentDrawings = submission == null
+        ? pendingProducts.currentDrawingSources(products.stream().map(QuoteTechProduct::getId).toList())
+        : Map.<Long, Long>of();
     var editableProfiles = products.stream().filter(product -> submission == null
         && Integer.valueOf(2).equals(product.getContentSchemaVersion())
         && modulesByProduct.getOrDefault(product.getId(), List.of()).stream().anyMatch(module ->
@@ -508,7 +511,7 @@ public class TechnicalDataTaskApplicationServiceImpl
           state,ownDraft?product.getCurrentEditVersionId():null,latest,product.getEffectiveVersionId(),
           product.getRowVersion(),profile(product,profileVersion,plateDecisions.get(product.getId())),modules.stream().sorted(Comparator.comparingInt(
               module -> TechnicalDataModuleType.orderOf(module.getModuleType()))).map(value -> {
-                var response = module(value);
+                var response = pendingProducts.displayCurrentDrawing(module(value), currentDrawings.get(product.getId()));
                 var requirement = displayed.get(value.getModuleType());
                 if (submission != null || !requirement.reasonCode().startsWith("SHARED_MODULE_")
                     || Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(value.getModuleStatus())) return response;

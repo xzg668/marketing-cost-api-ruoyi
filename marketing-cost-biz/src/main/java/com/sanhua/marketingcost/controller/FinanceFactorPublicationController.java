@@ -49,9 +49,9 @@ public class FinanceFactorPublicationController {
   }
 
   @PreAuthorize("@ss.hasPermi('price:finance-base:import')")
-  @GetMapping("/export-previous-month")
-  public ResponseEntity<byte[]> exportPreviousMonth(@RequestParam String priceMonth, @RequestParam String priceOrgCode) {
-    var file = exports.previousMonth(context(priceMonth, priceOrgCode, null, null));
+  @GetMapping("/export")
+  public ResponseEntity<byte[]> exportMonth(@RequestParam String priceMonth, @RequestParam String priceOrgCode) {
+    var file = exports.selectedMonth(context(priceMonth, priceOrgCode, null, null));
     return ResponseEntity.ok()
         .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
         .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(file.fileName(), StandardCharsets.UTF_8).build().toString())

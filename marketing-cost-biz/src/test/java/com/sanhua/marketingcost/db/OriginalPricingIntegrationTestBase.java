@@ -27,6 +27,7 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V124__three_expense_rate_title_matrix_year_schema.sql",
             "V125__drop_three_expense_rate_raw_period.sql",
             "V152__supplier_supply_ratio_dedupe_key.sql",
+            "V151__price_linked_item_formula_version_unique_key.sql",
             "V155__make_part_no_scrap_calc_row_fields.sql",
             "V177__market_factor_range_price_schema.sql",
             "V186__make_part_child_net_weight.sql",

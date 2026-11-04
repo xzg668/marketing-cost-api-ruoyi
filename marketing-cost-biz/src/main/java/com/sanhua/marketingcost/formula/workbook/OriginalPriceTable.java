@@ -16,6 +16,12 @@ public final class OriginalPriceTable {
       Set.of("组织", "物料代码", "供应商名称", "供应商代码", "规格型号", "单位", "单价", "是否含税");
 
   public static Header mainSheet(Workbook workbook) {
+    Sheet combined = workbook.getSheet("合并联动价表");
+    if (combined != null) {
+      Header header = header(combined, MAIN_HEADERS);
+      if (header == null) throw new IllegalArgumentException("合并联动价表表头不完整");
+      return header;
+    }
     Sheet importData = workbook.getSheet("ImportData");
     if (importData != null) {
       Header header = header(importData, MAIN_HEADERS);
@@ -100,6 +106,29 @@ public final class OriginalPriceTable {
       default -> throw new IllegalArgumentException("主表是否含税为空或无法识别");
     };
   }
+
+  /** 人工拖填产生的211～219按商用读取；220是合法板换组织，绝不能改为210。 */
+  public static String organization(Cell cell) {
+    String value = text(cell);
+    if (value.matches("21[1-9]")) return "210";
+    return com.sanhua.marketingcost.enums.MaterialOrganization.fromPriceOrgCode(value)
+        .getPriceOrgCode();
+  }
+
+  public static boolean emptyPrice(Cell cell) {
+    return cell == null || cell.getCellType() == CellType.BLANK
+        || (cell.getCellType() == CellType.STRING && cell.getStringCellValue().isBlank());
+  }
+
+  /** 仅实际单价公式明确执行最终13%除税时，允许识别未填写的税标记。 */
+  public static boolean taxIncluded(Cell flag, Cell price) {
+    if (!text(flag).isBlank()) return taxIncluded(flag);
+    if (price != null && price.getCellType() == CellType.FORMULA
+        && price.getCellFormula().replaceAll("\\s", "").endsWith("/1.13")) return false;
+    throw new IllegalArgumentException("主表是否含税为空，实际价格公式也未明确最终除税口径");
+  }
+
+  public record RowNotice(String sheet, int row, String materialCode, String code, String message) {}
 
   public record Header(Sheet sheet, int row, Map<String, Integer> columns) {}
 }

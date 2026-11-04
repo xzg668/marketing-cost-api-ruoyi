@@ -49,6 +49,29 @@ public class TechnicalDataOaRecipientRepository {
         this::recipient, taskId);
   }
 
+  /** 制造件带出的缺价属于同一人的当前办理内容；原送审记录和 OA 消息均不改写。 */
+  public void manufacturingPriceScope(long taskId, long userId, boolean required) {
+    var rows = jdbc.query("SELECT * FROM lp_quote_tech_oa_recipient WHERE task_id=? AND assignee_user_id=? AND active_flag=1 FOR UPDATE",
+        this::recipient, taskId, userId);
+    if (rows.size() != 1 || !"OPEN".equals(rows.getFirst().todoStatus())
+        || !rows.getFirst().processingModules().contains("MANUFACTURING")) throw conflict("本人制造件待办已变化，请刷新后重试");
+    var person = rows.getFirst();
+    var scope = new ArrayList<>(person.modules());
+    var revision = person.revisionModules() == null ? null : new ArrayList<>(person.revisionModules());
+    if (required) {
+      if (!scope.contains("PRICE")) scope.add("PRICE");
+      if (revision != null && !revision.contains("PRICE")) revision.add("PRICE");
+    } else {
+      scope.remove("PRICE");
+      if (revision != null) revision.remove("PRICE");
+    }
+    if (scope.equals(person.modules()) && java.util.Objects.equals(revision, person.revisionModules())) return;
+    jdbc.update("""
+        UPDATE lp_quote_tech_oa_recipient SET module_types_json=?,revision_module_types_json=?,
+          row_version=row_version+1,updated_at=NOW(3) WHERE id=? AND active_flag=1 AND todo_status='OPEN'
+        """, codec.write(scope), revision == null ? null : codec.write(revision), person.id());
+  }
+
   public Recipient findById(long id) {
     return first(jdbc.query("SELECT * FROM lp_quote_tech_oa_recipient WHERE id=?", this::recipient, id));
   }

@@ -20,7 +20,7 @@ public final class LinkedApprovalTable {
 
   public static List<Layout> layouts(Workbook workbook) {
     // 既有主表优先；辅助 Sheet 即使出现物料列也不重复追加。
-    if (workbook.getSheet("ImportData") != null
+    if (workbook.getSheet("合并联动价表") != null || workbook.getSheet("ImportData") != null
         || java.util.stream.StreamSupport.stream(workbook.spliterator(), false)
             .anyMatch(sheet -> header(sheet, STANDARD) != null))
       return List.of(new Layout(mainSheet(workbook), false));

@@ -78,7 +78,10 @@ public class FinanceEffectivePriceSelectionService {
               || !Objects.equals(first.getOriginalMonth(), row.getOriginalMonth())))
         throw new IllegalArgumentException("候选有效价混入不同原稿月份或财务方案：" + scope.materialCode());
       first = row;
-      if (bySupplier.putIfAbsent(row.getSupplierCode(), row) != null)
+      var previous = bySupplier.putIfAbsent(row.getSupplierCode(), row);
+      if (previous != null && (!Objects.equals(previous.getSpecification(), row.getSpecification())
+          || !Objects.equals(previous.getUnit(), row.getUnit())
+          || !Objects.equals(previous.getRuleIdentityKey(), row.getRuleIdentityKey())))
         throw new IllegalArgumentException(
             "料号="
                 + scope.materialCode()

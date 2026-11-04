@@ -172,6 +172,35 @@ public class OriginalLinkedImportService {
   }
 
   private Prepared prepare(PriceLinkedImportCommand command, Scope scope) {
+    return prepare(command, scope, null);
+  }
+
+  /** 文件夹服务已持有事务及业务目录锁；原件保留，只有确定采用的来源行进入规则表。 */
+  public PriceItemImportResponse stageSelectedInTransaction(
+      PriceLinkedImportCommand command, java.util.Set<String> selectedRows) {
+    if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+      throw new IllegalStateException("选择发布必须与文件夹处理结果在同一事务内保存");
+    if (selectedRows == null || selectedRows.isEmpty()) throw new IllegalArgumentException("未选择原稿来源行");
+    Scope scope = scope(command, selectedRows);
+    identities.lockForFinancePublication(scope.businessUnit());
+    Prepared checked = prepare(command, scope, selectedRows);
+    if (!checked.preview().isCanConfirm())
+      throw new IllegalArgumentException("所选原稿行无法发布：" + checked.preview().getErrors());
+    if (checked.rules().size() != selectedRows.size())
+      throw new IllegalArgumentException("所选来源行包含无价、缺失或重复定位，未发布");
+    boolean replay = checked.rules().stream().allMatch(rule -> {
+      var prior = checked.previous().get(rule.identity().identityKey());
+      return prior != null && checked.inputVersionFingerprint().equals(snapshots.inputVersionFingerprint(prior));
+    });
+    if (replay) {
+      var ids = checked.rules().stream().map(rule -> checked.previous().get(rule.identity().identityKey())
+          .getSourceUploadBatchId()).distinct().toList();
+      return response(batches.selectBatchIds(ids), true, checked.rules().size());
+    }
+    return save(command, scope, checked, "STAGED");
+  }
+
+  private Prepared prepare(PriceLinkedImportCommand command, Scope scope, java.util.Set<String> selectedRows) {
     var preview = new PriceLinkedType2ImportPreviewResponse();
     preview.setTemplateType("ORIGINAL");
     preview.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);
@@ -203,9 +232,13 @@ public class OriginalLinkedImportService {
             approvalContext == null
                 ? new OriginalLinkedWorkbookParser.ImportContext(command.getPriceOrgCode(), Map.of())
                 : approvalContext.read(command.getFileBytes(), command.getPriceOrgCode()));
+    if (selectedRows != null) parsed = new OriginalLinkedWorkbookParser.ParsedWorkbook(
+        parsed.rules().stream().filter(r -> selectedRows.contains(r.sheet() + "!" + r.row())).toList(),
+        parsed.errors().stream().filter(e -> e.row() == null || selectedRows.contains(e.sheet() + "!" + e.row())).toList());
+    preview.setNotices(parsed.notices());
     for (var issue : parsed.errors())
       error(preview, command, issue.sheet(), issue.row(), issue.materialCode(), issue.message());
-    var previous = latest(scope);
+    var previous = latest(scope, selectedRows != null);
     Map<String, Long> previousIds = new LinkedHashMap<>();
     Map<String, Rule> seen = new LinkedHashMap<>();
     var factorCells = new LinkedHashSet<String>();
@@ -239,17 +272,9 @@ public class OriginalLinkedImportService {
       if (repeated != null) {
         preview.setDuplicateRowCount(preview.getDuplicateRowCount() + 1);
         if (!sameCalculation(repeated, rule)) {
-          error(
-              preview,
-              command,
-              rule.sheet(),
-              rule.row(),
-              key.materialCode(),
-              "同一组织/料号/供应商/规格/单位存在不同规则，不能按文件顺序覆盖");
-          row.setMatchStatus("CONFLICT");
-          continue;
-        }
-        row.setMatchStatus("DUPLICATE_SOURCE");
+          row.setMatchStatus("ALTERNATIVE_SOURCE");
+          row.setMessage("同一供应商的不同规则全部保留，按适用基价分别计算后取最高有效价");
+        } else row.setMatchStatus("DUPLICATE_SOURCE");
       }
       PriceFactorContext financial = financialByOrg.get(key.orgCode());
       if (financial == null) {
@@ -319,7 +344,8 @@ public class OriginalLinkedImportService {
                 preview.getFileSha256(),
                 Objects.toString(command.getSourceFileName(), ""),
                 scope,
-                OriginalLinkedRuleSnapshot.VERSION));
+                OriginalLinkedRuleSnapshot.VERSION,
+                selectedRows == null ? List.of() : selectedRows.stream().sorted().toList()));
     preview.setPreviewFingerprint(
         hash(List.of(inputVersionFingerprint, previousIds, financeVersions, keysByOrg,
             parsed.rules().stream().map(Rule::identity).toList())));
@@ -361,7 +387,7 @@ public class OriginalLinkedImportService {
         && first.originalPrice().compareTo(second.originalPrice()) == 0;
   }
 
-  private Map<String, PriceLinkedItem> latest(Scope scope) {
+  private Map<String, PriceLinkedItem> latest(Scope scope, boolean includeStaged) {
     var versions =
         items.selectList(
             Wrappers.lambdaQuery(PriceLinkedItem.class)
@@ -369,7 +395,7 @@ public class OriginalLinkedImportService {
                 .in(PriceLinkedItem::getOrgCode, scope.orgs())
                 .eq(PriceLinkedItem::getPricingMonth, scope.month())
                 .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
-                .eq(PriceLinkedItem::getRuleStatus, "PUBLISHED")
+                .in(PriceLinkedItem::getRuleStatus, includeStaged ? List.of("PUBLISHED", "STAGED") : List.of("PUBLISHED"))
                 .isNotNull(PriceLinkedItem::getRuleIdentityKey)
                 .orderByDesc(PriceLinkedItem::getRuleRevision));
     Map<String, PriceLinkedItem> result = new LinkedHashMap<>();
@@ -379,7 +405,15 @@ public class OriginalLinkedImportService {
 
   private PriceItemImportResponse save(
       PriceLinkedImportCommand command, Scope scope, Prepared checked) {
+    return save(command, scope, checked, "PUBLISHED");
+  }
+
+  private PriceItemImportResponse save(
+      PriceLinkedImportCommand command, Scope scope, Prepared checked, String status) {
     var now = LocalDateTime.now();
+    var revisions = com.sanhua.marketingcost.service.pricing.OriginalRuleRevisions.linked(items, scope.businessUnit(), scope.month());
+    var groupRevisions = new java.util.HashMap<String, Integer>();
+    var signatures = new com.sanhua.marketingcost.service.pricing.OriginalRuleSignature(json, new OriginalRangeRuleCalculator());
     Map<String, FactorUploadBatch> saved = new LinkedHashMap<>();
     for (String org : scope.orgs()) {
       var batch = new FactorUploadBatch();
@@ -396,7 +430,7 @@ public class OriginalLinkedImportService {
       batch.setSourceWorkbook(command.getFileBytes());
       var auth = SecurityContextHolder.getContext().getAuthentication();
       batch.setUploadedBy(auth == null ? "system" : auth.getName());
-      batch.setStatus("PUBLISHED");
+      batch.setStatus(status);
       batch.setLinkedRowCount(
           (int) checked.rules().stream().filter(r -> r.identity().orgCode().equals(org)).count());
       batch.setFactorRowCount(checked.preview().getFactorRowCount());
@@ -406,7 +440,7 @@ public class OriginalLinkedImportService {
       batch.setWarningCount(0);
       batch.setStartedAt(now);
       batch.setFinishedAt(now);
-      batch.setPublishedAt(now);
+      batch.setPublishedAt(status.equals("PUBLISHED") ? now : null);
       batch.setCreatedAt(now);
       batch.setUpdatedAt(now);
       batches.insert(batch);
@@ -419,12 +453,11 @@ public class OriginalLinkedImportService {
             rule ->
                 sourceGroups
                     .computeIfAbsent(
-                        rule.identity().identityKey(), key -> new java.util.ArrayList<>())
+                        rule.identity().identityKey() + ":" + signatures.linked(rule), key -> new java.util.ArrayList<>())
                     .add(rule));
     for (List<Rule> sourceRows : sourceGroups.values()) {
       Rule rule = sourceRows.getFirst();
       var key = rule.identity();
-      var prior = checked.previous().get(key.identityKey());
       var batch = saved.get(key.orgCode());
       var item = new PriceLinkedItem();
       item.setBusinessUnitType(key.businessUnitType());
@@ -437,8 +470,10 @@ public class OriginalLinkedImportService {
       item.setUnit(key.unit());
       item.setPricingMonth(scope.month());
       item.setRuleIdentityKey(key.identityKey());
-      item.setRuleRevision(prior == null ? 1 : prior.getRuleRevision() + 1);
-      item.setRuleStatus("PUBLISHED");
+      int nextRevision = revisions.merge(key.identityKey(), 1, Integer::sum);
+      int groupRevision = groupRevisions.computeIfAbsent(key.identityKey(), ignored -> nextRevision);
+      item.setRuleRevision(nextRevision);
+      item.setRuleStatus(status);
       item.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);
       item.setSourceKind("PUBLIC");
       item.setOrderType("联动");
@@ -452,7 +487,8 @@ public class OriginalLinkedImportService {
       item.setSourceFormulaCellRef(rule.cell());
       item.setSourceFormulaExpr(rule.sourceFormula());
       item.setSourceInputSnapshotJson(
-          snapshots.write(sourceRows, checked.inputVersionFingerprint()));
+          com.sanhua.marketingcost.service.pricing.OriginalRuleGroups.withRevision(
+              snapshots.write(sourceRows, checked.inputVersionFingerprint()), groupRevision));
       item.setManualPrice(rule.originalPrice());
       item.setSourceTaxIncludedPrice(
           rule.taxIncluded() ? rule.originalPrice() : rule.originalPrice().multiply(VAT));
@@ -499,6 +535,10 @@ public class OriginalLinkedImportService {
   }
 
   private Scope scope(PriceLinkedImportCommand command) {
+    return scope(command, null);
+  }
+
+  private Scope scope(PriceLinkedImportCommand command, java.util.Set<String> selectedRows) {
     if (command == null || command.getFileBytes().length == 0)
       throw new IllegalArgumentException("原稿文件不能为空");
     String current = BusinessUnitContext.getCurrentBusinessUnitType();
@@ -508,7 +548,7 @@ public class OriginalLinkedImportService {
     selected = selected.trim().toUpperCase(Locale.ROOT);
     if (current != null && !BusinessUnitContext.isAdmin() && !current.equalsIgnoreCase(selected))
       throw new IllegalArgumentException("不能为其他业务单元导入原稿");
-    var orgs = parser.organizations(command.getFileBytes(), command.getPriceOrgCode());
+    var orgs = parser.organizations(command.getFileBytes(), command.getPriceOrgCode(), selectedRows);
     var context =
         new FinanceFactorImportContext(
             selected, orgs.iterator().next(), command.getPricingMonth(), null, null);

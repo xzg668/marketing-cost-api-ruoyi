@@ -42,6 +42,46 @@ public class TechnicalDataPendingProductQuery {
     this.shared = shared;
   }
 
+  /** 旧空任务沿用已接收的本产品、本月份图库。只投影未办理模块，不改任务或历史快照。 */
+  public java.util.Map<Long, Long> currentDrawingSources(List<Long> productIds) {
+    if (productIds.isEmpty()) return java.util.Map.of();
+    String placeholders = String.join(",", java.util.Collections.nCopies(productIds.size(), "?"));
+    var result = new java.util.LinkedHashMap<Long, Long>();
+    jdbc.query("""
+        SELECT x.id product_id,v.id source_id FROM lp_quote_tech_product x
+        JOIN lp_quote_tech_task t ON t.id=x.task_id AND t.active_flag=1
+          AND t.task_status='UNASSIGNED' AND t.assignee_user_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_oa_recipient r WHERE r.task_id=t.id
+            AND (r.active_flag=1 OR r.dispatch_status<>'REJECTED' OR r.latest_submission_id IS NOT NULL))
+        JOIN lp_quote_tech_module m ON m.product_id=x.id AND m.module_type='DRAWING_BOM'
+          AND m.required_flag=1 AND m.module_status='PENDING' AND m.current_version_id IS NULL
+          AND m.assignee_user_id IS NULL AND m.entry_mode='NONE'
+          AND m.requirement_reason_code IN ('DRAWING_SOURCE_PENDING','U9_ORIGINAL_NOT_FOUND')
+        JOIN lp_quote_bom_preparation_record p ON p.oa_form_item_id=x.oa_form_item_id
+          AND p.active_flag=1 AND BINARY p.cost_period_month=BINARY x.accounting_month
+          AND BINARY p.price_org_code=BINARY t.applicable_org_code
+        JOIN lp_quote_bom_supplement_version v ON v.id=p.electronic_source_version_id
+          AND v.preparation_id=p.id AND v.oa_form_item_id=x.oa_form_item_id AND v.active_flag=1
+          AND BINARY v.period_month=BINARY x.accounting_month
+          AND BINARY v.material_org_code=BINARY p.material_organization_code
+          AND v.bom_source IN ('ELECTRONIC_DRAWING_PDF','ELECTRONIC_DRAWING_EXCEL')
+        WHERE x.active_flag=1 AND x.id IN (%s)
+          AND EXISTS (SELECT 1 FROM lp_electronic_drawing_source_node n WHERE n.supplement_version_id=v.id)
+        ORDER BY p.id
+        """.formatted(placeholders), row -> {
+      result.put(row.getLong("product_id"), row.getLong("source_id"));
+    }, productIds.toArray());
+    return result;
+  }
+
+  public TechnicalDataModuleResponse displayCurrentDrawing(TechnicalDataModuleResponse module, Long sourceId) {
+    if (sourceId == null || !"DRAWING_BOM".equals(module.moduleType())) return module;
+    return new TechnicalDataModuleResponse(module.id(), module.moduleType(), false, "DRAWING_SOURCE_AVAILABLE",
+        "已有电子图库明细表，制造件原材料等核算资料单独检查", module.entryMode(), "NOT_REQUIRED", null, 0,
+        module.rowVersion(), "AVAILABLE", "{\"sourceVersionId\":" + sourceId + "}", LocalDateTime.now(),
+        module.assigneeUserId(), module.assigneeName());
+  }
+
   private record Query(String sql, List<Object> args) {}
 
   private Query scope(String accessMode, String businessUnit, String month, String keyword, String oaNo) {

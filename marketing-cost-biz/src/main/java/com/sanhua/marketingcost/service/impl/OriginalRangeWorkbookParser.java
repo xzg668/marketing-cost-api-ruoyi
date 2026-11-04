@@ -34,6 +34,7 @@ public final class OriginalRangeWorkbookParser {
   public ParsedWorkbook parse(byte[] bytes, String fileName, String businessUnit) {
     List<Rule> rules = new ArrayList<>();
     List<RowError> errors = new ArrayList<>();
+    List<RowNotice> notices = new ArrayList<>();
     try (Workbook book = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
       var main = mainSheet(book);
       List<MainRow> mainRows = new ArrayList<>();
@@ -43,10 +44,15 @@ public final class OriginalRangeWorkbookParser {
         try {
           material = materialCode(at(row, main, "物料代码"));
           if (material.isBlank()) continue;
+          if (emptyPrice(at(row, main, "单价"))) {
+            notices.add(new RowNotice(main.sheet().getSheetName(), index + 1, material,
+                "NO_PRICE", "主表单价为空，未导入；原行和料号保留在核对清单"));
+            continue;
+          }
           var identity =
               new MaterialPriceRuleKey(
                   businessUnit,
-                  text(at(row, main, "组织")),
+                  organization(at(row, main, "组织")),
                   material,
                   text(at(row, main, "供应商代码")),
                   text(at(row, main, "供应商名称")),
@@ -59,7 +65,10 @@ public final class OriginalRangeWorkbookParser {
                   main.sheet().getSheetName(),
                   index + 1,
                   source(at(row, main, "单价")),
-                  taxIncluded(at(row, main, "是否含税"))));
+                  taxIncluded(at(row, main, "是否含税"), at(row, main, "单价"))));
+          if (!identity.orgCode().equals(text(at(row, main, "组织"))))
+            notices.add(new RowNotice(main.sheet().getSheetName(), index + 1, material,
+                "ORGANIZATION_CORRECTED", "组织" + text(at(row, main, "组织")) + "按210读取"));
         } catch (RuntimeException error) {
           errors.add(
               new RowError(main.sheet().getSheetName(), index + 1, material, error.getMessage()));
@@ -168,12 +177,12 @@ public final class OriginalRangeWorkbookParser {
                   row.sheet(), row.row(), row.identity().materialCode(), error.getMessage()));
         }
       }
-      if (mainRows.isEmpty() && errors.isEmpty())
+      if (mainRows.isEmpty() && errors.isEmpty() && notices.isEmpty())
         errors.add(new RowError(main.sheet().getSheetName(), null, null, "未读取到主价格记录"));
     } catch (Exception error) {
       errors.add(new RowError(null, null, null, fileName + "：" + error.getMessage()));
     }
-    return new ParsedWorkbook(List.copyOf(rules), List.copyOf(errors));
+    return new ParsedWorkbook(List.copyOf(rules), List.copyOf(errors), List.copyOf(notices));
   }
 
   private List<MatrixRow> matrices(Workbook book, Sheet main) {
@@ -267,6 +276,10 @@ public final class OriginalRangeWorkbookParser {
       }
     }
     return result;
+  }
+
+  public boolean hasPriceMatrix(Workbook book, Sheet main) {
+    return !matrices(book, main).isEmpty();
   }
 
   private MatrixRow match(MainRow main, List<MainRow> mains, List<MatrixRow> matrices) {
@@ -492,7 +505,9 @@ public final class OriginalRangeWorkbookParser {
 
   public record RowError(String sheet, Integer row, String materialCode, String message) {}
 
-  public record ParsedWorkbook(List<Rule> rules, List<RowError> errors) {}
+  public record ParsedWorkbook(List<Rule> rules, List<RowError> errors, List<RowNotice> notices) {
+    public ParsedWorkbook(List<Rule> rules, List<RowError> errors) { this(rules, errors, List.of()); }
+  }
 
   private record MainRow(
       MaterialPriceRuleKey identity,

@@ -141,6 +141,12 @@ public class FinanceEffectivePriceService {
     var rulesByMonth = new TreeMap<String, Map<String, SourceRule>>();
     for (var rule : linkedRules) add(rulesByMonth, SourceRule.linked(rule));
     for (var rule : rangeRules) add(rulesByMonth, SourceRule.range(rule));
+    rulesByMonth.replaceAll((month, versions) -> {
+      Map<String, SourceRule> current = new LinkedHashMap<>();
+      OriginalRuleGroups.current(versions.values(), rule -> rule.type() + ":" + rule.key().identityKey(),
+          SourceRule::selectionRevision).forEach(rule -> current.put(rule.type() + ":" + rule.id(), rule));
+      return current;
+    });
     var existing = new HashSet<String>();
     results
         .selectList(
@@ -223,7 +229,7 @@ public class FinanceEffectivePriceService {
     byMonth
         .computeIfAbsent(rule.month(), ignored -> new LinkedHashMap<>())
         .merge(
-            rule.type() + ":" + rule.key().identityKey(),
+            rule.type() + ":" + rule.id(),
             rule,
             (a, b) -> a.revision() >= b.revision() ? a : b);
   }
@@ -439,6 +445,7 @@ public class FinanceEffectivePriceService {
       String fingerprint,
       PriceLinkedItem linked,
       PriceRangeFactorRule range) {
+    public int selectionRevision() { return linked != null ? OriginalRuleGroups.revision(linked) : OriginalRuleGroups.revision(range); }
     public static SourceRule linked(PriceLinkedItem row) {
       var key =
           new MaterialPriceRuleKey(

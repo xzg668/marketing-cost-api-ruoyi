@@ -704,6 +704,8 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     }
     LambdaQueryWrapper<PriceRangeItem> query =
         Wrappers.lambdaQuery(PriceRangeItem.class)
+            .notExists("SELECT 1 FROM lp_price_range_factor_rule draft_rule WHERE draft_rule.id=lp_price_range_item.factor_rule_id"
+                + " AND draft_rule.rule_status IN ('STAGED','NOT_SELECTED')")
             .eq(PriceRangeItem::getMaterialCode, materialCode)
             .and(q -> q.isNotNull(PriceRangeItem::getPriceInclTax)
                 .or()
@@ -982,6 +984,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     }
     LambdaQueryWrapper<PriceLinkedItem> query =
         Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED")
             .eq(PriceLinkedItem::getMaterialCode, materialCode)
             .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
             .eq(PriceLinkedItem::getDeleted, 0);

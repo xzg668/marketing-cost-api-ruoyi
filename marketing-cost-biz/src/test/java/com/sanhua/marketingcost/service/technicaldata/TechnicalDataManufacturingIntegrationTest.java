@@ -58,6 +58,82 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
   private Long taskId, productId, itemId, sourceId;
   private String key;
 
+  @Autowired private TechnicalDataPriceApplicationService priceEntry;
+  @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository oaRecipients;
+
+  @Test void missingPricesStayInTheManufacturingTechniciansOpenTodoAndCanBeFrozenTogether() {
+    jdbc.update("INSERT INTO lp_oa_integration_message(source_system,environment,direction,request_id,interface_type,schema_version,occurred_at,raw_payload,payload_hash,allowed_business_units) VALUES('TEST','UNIT','OUTBOUND',?,'TASK_DISPATCH',1,NOW(3),'{}',REPEAT('b',64),'COMMERCIAL')", key);
+    Long messageId = jdbc.queryForObject("SELECT id FROM lp_oa_integration_message WHERE request_id=?", Long.class, key);
+    jdbc.update("INSERT INTO lp_quote_tech_oa_recipient(task_id,assignment_version,assignee_user_id,assignee_name,external_user_id,module_types_json,outbound_message_id,external_task_id,dispatch_status,todo_status,active_flag,leader_external_id) VALUES(?,1,101,'王工','oa-tech-1','[\"DRAWING_BOM\",\"MANUFACTURING\"]',?,'TEST-TODO','CONFIRMED','OPEN',1,'oa-leader-1')", taskId, messageId);
+    jdbc.update("UPDATE lp_quote_tech_task SET oa_assignment_version=1,external_task_status='PUBLISHED' WHERE id=?", taskId);
+    jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=NULL,assignee_name=NULL,oa_edit_allowed=0 WHERE product_id=? AND module_type='PRICE'", productId);
+    service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    assertThat(oaRecipients.current(taskId)).singleElement().satisfies(person -> {
+      assertThat(person.modules()).containsExactly("DRAWING_BOM", "MANUFACTURING", "PRICE");
+      assertThat(person.processingModules()).contains("PRICE");
+      assertThat(person.externalTaskId()).isEqualTo("TEST-TODO");
+    });
+    assertThat(priceEntry.get(productId, null, LI).editable()).isFalse();
+    completePrice(WANG);
+    confirmC();
+    var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    assertThat(priceEntry.get(productId, null, WANG).moduleStatus()).isEqualTo("READY");
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), oaRecipients.current(taskId).getFirst(), saved.expectedVersion(), 101L);
+    assertThat(codec.prices(frozen).items()).hasSize(1);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_integration_message WHERE request_id=?", Integer.class, key)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?", Integer.class, key + "-RAW")).isZero();
+  }
+
+  @Test void savedRawMaterialOpensMissingPriceForTheSameTechnicianBeforeTheWholeBomIsComplete() {
+    var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    assertThat(saved.issues()).isNotEmpty(); // 另一制造件尚待料号确认，不妨碍已知原材料补价。
+    var price = repository.lockModules(productId).stream().filter(row -> "PRICE".equals(row.getModuleType())).findFirst().orElseThrow();
+    assertThat(price.getRequiredFlag()).isEqualTo(1);
+    assertThat(price.getAssigneeUserId()).isEqualTo(WANG.userId());
+    var response = priceEntry.get(productId, null, WANG);
+    assertThat(response.editable()).isTrue();
+    assertThat(response.requirements().issues()).isEmpty();
+    assertThat(response.requirements().items()).filteredOn(row -> row.requiresEntry())
+        .extracting(row -> row.materialNo()).containsExactly(key + "-RAW");
+    completePrice(WANG);
+    assertThat(priceEntry.get(productId, null, WANG).issues()).isEmpty();
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void onlyActuallyMissingRawAndScrapPricesNeedEntry(boolean rawPriced, boolean scrapPriced) {
+    String raw = key + "-RAW", scrap = key + "-SCRAP";
+    material(scrap, key + "-DS", "采购件", "kg");
+    jdbc.update("INSERT INTO lp_material_scrap_ref(material_code,scrap_code,scrap_unit,ratio,business_unit_type,created_at,updated_at) VALUES(?,?,'kg',1,'COMMERCIAL',NOW(),NOW())", raw, scrap);
+    if (rawPriced) jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) VALUES('210',?,'raw','kg',66,0,'TEST','2026-09-01','2027-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())", raw);
+    if (scrapPriced) jdbc.update("INSERT INTO lp_scrap_price(business_unit_type,price_month,material_code,material_name,price_type,fixed_price,factor_bindings_json,origin_type,rule_source_month,content_hash,created_by,created_at,updated_by,updated_at) VALUES('COMMERCIAL','2026-09',?,'scrap','FIXED',5,'{}','IMPORT','2026-09',?,'TEST',NOW(),'TEST',NOW())", scrap, "f".repeat(64));
+    var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    var price = moduleMapper.selectByTaskId(taskId).stream().filter(row -> "PRICE".equals(row.getModuleType())).findFirst().orElseThrow();
+    assertThat(price.getRequiredFlag()).isEqualTo(rawPriced && scrapPriced ? 0 : 1);
+    if (!rawPriced || !scrapPriced) {
+      var response = priceEntry.get(productId, null, WANG);
+      assertThat(response.requirements().issues()).isEmpty();
+      assertThat(response.requirements().items()).filteredOn(row -> row.requiresEntry())
+          .extracting(row -> row.materialNo()).containsExactlyInAnyOrderElementsOf(
+              java.util.stream.Stream.of(rawPriced ? null : raw, scrapPriced ? null : scrap).filter(java.util.Objects::nonNull).toList());
+    }
+    assertThat(saved.priceRequirements()).hasSize(2);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN (?,?)", Integer.class, raw, scrap)).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_submission WHERE task_id=?", Integer.class, taskId)).isZero();
+  }
+
+  private void completePrice(TechnicalDataActor actor) {
+    var current = priceEntry.get(productId, null, actor);
+    if (!current.editable()) return;
+    var request = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceSaveRequest();
+    request.setExpectedVersion(current.expectedVersion()); request.setRequirementsFingerprint(current.requirements().fingerprint());
+    request.setItems(current.requirements().items().stream().filter(row -> row.requiresEntry()).map(row -> {
+      var input = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceSaveRequest.Item();
+      input.setItemKey(row.itemKey()); input.setEntryMode("FIXED"); input.setUnitPrice(BigDecimal.TEN); return input;
+    }).toList());
+    if (!request.getItems().isEmpty()) assertThat(priceEntry.save(productId, request, actor).issues()).isEmpty();
+  }
+
   @Test void adminDirectSaveValidatesFreezesAndSuppliesCostingWithoutOa() {
     jdbc.update("UPDATE lp_quote_tech_task SET assignee_user_id=NULL,assignee_name=NULL,task_status='UNASSIGNED' WHERE id=?", taskId);
     jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=NULL,assignee_name=NULL WHERE product_id=?", productId);
@@ -72,7 +148,8 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     var saved = service.save(productId, request(service.read(productId, null, ADMIN), true), ADMIN);
     assertThat(saved.issues()).isEmpty();
     assertThat(service.read(productId, null, ADMIN).saved()).isEqualTo(saved.saved());
-    var result = adminDirect.save(taskId, new TechnicalDataAdminDirectSave.Request(saved.expectedVersion()), ADMIN);
+    completePrice(ADMIN);
+    var result = adminDirect.save(taskId, new TechnicalDataAdminDirectSave.Request(repository.findProduct(productId).orElseThrow().getRowVersion()), ADMIN);
     assertThat(result.effectiveVersionId()).isNotNull();
     var effective = repository.findVersion(result.effectiveVersionId()).orElseThrow();
     assertThat(effective.getVersionStatus()).isEqualTo("SUBMITTED");
@@ -174,8 +251,10 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     assertThat(rows.get(1).get("qty_per_top").toString()).startsWith("0.036");
     assertThat(rows.get(0).get("path")).isNotEqualTo(rows.get(1).get("path"));
     assertThat(jdbc.queryForObject("SELECT module_status FROM lp_quote_tech_module WHERE product_id=? AND module_type='PROFILE'", String.class, productId)).isEqualTo("PENDING");
+    assertThat(validation.validate(taskId, 101L, WANG).issues()).anySatisfy(issue -> assertThat(issue.moduleType()).isEqualTo("PRICE"));
+    completePrice(WANG);
     assertThat(validation.validate(taskId, 101L, WANG).valid()).isTrue();
-    assertThat(service.save(productId, request(saved, true), WANG).bomComposed()).isTrue();
+    assertThat(service.save(productId, request(service.read(productId, null, WANG), true), WANG).bomComposed()).isTrue();
   }
 
   @Test void missingDrawingNetWeightUsesMatchedU9WeightForDisplaySavingAndHistoricalVersion() {
@@ -197,9 +276,10 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
           assertThat(row.netWeightKg()).isEqualByComparingTo("0.0105");
         });
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_electronic_drawing_source_node WHERE supplement_version_id=? AND resolved_material_code=? AND reference_weight IS NOT NULL", Long.class, sourceId, key + "-B")).isZero();
-    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
+    completePrice(WANG);
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING", "PRICE"), 1L,
         "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
-    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, repository.findProduct(productId).orElseThrow().getRowVersion(), 101L);
     jdbc.update("UPDATE lp_material_master_raw SET global_seg_3_theoretical_net_weight='99' WHERE organization_code='COMMERCIAL' AND material_code=?", key + "-B");
     var historical = service.read(productId, frozen.getId(), WANG);
     assertThat(historical.saved()).isEqualTo(saved.saved());
@@ -208,9 +288,10 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
 
   @Test void deletingDraftRawClearsCompositionAndCannotSubmitAnEmptyGapWhileFrozenSnapshotSurvivesReturn() {
     confirmC(); var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
-    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
+    completePrice(WANG);
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING", "PRICE"), 1L,
         "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
-    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, repository.findProduct(productId).orElseThrow().getRowVersion(), 101L);
     String fingerprint = frozen.getContentFingerprint();
     assertThat(service.read(productId, null, WANG).editable()).isFalse();
     versions.restore(repository.lockProduct(productId).orElseThrow(), person, frozen.getId(), 101L);
@@ -227,9 +308,10 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     confirmC();
     var input = request(service.read(productId, null, WANG), true);
     var saved = service.save(productId, input, WANG);
-    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
+    completePrice(WANG);
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING", "PRICE"), 1L,
         "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
-    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, repository.findProduct(productId).orElseThrow().getRowVersion(), 101L);
     versions.restore(repository.lockProduct(productId).orElseThrow(), person, frozen.getId(), 101L);
     jdbc.update("UPDATE lp_material_master_raw SET import_batch_id=? WHERE material_code=?", key + "-NEXT", key + "-RAW");
     var composition = jdbc.queryForObject("SELECT composition_fingerprint FROM lp_quote_bom_supplement_version WHERE id=?", String.class, sourceId);
@@ -277,10 +359,13 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
   @Test void quoteViewerReadsSubmittedManufacturingDetailsButNeverTheTechnicianDraft() {
     confirmC();
     var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    completePrice(WANG);
     assertThat(service.readQuote(itemId, "2026-09", ADMIN).saved()).isNull();
-    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING"), 1L,
+    assertThat(moduleMapper.selectByTaskId(taskId).stream().filter(row -> Set.of("DRAWING_BOM", "MANUFACTURING", "PRICE").contains(row.getModuleType())))
+        .allSatisfy(row -> assertThat(row.getModuleStatus()).as(row.getModuleType() + ": " + row.getLastValidationMessage()).isEqualTo("READY"));
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING", "PRICE"), 1L,
         "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
-    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, repository.findProduct(productId).orElseThrow().getRowVersion(), 101L);
     var snapshot = codec.versionContentJson(frozen, codec.readReferenceSnapshot(frozen.getReferenceSnapshotJson()), List.of(), List.of(), List.of());
     jdbc.update("""
         INSERT INTO lp_quote_tech_submission(task_id,product_id,technical_version_id,submission_round,request_id,

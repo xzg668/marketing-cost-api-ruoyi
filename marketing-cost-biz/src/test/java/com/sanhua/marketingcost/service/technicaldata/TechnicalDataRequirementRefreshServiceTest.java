@@ -95,6 +95,7 @@ class TechnicalDataRequirementRefreshServiceTest {
     var task = new QuoteTechTask(); task.setId(6L); task.setTaskStatus("UNASSIGNED");
     task.setApplicableOrgCode("210"); task.setOaAssignmentVersion(0);
     when(tasks.selectActiveForUpdate(168L, "2026-09")).thenReturn(task);
+    when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(6L), eq(6L))).thenReturn(false);
     when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(6L), eq(6L), eq(6L))).thenReturn(false);
     var service = new TechnicalDataRequirementRefreshService(modules, jdbc, tasks, new OaMessageCodec(new ObjectMapper()),mock(TechnicalDataOaRecipientRepository.class));
 
@@ -111,6 +112,7 @@ class TechnicalDataRequirementRefreshServiceTest {
     var task = new QuoteTechTask(); task.setId(6L); task.setTaskStatus("UNASSIGNED");
     task.setApplicableOrgCode("210");
     when(tasks.selectActiveForUpdate(168L, "2026-09")).thenReturn(task);
+    when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(6L), eq(6L))).thenReturn(false);
     when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(6L), eq(6L), eq(6L))).thenReturn(true);
     var service = new TechnicalDataRequirementRefreshService(modules, jdbc, tasks, new OaMessageCodec(new ObjectMapper()),mock(TechnicalDataOaRecipientRepository.class));
     assertThat(service.reconcile(168L, "2026-09", "220", List.of())).contains("已保留");

@@ -22,6 +22,24 @@ class SupplierPriceSelectionServiceTest {
   private final SupplierPriceScope scope = new SupplierPriceScope("COMMERCIAL", "SAME-PRICE", 1L,
       "2026-10", LocalDate.of(2026, 10, 26), "210", "201350006", "FIXED");
 
+  @Test void parallelRulesTakeHighestWithinSupplierBeforeExistingSupplierRatioPolicy() {
+    var low = new SupplierPriceCandidate("A-low", "A", "供应商A", new BigDecimal("10"), null, null);
+    var high = new SupplierPriceCandidate("A-high", "A", "供应商A", new BigDecimal("15"), null, null);
+    var single = service.selectPrepared(scope, List.of(high, low), List.of(), null);
+    assertThat(single.candidate()).isEqualTo(high);
+    assertThat(single.review()).isNull();
+    assertThat(single.rule()).isEqualTo("SAME_SUPPLIER_HIGH");
+    var multi = service.selectPrepared(scope, List.of(low, candidate("B", "20"), high),
+        List.of(ratio("A", ".8"), ratio("B", ".2")), null);
+    assertThat(multi.candidate()).isEqualTo(high);
+    assertThat(multi.rule()).isEqualTo("RATIO_MAX");
+  }
+
+  @Test void absentSupplierOnPublicScrapDoesNotRequireInventingASupplier() {
+    var publicPrice = new SupplierPriceCandidate("PUBLIC-SCRAP", null, null, BigDecimal.ZERO, null, null);
+    assertThat(service.selectPrepared(scope, List.of(publicPrice), List.of(), null).candidate()).isEqualTo(publicPrice);
+  }
+
   @ParameterizedTest
   @CsvSource({"0.7226,0.722600", "0,0.0000"})
   void equalEffectivePricesNeedNeitherRatiosNorApproval(String first, String second) {

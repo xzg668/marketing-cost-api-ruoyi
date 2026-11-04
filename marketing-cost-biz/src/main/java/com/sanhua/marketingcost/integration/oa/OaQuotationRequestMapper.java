@@ -232,8 +232,9 @@ public class OaQuotationRequestMapper {
     if (sc20) v.setCustomerCode(value(f, "khbm"));
     v.setPackageMethod(value(f, "bzfs"));
     v.setShippingFee(value(f, sc20 ? "ysf" : "ysfyz"));
+    // FI-SR-005 批量品的三花配套量就是年用量，单位同为万只。
     if (sr && batch) v.setSupportQty(value(f, "yjnylwz"));
-    else v.setAnnualVolume(sc20 ? scale(value(f, "yjnylz"), -4) : value(f, "yjnylwz"));
+    v.setAnnualVolume(sc20 ? scale(value(f, "yjnylz"), -4) : value(f, "yjnylwz"));
     v.setFirstQuoteFlag(bool(m, "sfscbj"));
     v.setTechnicianName(value(m, "jsy"));
     if (sr) v.setOriginCountry(value(m, "qyg"));

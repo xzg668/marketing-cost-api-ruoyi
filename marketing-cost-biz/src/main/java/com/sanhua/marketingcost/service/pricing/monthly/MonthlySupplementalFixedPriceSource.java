@@ -161,11 +161,16 @@ public final class MonthlySupplementalFixedPriceSource {
   }
 
   private boolean ownEditableGap(Context context,Long form,Ownership owner,ProductCapture data) {
+    var task = owner.task();
+    boolean unassigned = "UNASSIGNED".equals(owner.taskStatus()) && task.getAssigneeUserId() == null
+        && task.getOaFlowId() == null && task.getOaDispatchMessageId() == null
+        && (task.getOaAssignmentVersion() == null || task.getOaAssignmentVersion() == 0)
+        && task.getExternalTaskId() == null && task.getExternalTaskStatus() == null;
     if(!Objects.equals(form,owner.originalFormId()) || !Objects.equals(context.oaFormItemId(),owner.quoteItemId())
         || !context.month().toString().equals(owner.originalMonth())
         || !Integer.valueOf(1).equals(owner.taskActive()) || !Integer.valueOf(1).equals(owner.productActive())
         || owner.effectiveVersionId()!=null
-        || !Set.of("PENDING","IN_PROGRESS","PARTIALLY_RETURNED").contains(owner.taskStatus())
+        || !unassigned && !Set.of("PENDING","IN_PROGRESS","PARTIALLY_RETURNED").contains(owner.taskStatus())
         || !Set.of("PENDING","EDITING","RETURNED").contains(owner.productStatus())
         || !Set.of("PENDING","EDITING","READY","RETURNED").contains(owner.moduleStatus()))return false;
     var module=data.modules().stream().filter(value->Objects.equals(value.getId(),owner.moduleId())).findFirst().orElse(null);
@@ -175,7 +180,7 @@ public final class MonthlySupplementalFixedPriceSource {
         || !Objects.equals(module.getModuleStatus(),owner.moduleStatus())
         || !Objects.equals(module.getCurrentVersionId(),owner.sourceVersionId()))return false;
     if(owner.sourceVersionId()==null)return "PENDING".equals(owner.moduleStatus());
-    if(module.getAssigneeUserId()==null)return false;
+    if(module.getAssigneeUserId()==null && !unassigned)return false;
     var draft=data.versions().get(owner.sourceVersionId());
     if(draft==null || !Objects.equals(draft.getProductId(),owner.productId()) || !"DRAFT".equals(draft.getVersionStatus()))return false;
     // A malformed stored draft is an error, while incomplete editable price fields remain editable.

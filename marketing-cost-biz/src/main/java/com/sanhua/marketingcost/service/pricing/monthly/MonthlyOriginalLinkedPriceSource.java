@@ -60,17 +60,22 @@ public final class MonthlyOriginalLinkedPriceSource {
           var originals=byCode.getOrDefault(code,List.of());if(originals.isEmpty()){problems.put(request,new Problem(Failure.MISSING,MaterialPriceMonthSelector.missingMessage(code,request.priceOrgCode(),selectedMonth)));continue;}
           try{
             String explicit=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
-            var heads=new LinkedHashMap<String,PriceLinkedItem>();
+            var matching=new ArrayList<PriceLinkedItem>();
             for(var row:originals){
               if(explicit!=null && !explicit.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())))continue;
               if(!request.family().unit().equals(row.getUnit()) || request.family().specification()!=null && !request.family().specification().equals(row.getSpecModel()))continue;
-              String identity=row.getRuleIdentityKey();
-              if(identity==null || identity.isBlank())identity=new MaterialPriceRuleKey(row.getBusinessUnitType(),row.getOrgCode(),row.getMaterialCode(),row.getSupplierCode(),row.getSupplierName(),row.getSpecModel(),row.getUnit()).identityKey();
-              heads.putIfAbsent(identity,row);
+              matching.add(row);
             }
+            var heads=OriginalRuleGroups.current(matching, row -> {
+              String identity = row.getRuleIdentityKey();
+              return identity == null || identity.isBlank()
+                  ? new MaterialPriceRuleKey(row.getBusinessUnitType(), row.getOrgCode(), row.getMaterialCode(),
+                      row.getSupplierCode(), row.getSupplierName(), row.getSpecModel(), row.getUnit()).identityKey()
+                  : identity;
+            }, OriginalRuleGroups::revision);
             // Historical expression versions do not invalidate the selected latest revision.
             if(heads.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"原稿没有符合本次规格、单位和指定供应商的价格"));continue;}
-            var applicable=heads.values().stream().filter(row->request.family().unit().equals(row.getUnit()) && (request.family().specification()==null || request.family().specification().equals(row.getSpecModel()))).toList();
+            var applicable=heads.stream().filter(row->request.family().unit().equals(row.getUnit()) && (request.family().specification()==null || request.family().specification().equals(row.getSpecModel()))).toList();
             // This source publishes an excluded-tax CNY result. Other requested bases are
             // inapplicable alternatives, rather than malformed original data.
             if(!"CNY".equals(request.family().currency()) || request.family().taxBasis()!=TaxBasis.EXCLUDED){
@@ -81,10 +86,11 @@ public final class MonthlyOriginalLinkedPriceSource {
               if(head.getRuleRevision()==null || head.getRuleRevision()<1)throw new IllegalArgumentException("Applicable latest original rule lacks its revision");
               if(!OriginalLinkedRuleSnapshot.VERSION.equals(head.getExpressionVersion()))throw new IllegalArgumentException("Unrelated identities excluded; this applicable source requires its legacy formula adapter");
             }
-            var supplierIdentities=new HashSet<String>();
+            var supplierIdentities=new HashMap<String,String>();
             for(var row:applicable){
               String supplier=SupplierSupplyRatioNormalizeUtils.supplierIdentity(row.getSupplierCode(),row.getSupplierName());
-              if(!supplierIdentities.add(supplier))throw new IllegalArgumentException("同一供应商有多个适用原稿，请明确规格和单位");
+              String previous=supplierIdentities.putIfAbsent(supplier,row.getRuleIdentityKey());
+              if(previous!=null && !previous.equals(row.getRuleIdentityKey()))throw new IllegalArgumentException("同一供应商有多个规格或单位，请明确本次取价条件");
             }
             String condition=condition(request).name();
             var publication=publications.computeIfAbsent(condition,ignored->{
