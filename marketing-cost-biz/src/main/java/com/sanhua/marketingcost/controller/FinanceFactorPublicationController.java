@@ -101,9 +101,8 @@ public class FinanceFactorPublicationController {
       @RequestParam(required = false) String schemeCode,
       @RequestParam Condition condition,
       @RequestParam(required = false) Integer revision) {
-    var snapshot =
-        reader.read(context(priceMonth, priceOrgCode, null, schemeCode), condition, revision);
-    return CommonResult.success(snapshot.copperOnly());
+    var snapshot = displaySnapshot(priceMonth, priceOrgCode, schemeCode, condition, revision);
+    return CommonResult.success(snapshot == null ? null : snapshot.copperOnly());
   }
 
   @PreAuthorize("@ss.hasPermi('price:finance-base:list')")
@@ -114,8 +113,18 @@ public class FinanceFactorPublicationController {
       @RequestParam(required = false) String schemeCode,
       @RequestParam Condition condition,
       @RequestParam(required = false) Integer revision) {
-    return CommonResult.success(
-        reader.read(context(priceMonth, priceOrgCode, null, schemeCode), condition, revision));
+    return CommonResult.success(displaySnapshot(priceMonth, priceOrgCode, schemeCode, condition, revision));
+  }
+
+  /** An unpublished month is an empty maintenance page; costing readers remain strict. */
+  private FactorPriceSnapshot displaySnapshot(
+      String month, String organization, String scheme, Condition condition, Integer revision) {
+    try {
+      return reader.read(context(month, organization, null, scheme), condition, revision);
+    } catch (FinanceFactorPriceReader.MissingPublicationException missing) {
+      if (revision != null) throw missing;
+      return null;
+    }
   }
 
   @PreAuthorize("@ss.hasPermi('price:finance-base:import')")

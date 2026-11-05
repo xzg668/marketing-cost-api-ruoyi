@@ -72,6 +72,49 @@ class FinanceFactorPublicationControllerTest {
   }
 
   @Test
+  void unpublishedMonthIsAnEmptySuccessfulDisplayForBothOrganizations() {
+    authenticate("price:finance-base:list");
+    when(reader.read(any(), any(), isNull()))
+        .thenThrow(new FinanceFactorPriceReader.MissingPublicationException("未发布"));
+    for (String organization : List.of("210", "220")) {
+      var condition = "210".equals(organization) ? Condition.GENERAL : Condition.NON_TENDER;
+      var response = controller.read("2026-11", organization, null, condition, null);
+      assertThat(response.isSuccess()).isTrue();
+      assertThat(response.getData()).isNull();
+    }
+    verifyNoInteractions(publisher, copper, exports);
+  }
+
+  @Test
+  void unpublishedCopperDisplayIsEmptyWithoutGrantingFullFactorAccess() {
+    authenticate("cost:finance-cu-base:query");
+    when(reader.read(any(), any(), isNull()))
+        .thenThrow(new FinanceFactorPriceReader.MissingPublicationException("未发布"));
+    var response = controller.readCu("2026-11", "210", null, Condition.GENERAL, null);
+    assertThat(response.isSuccess()).isTrue();
+    assertThat(response.getData()).isNull();
+    assertThatThrownBy(() -> controller.read("2026-11", "210", null, Condition.GENERAL, null))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
+  void missingRequestedRevisionAndBrokenPublishedDataRemainErrors() {
+    authenticate("price:finance-base:list");
+    when(reader.read(any(), any(), eq(3)))
+        .thenThrow(new FinanceFactorPriceReader.MissingPublicationException("所选修订不存在"));
+    assertThatThrownBy(() -> controller.read("2026-11", "210", null, Condition.GENERAL, 3))
+        .isInstanceOf(FinanceFactorPriceReader.MissingPublicationException.class);
+    when(reader.read(any(), any(), isNull()))
+        .thenThrow(new IllegalArgumentException("该财务发布不含所选方案/条件"));
+    assertThatThrownBy(() -> controller.read("2026-10", "210", "UNKNOWN", Condition.GENERAL, null))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("方案/条件");
+    doThrow(new IllegalStateException("已发布财务因素的身份、值、版本或来源不完整"))
+        .when(reader).read(any(), any(), isNull());
+    assertThatThrownBy(() -> controller.read("2026-10", "210", null, Condition.GENERAL, null))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("不完整");
+  }
+
+  @Test
   void exportUsesAuthenticatedBusinessUnitAndReturnsAnExcelAttachment() {
     authenticate("price:finance-base:import");
     var scope = new FinanceFactorImportContext("HOUSEHOLD", "220", "2027-01", null, null);

@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * 固定价：按组织选择每家供应商生失效日期最新的版本，再执行通用供货比率规则。
+ * 固定价：优先有效报价；全部无有效报价时沿用最新执行期间，再执行通用供货比率规则。
  *
  * <p>对应 Excel"价格来源 = 固定采购价"。
  */
@@ -71,7 +71,7 @@ public class FixedPriceResolver implements PriceResolver {
         || !StringUtils.hasText(context.getBusinessUnitType())) {
       return PriceResolveResult.miss("FIXED_PRICE_SCOPE_MISSING", "固定价缺少取价组织、业务单元或核算日期：" + code);
     }
-    List<PriceFixedItem> rows = SupplyPriceDatePolicy.preferCurrent(
+    List<PriceFixedItem> rows = SupplyPriceDatePolicy.preferCurrentOrLatestPeriod(
         selectRows(code, orgCode, context), priceDate,
         PriceFixedItem::getEffectiveFrom, PriceFixedItem::getEffectiveTo);
     var bySupplier = new LinkedHashMap<String, PriceFixedItem>();

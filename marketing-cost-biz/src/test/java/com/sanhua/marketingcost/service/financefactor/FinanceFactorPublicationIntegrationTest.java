@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.MybatisSqlSessionFactoryBuilder;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
 import com.sanhua.marketingcost.dto.FinanceFactorImportContext;
 import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
 import com.sanhua.marketingcost.entity.FactorRowRef;
@@ -444,6 +445,83 @@ class FinanceFactorPublicationIntegrationTest {
                     original, "A.xlsx", commercial, restorePreview.previewFingerprint(), "finance")
                 .revision())
         .isEqualTo(3);
+  }
+
+  @Test
+  void publicationAndMonthlyRefreshCommitTogetherAndReimportIsIdempotent() throws Exception {
+    var jdbc = new org.springframework.jdbc.core.JdbcTemplate(transactions.getDataSource());
+    jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");
+    for (String resource : List.of("monthly-pricing/pre-v342-schema.sql", "db/V342__monthly_material_price_storage.sql",
+        "db/V344__monthly_material_price_single_table.sql", "db/V354__invoice_price_import.sql", "db/V360__finance_correction_monthly_price.sql")) {
+      MYSQL.copyFileToContainer(MountableFile.forClasspathResource(resource), "/tmp/monthly-correction.sql");
+      script("/tmp/monthly-correction.sql");
+    }
+    var codec = new MonthlyPriceDocumentCodec(new ObjectMapper());
+    var refresh = new FinanceMonthlyPriceRefreshService(jdbc, codec);
+    service = service(sources, refresh);
+    var first = publishCommercial(FinanceFactorWorkbookParserTest.fixture("commercial"));
+    var config = new org.apache.ibatis.session.Configuration();
+    config.setMapUnderscoreToCamelCase(true);
+    config.addMapper(com.sanhua.marketingcost.mapper.monthly.MonthlyPriceStorageMapper.class);
+    config.addMapper(com.sanhua.marketingcost.mapper.monthly.MonthlyPriceLinkMapper.class);
+    var factory = new org.mybatis.spring.SqlSessionFactoryBean();
+    factory.setDataSource(transactions.getDataSource()); factory.setConfiguration(config);
+    var sql = new SqlSessionTemplate(factory.getObject());
+    var storage = new MonthlyPriceStorage(
+        sql.getMapper(com.sanhua.marketingcost.mapper.monthly.MonthlyPriceStorageMapper.class), codec,
+        sql.getMapper(com.sanhua.marketingcost.mapper.monthly.MonthlyPriceLinkMapper.class));
+    var reader = new FinanceFactorPriceReader(batches, prices, identities, sources);
+    var monthly = new MonthlyMaterialPriceService(storage, transactions, codec,
+        (context, requests, dependencies) -> {
+          var financial = reader.readDefault(commercial, "CORRECTION").financial();
+          var value = financial.required("AVG|PCU").price();
+          var evidence = MonthlyAdoptionPlan.SourceEvidence.ofJson(
+              "{\"sourceKind\":\"LINKED\",\"source\":{\"selectedPublication\":{\"orgCode\":\"210\",\"financeBatchId\":"+financial.batchId()+"}}}");
+          var selected = new MonthlyAdoptionPlan.Selection(null,
+              new MonthlyPriceCoverage(java.util.Set.of("210"),
+                  QuantityInterval.all(),
+                  ConditionDomain.any()),
+              MonthlyAdoptionPlan.PriceFact.normal(value, evidence, java.util.Set.of()));
+          return new MonthlyMaterialPrices.Candidates(
+              java.util.Map.of(requests.iterator().next(), new MonthlyMaterialPrices.Candidate(selected,null)), java.util.Map.of());
+        });
+    var request = new MonthlyPriceRequest(
+        new MonthlyPriceFamilyKey(java.time.YearMonth.of(2026,10),
+            "COMMERCIAL","CORRECTION",null,"件","CNY",TaxBasis.EXCLUDED,null),
+        "210",NonCuConditions.empty(),java.math.BigDecimal.ONE);
+    var context = new MonthlyMaterialPrices.Context("COMMERCIAL","CORRECTION",1L,"TOP",
+        java.time.YearMonth.of(2026,10),java.time.LocalDateTime.of(2026,10,30,0,0),"fixture","210");
+    java.util.function.Supplier<MonthlyAdoptionPlan.Selection> adopt = () -> {
+      var selection = monthly.resolveCandidates(context,java.util.Set.of(request)).values().get(request).selection();
+      return monthly.adopt(context,new MonthlyAdoptionPlan(
+          java.util.Map.of(request,selection), java.util.List.of(new MonthlyAdoptionPlan.Use("root",request,java.math.BigDecimal.ONE)),java.util.Set.of()))
+          .plan().selections().get(request);
+    };
+    var old = adopt.get();
+    assertThat(old.fact().price()).isEqualByComparingTo("115.979");
+    var originalRow = jdbc.queryForMap("SELECT source_evidence_json,first_use_json,unit_price,created_at FROM lp_material_monthly_price WHERE id=?",old.monthlyPriceId());
+    service = service(sources, new FinanceMonthlyPriceRefreshService(jdbc,codec) {
+      @Override public int refresh(FinanceFactorImportContext context,long batchId) {
+        super.refresh(context,batchId); throw new IllegalStateException("controlled refresh rollback");
+      }
+    });
+    var corrected = changedPcu(116);
+    assertThatThrownBy(()->publishCommercial(corrected)).hasMessageContaining("controlled refresh rollback");
+    assertThat(service.latest(commercial).getId()).isEqualTo(first.batchId());
+    assertThat(monthly.lookup(java.util.Set.of(request)).values().get(request)).isEqualTo(old);
+    service = service(sources,refresh);
+    var second = publishCommercial(corrected);
+    assertThat(second.revision()).isEqualTo(2);
+    assertThat(monthly.lookup(java.util.Set.of(request)).missing()).contains(request);
+    var current = adopt.get();
+    assertThat(current.fact().price()).isEqualByComparingTo("116");
+    assertThat(current.monthlyPriceId()).isNotEqualTo(old.monthlyPriceId());
+    assertThat(publishCommercial(corrected).unchanged()).isTrue();
+    assertThat(adopt.get()).isEqualTo(current);
+    assertThat(monthly.readByIds("COMMERCIAL",java.util.Set.of(old.monthlyPriceId())).get(old.monthlyPriceId())).isEqualTo(old);
+    assertThat(jdbc.queryForMap("SELECT source_evidence_json,first_use_json,unit_price,created_at FROM lp_material_monthly_price WHERE id=?",old.monthlyPriceId())).isEqualTo(originalRow);
+    assertThatThrownBy(()->jdbc.update("UPDATE lp_material_monthly_price SET unit_price=999 WHERE id=?",old.monthlyPriceId())).hasMessageContaining("MPP_MONTHLY_PRICE_IMMUTABLE");
+    assertThatThrownBy(()->jdbc.update("UPDATE lp_material_monthly_price SET superseded_by_finance_batch_id=NULL WHERE id=?",old.monthlyPriceId())).hasMessageContaining("MPP_MONTHLY_PRICE_IMMUTABLE");
   }
 
   @Test
@@ -899,6 +977,10 @@ class FinanceFactorPublicationIntegrationTest {
   }
 
   private static FinanceFactorPublicationService service(FactorRowRefMapper sourceMapper) {
+    return service(sourceMapper, mock(FinanceMonthlyPriceRefreshService.class));
+  }
+
+  private static FinanceFactorPublicationService service(FactorRowRefMapper sourceMapper, FinanceMonthlyPriceRefreshService monthly) {
     var canonical = new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl());
     return new FinanceFactorPublicationService(
         new FinanceFactorWorkbookParser(canonical),
@@ -913,7 +995,7 @@ class FinanceFactorPublicationIntegrationTest {
             effectiveSessions, new ObjectMapper().findAndRegisterModules()),
             com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(effectiveSessions, transactions, new ObjectMapper().findAndRegisterModules()),
             com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(effectiveSessions, new ObjectMapper().findAndRegisterModules()),
-            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(effectiveSessions, transactions, new ObjectMapper().findAndRegisterModules()));
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(effectiveSessions, transactions, new ObjectMapper().findAndRegisterModules()), monthly);
   }
 
   private static FactorPriceScope scope(String org, String scheme, Condition condition) {

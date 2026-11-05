@@ -46,7 +46,39 @@ public class SupplementBomAvailabilityResolver {
     if (versions == null || versions.isEmpty()) {
       return null;
     }
-    QuoteBomSupplementVersion version = versions.getFirst();
+    return availability(versions.getFirst(), costPeriodMonth);
+  }
+
+  /** 月度调价允许沿用该报价产品仍在复用有效期内的已确认图库版本。 */
+  public BomAvailability resolveForMonthlyReprice(
+      Long oaFormItemId, QuoteBomContext context, BomAvailability u9Availability) {
+    if (oaFormItemId == null || context == null
+        || u9Availability != null && u9Availability.isAvailable()) return null;
+    YearMonth period = YearMonth.parse(context.costPeriodMonth());
+    var versions = versionMapper.selectList(
+        Wrappers.<QuoteBomSupplementVersion>lambdaQuery()
+            .eq(QuoteBomSupplementVersion::getOaFormItemId, oaFormItemId)
+            .eq(QuoteBomSupplementVersion::getQuoteProductCode, context.productCode())
+            .eq(QuoteBomSupplementVersion::getMaterialOrgCode, context.organization().materialOrganizationCode())
+            .eq(QuoteBomSupplementVersion::getSupplementScope, FULL_BOM_SCOPE)
+            .eq(QuoteBomSupplementVersion::getVersionStatus, "APPROVED")
+            .eq(QuoteBomSupplementVersion::getActiveFlag, 1)
+            .isNotNull(QuoteBomSupplementVersion::getCompositionFingerprint)
+            .ne(QuoteBomSupplementVersion::getCompositionFingerprint, "")
+            .le(QuoteBomSupplementVersion::getPeriodMonth, period.toString())
+            .ge(QuoteBomSupplementVersion::getReuseValidUntil, period.atDay(1))
+            .and(q -> q.isNull(QuoteBomSupplementVersion::getEffectiveFrom)
+                .or().le(QuoteBomSupplementVersion::getEffectiveFrom, period.atEndOfMonth()))
+            .and(q -> q.isNull(QuoteBomSupplementVersion::getEffectiveTo)
+                .or().ge(QuoteBomSupplementVersion::getEffectiveTo, period.atDay(1)))
+            .orderByDesc(QuoteBomSupplementVersion::getPeriodMonth)
+            .orderByDesc(QuoteBomSupplementVersion::getReviewedAt)
+            .orderByDesc(QuoteBomSupplementVersion::getId)
+            .last("LIMIT 1"));
+    return versions == null || versions.isEmpty() ? null : availability(versions.getFirst(), period.toString());
+  }
+
+  private BomAvailability availability(QuoteBomSupplementVersion version, String costPeriodMonth) {
     YearMonth period = YearMonth.parse(costPeriodMonth);
     BomAvailability result = new BomAvailability();
     result.setAvailable(true);

@@ -513,6 +513,24 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     MonthlyPriceFolderBrowserAcceptance.await(jdbc,httpPort,jwt,key,form,item,material,month);
   }
 
+  @Test
+  @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named="finance.correction.browser.state",matches=".+")
+  void financeCorrectionBrowserUsesFreshQuotationAndPreservesBothCostVersions() {
+    String key="FIN-CORR-"+UUID.randomUUID().toString().substring(0,8),material=key+"-PART";
+    String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    repriceProperties.setGoLiveMonths(Map.of("COMMERCIAL",month));
+    var date=YearMonth.parse(month).atDay(25).atTime(12,0);
+    jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,'COMMERCIAL',80000)",key);
+    long form=jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?",Long.class,key);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,business_unit_type) VALUES(?,?,'COMMERCIAL')",form,key);
+    long item=jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+    MonthlyQuotationSourceFixture.copperLinked(jdbc,linkedRules,linkedSnapshots,effectivePrices,transactions,material,month,"件");
+    jdbc.update("UPDATE lp_factor_row_ref r JOIN lp_finance_effective_price e ON e.finance_batch_id=r.factor_upload_batch_id SET r.factor_name='电解铜',r.short_name='1#Cu',r.price_source='AVG' WHERE e.material_code=? AND r.factor_name IS NULL",material);
+    ordinarySources(key,material,form,date);
+    buildOriginalFixture(form,item,key,month,date,material,Map.of());
+    FinanceCorrectionBrowserAcceptance.await(jdbc,httpPort,jwt,key,form,item,material,month);
+  }
+
   @Test void inquiryRunsThroughRealCostingAndMonthlyRepriceRefreshesOldRules() throws Exception {
     String key="INQ-FLOW-"+UUID.randomUUID().toString().substring(0,8),material=key+"-PART";
     String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();

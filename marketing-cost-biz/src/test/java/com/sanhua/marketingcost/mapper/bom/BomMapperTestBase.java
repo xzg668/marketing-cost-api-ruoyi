@@ -289,6 +289,7 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/monthly-pricing/ods-price-source-schema.sql", "ODS-raw-source-fixtures");
       runScriptViaMysqlCli("/db/V344__monthly_material_price_single_table.sql", "V344");
       runScriptViaMysqlCli("/db/V354__invoice_price_import.sql", "V354");
+      runScriptViaMysqlCli("/db/V360__finance_correction_monthly_price.sql", "V360");
       runScriptViaMysqlCli("/db/V356__inquiry_price_sources.sql", "V356");
       runScriptViaMysqlCli("/db/V359__monthly_price_folder_import.sql", "V359");
       // One-time initialization of this fresh disposable database, including monthly reverse reads.

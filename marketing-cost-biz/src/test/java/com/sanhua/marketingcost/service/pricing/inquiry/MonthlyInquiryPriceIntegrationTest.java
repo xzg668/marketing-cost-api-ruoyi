@@ -40,7 +40,7 @@ class MonthlyInquiryPriceIntegrationTest {
         List.of(
             "V342__monthly_material_price_storage.sql",
             "V344__monthly_material_price_single_table.sql",
-            "V354__invoice_price_import.sql")) {
+            "V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")) {
       db.mysql.copyFileToContainer(
           MountableFile.forClasspathResource("db/" + script), "/tmp/inquiry-monthly.sql");
       var result =

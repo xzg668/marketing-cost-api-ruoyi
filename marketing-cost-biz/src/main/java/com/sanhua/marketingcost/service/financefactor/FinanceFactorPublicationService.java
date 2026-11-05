@@ -46,6 +46,7 @@ public class FinanceFactorPublicationService {
       effectivePrices;
   private final com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices;
   private final com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices;
+  private final FinanceMonthlyPriceRefreshService monthlyPrices;
 
   public FinanceFactorPublicationService(
       FinanceFactorWorkbookParser parser,
@@ -59,7 +60,9 @@ public class FinanceFactorPublicationService {
       com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService effectivePrices,
       com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices,
       com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceService settlementPrices,
-      com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices) {
+      com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices,
+      FinanceMonthlyPriceRefreshService monthlyPrices) {
+    this.monthlyPrices = monthlyPrices;
     this.inquiryPrices = inquiryPrices;
     this.settlementPrices = settlementPrices;
     this.parser = parser;
@@ -183,6 +186,7 @@ public class FinanceFactorPublicationService {
     if ("210".equals(context.priceOrgCode())) settlementPrices.generate(context.businessUnitType(), operator);
     if ("210".equals(context.priceOrgCode()))
       inquiryPrices.refreshInTransaction(context.businessUnitType(), context.priceMonth(), "FINANCE_PUBLICATION", operator);
+    monthlyPrices.refresh(context, publication.batchId());
     return new Publication(
         publication.batchId(),
         publication.revision(),

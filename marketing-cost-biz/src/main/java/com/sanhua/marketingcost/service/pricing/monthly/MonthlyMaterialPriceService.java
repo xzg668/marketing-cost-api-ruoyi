@@ -215,6 +215,7 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
   }
 
   private void lockAndCheckScope(MonthlyAdoptionPlan planned) {
+    storage.lockAndCheckFinance(planned);
     var observed=new LinkedHashSet<>(planned.selections().keySet());
     observed.addAll(planned.ordinaryScopeRequests());
     storage.lockFamilies(observed.stream().map(MonthlyPriceRequest::family).toList());
@@ -249,6 +250,8 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     if(!active.add(request))throw failure(Failure.INVALID_PLAN,"Cyclic price dependency");
     var proposed=planned.selections().get(request);
     if(proposed==null)throw failure(Failure.INVALID_PLAN,"Price dependency absent from plan");
+    if(proposed.monthlyPriceId()!=null)
+      throw failure(Failure.REPLAN_REQUIRED,"已采用月价不再适用于当前取价，请重新取价");
     var dependencies=new ArrayList<Dependency>();
     for(var child:proposed.fact().dependencies())
       dependencies.add(new Dependency(child,save(child,context,planned,existing,resolved,rows,active).monthlyPriceId()));

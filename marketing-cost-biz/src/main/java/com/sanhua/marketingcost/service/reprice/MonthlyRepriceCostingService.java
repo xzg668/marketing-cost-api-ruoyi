@@ -38,6 +38,7 @@ public class MonthlyRepriceCostingService {
   private final ObjectMapper json;
   private final com.sanhua.marketingcost.service.costing.ProductCostingExecutionGuard executionGuard;
   private final TransactionTemplate transaction;
+  private final MonthlyRepriceBomReadScope bomReads;
 
   public MonthlyRepriceCostingService(MonthlyRepriceContractMapper tasks,
       MonthlyRepriceContractService contracts, MonthlyRepriceBomService boms,
@@ -46,11 +47,13 @@ public class MonthlyRepriceCostingService {
       FinancePricePrepareService finance, QuoteCuAdjustmentCalcService costing,
       QuoteCostRunVersionMapper versions, MonthlyCostVersionService savedCosts,
       ObjectMapper json, PlatformTransactionManager manager,
-      com.sanhua.marketingcost.service.costing.ProductCostingExecutionGuard executionGuard) {
+      com.sanhua.marketingcost.service.costing.ProductCostingExecutionGuard executionGuard,
+      MonthlyRepriceBomReadScope bomReads) {
     this.tasks=tasks; this.contracts=contracts; this.boms=boms; this.effective=effective;
     this.persistence=persistence; this.settlement=settlement; this.prices=prices; this.finance=finance;
     this.costing=costing; this.versions=versions; this.savedCosts=savedCosts; this.json=json;
     this.executionGuard=executionGuard;
+    this.bomReads=bomReads;
     transaction=new TransactionTemplate(manager);
     transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     transaction.setTimeout(120);
@@ -85,6 +88,7 @@ public class MonthlyRepriceCostingService {
       var asOf=YearMonth.from(batch.getPriceAsOfTime()).equals(month) ? batch.getPriceAsOfTime()
           : month.atEndOfMonth().atTime(23,59,59);
       var calculation=new MonthlyRepriceCalculation(no,task.getCalcObjectKey(),input,prepared.bom(),asOf);
+      return bomReads.use(calculation, () -> {
       var candidate=effective.prepareRepriceCandidate(calculation);
       var tree=persistence.persistCurrentVariant(new QuoteEffectiveBomPersistenceRequest(
           prepared.bom().getSyncRecordId(),null,candidate.alternativeSelectionIdByGroupKey(),candidate.candidateVariant()));
@@ -105,6 +109,7 @@ public class MonthlyRepriceCostingService {
       if (versions.updateById(version)!=1) throw new IllegalStateException("调价版本发布失败");
       contracts.complete(no,taskId,execution,version.getId());
       return savedCosts.read(task.getBusinessUnitType(),version.getId());
+      });
     }));
   }
   private MonthlyRepriceBomService.Input readInput(String saved) {

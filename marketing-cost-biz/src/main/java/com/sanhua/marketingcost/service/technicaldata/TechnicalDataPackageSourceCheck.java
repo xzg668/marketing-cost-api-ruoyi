@@ -21,18 +21,26 @@ public class TechnicalDataPackageSourceCheck {
   private final MaterialMasterRawMapper materials;
   private final OaMessageCodec json;
   private final TechnicalDataSharedModules shared;
+  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom;
+  private final com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails;
 
   public TechnicalDataPackageSourceCheck(TechnicalDataPackageSourceQuery sources,
       ElectronicDrawingWorkflowContextPort drawings, QuoteBomSupplementDetailMapper details,
-      MaterialMasterRawMapper materials, OaMessageCodec json, TechnicalDataSharedModules shared) {
+      MaterialMasterRawMapper materials, OaMessageCodec json, TechnicalDataSharedModules shared,
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
+      com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails) {
     this.sources = sources; this.drawings = drawings;
     this.details = details; this.materials = materials; this.json = json; this.shared = shared;
+    this.repriceBom = repriceBom;
+    this.monthlyDetails = monthlyDetails;
   }
 
   public TechnicalDataSourceFact check(QuoteBomReadContext context, TechnicalDataAvailability original) {
     try {
       if (original == TechnicalDataAvailability.ERROR) return fact(context, TechnicalDataAvailability.ERROR, "U9 原始资料查询失败，请重查", null);
       if (original == TechnicalDataAvailability.AVAILABLE) {
+        Long snapshotId = repriceBom.snapshotId(context);
+        if (snapshotId != null) return checkSavedPackage(context, snapshotId);
         var packaging = sources.inspectProduct(context.productCode(), context.accountingMonth(), context.businessUnitType(), context.priceOrgCode());
         boolean available = !packaging.sources().isEmpty() && packaging.missingParents().isEmpty();
         return fact(context, available ? TechnicalDataAvailability.AVAILABLE : TechnicalDataAvailability.MISSING,
@@ -51,14 +59,15 @@ public class TechnicalDataPackageSourceCheck {
       }
       // 包装关系属于实际采用的图库。共享办理时新报价行没有独立图库准备记录，
       // 必须沿原报价行/月检查；共享版本是否可消费仍由核算来源校验统一保证。
-      var drawing = drawings.load(sharedSource ? owner.quoteItemId() : context.oaFormItemId(),
+      var drawing = repriceBom.drawing(context, () -> drawings.load(sharedSource ? owner.quoteItemId() : context.oaFormItemId(),
           context.businessUnitType(), context.priceOrgCode(),
-          sharedSource ? owner.accountingMonth() : context.accountingMonth());
+          sharedSource ? owner.accountingMonth() : context.accountingMonth()));
       if (drawing == null || drawing.sourceVersionId() == null || drawing.compositionFingerprint() == null) {
         return fact(context, TechnicalDataAvailability.MISSING,
             "本产品无 U9 原始 BOM，需要补录本次包装", "U9_NOT_FOUND:" + context.productCode());
       }
-      var rows = details.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<com.sanhua.marketingcost.entity.QuoteBomSupplementDetail>lambdaQuery()
+      var rows = repriceBom.drawingRows(context);
+      if (rows == null) rows = details.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<com.sanhua.marketingcost.entity.QuoteBomSupplementDetail>lambdaQuery()
           .eq(com.sanhua.marketingcost.entity.QuoteBomSupplementDetail::getSupplementVersionId, drawing.sourceVersionId()));
       if (rows.isEmpty()) return fact(context, TechnicalDataAvailability.ERROR, "图库 BOM 明细为空，请重新检查", null);
       // 只识别本棵树涉及的当前组织料号，避免每次资料检查都扫描整份料品主档。
@@ -77,6 +86,26 @@ public class TechnicalDataPackageSourceCheck {
     } catch (RuntimeException exception) {
       return fact(context, TechnicalDataAvailability.ERROR, "包装来源查询失败，请核实正式 BOM 后重查", null);
     }
+  }
+
+  /** 调价已有明确月度结构，包装检查直接读取这一份，不再选取原始 U9 BOM。 */
+  private TechnicalDataSourceFact checkSavedPackage(QuoteBomReadContext context, Long snapshotId) {
+    var rows = monthlyDetails.load(snapshotId);
+    if (rows.isEmpty()) return fact(context, TechnicalDataAvailability.ERROR, "已选定的月度 BOM 明细为空", null);
+    var codes = rows.stream().filter(row -> Objects.equals(row.getPriceOrgCode(), context.priceOrgCode()))
+        .map(row -> row.getMaterialCode()).filter(StringUtils::hasText).collect(Collectors.toSet());
+    var packageCodes = codes.isEmpty() ? Set.<String>of() : materials.selectByLatestBatchAndCodes(
+        codes, null, context.materialOrganizationCode()).stream()
+        .filter(row -> "包装组件".equals(row.getMainCategoryName())).map(MaterialMasterRaw::getMaterialCode)
+        .collect(Collectors.toSet());
+    var nodes = rows.stream().map(row -> new TechnicalDataPackageStructure.Node(row.getMaterialCode(),
+        row.getParentCode(), row.getPath(), row.getLevel(), row.getPriceOrgCode())).toList();
+    var missing = TechnicalDataPackageStructure.missingParents(nodes, packageCodes);
+    boolean available = !packageCodes.isEmpty() && missing.isEmpty();
+    return fact(context, available ? TechnicalDataAvailability.AVAILABLE : TechnicalDataAvailability.MISSING,
+        available ? "沿用本次已选定 BOM 中的包装关系"
+            : missingMessage(missing.stream().map(TechnicalDataPackageStructure.Node::code).toList()),
+        "MONTHLY_BOM:" + snapshotId);
   }
 
   private String missingMessage(java.util.List<String> codes) {

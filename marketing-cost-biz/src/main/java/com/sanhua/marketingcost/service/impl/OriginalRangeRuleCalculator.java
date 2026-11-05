@@ -55,7 +55,11 @@ public final class OriginalRangeRuleCalculator {
             anchor.upperInclusive());
     // 整数闭区间间的小数间隙仍然是缺档，不能因推算而补齐原稿未定义的边界。
     if (!selected.contains(factorValue)) throw problem(rule, "推算档间存在缺档：" + factorValue);
-    BigDecimal price = proof.anchor().price().add(proof.priceStep().multiply(steps));
+    BigDecimal price =
+        proof.rounding() == null
+            ? proof.anchor().price().add(proof.priceStep().multiply(steps))
+            : proof.rounding().anchorBeforeRounding().add(proof.priceStep().multiply(steps))
+                .setScale(proof.rounding().scale(), RoundingMode.HALF_UP);
     return result(rule, factorValue, price, selected, proof.anchor(), proof);
   }
 
@@ -68,6 +72,10 @@ public final class OriginalRangeRuleCalculator {
       if (bands.get(i).price() == null || bands.get(i).problem() != null) start = i + 1;
     if (bands.size() - start < 4) return null;
     var evidence = bands.subList(start, bands.size());
+    // 有显式 ROUND 时，先从原公式还原舍入前的连续档差，再按末档公式舍入。
+    // 不能将末档已舍入的价格当作连续累加起点，也不能从显示精度猜 ROUND。
+    if (OriginalRangeRoundingProof.hasRounding(evidence.getLast()))
+      return roundedBands(rule, evidence);
     Extrapolation full = stableBands(rule, evidence, "CONTIGUOUS_ORIGINAL_BANDS");
     if (full != null) return full;
     // 部分原稿低价表头有错误。仅当高档连续稳定、且原稿文字步长与本材料档差格
@@ -82,46 +90,41 @@ public final class OriginalRangeRuleCalculator {
   }
 
   private boolean sourceConfirms(Rule rule, Extrapolation proof) {
-    if (rule.extrapolationSources() == null) return false;
-    String step = proof.factorStep().stripTrailingZeros().toPlainString();
-    var number =
-        java.util.regex.Pattern.compile(
-            "(?<![0-9.])" + java.util.regex.Pattern.quote(step) + "(?![0-9.])");
-    boolean note =
-        rule.extrapolationSources().stream()
-            .anyMatch(
-                source ->
-                    (source.rawValue().contains("上涨")
-                            || source.rawValue().contains("下降")
-                            || source.rawValue().contains("下浮"))
-                        && number.matcher(source.rawValue()).find());
-    boolean delta =
-        rule.extrapolationSources().stream()
-            .anyMatch(
-                source -> {
-                  try {
-                    BigDecimal value = new BigDecimal(source.rawValue());
-                    return value.subtract(proof.priceStep()).abs().compareTo(FLOAT_TOLERANCE) <= 0
-                        || !rule.taxIncluded()
-                            && value
-                                    .subtract(proof.priceStep().multiply(VAT))
-                                    .abs()
-                                    .compareTo(FLOAT_TOLERANCE)
-                                <= 0;
-                  } catch (NumberFormatException error) {
-                    return false;
-                  }
-                });
-    return note && delta;
+    return OriginalRangeRoundingProof.sourceConfirms(rule, proof);
+  }
+
+  private Extrapolation roundedBands(Rule rule, List<Band> evidence) {
+    var values = new java.util.ArrayList<BigDecimal>();
+    for (var band : evidence) {
+      var value = OriginalRangeRoundingProof.beforeRounding(band);
+      if (value == null) return null;
+      values.add(value);
+    }
+    int scale = OriginalRangeRoundingProof.scale(evidence.getLast());
+    for (int offset = 0; offset <= evidence.size() - 4; offset++) {
+      var tail = evidence.subList(offset, evidence.size());
+      var proof = stableBands(rule, tail, values.subList(offset, values.size()),
+          offset == 0 ? "ORIGINAL_FORMULAS_BEFORE_ROUNDING" : "SOURCE_STEP_AND_FORMULAS_BEFORE_ROUNDING",
+          new Rounding(values.getLast(), scale));
+      if (proof == null || OriginalRangeRoundingProof.contradictingNote(rule, proof)) continue;
+      if (offset == 0 || sourceConfirms(rule, proof)
+          || OriginalRangeRoundingProof.lastFormulaConfirms(rule, proof)) return proof;
+    }
+    return null;
   }
 
   private Extrapolation stableBands(Rule rule, List<Band> evidence, String basis) {
+    return stableBands(rule, evidence, evidence.stream().map(Band::price).toList(), basis, null);
+  }
+
+  private Extrapolation stableBands(
+      Rule rule, List<Band> evidence, List<BigDecimal> values, String basis, Rounding rounding) {
     Band first = evidence.getFirst(), last = evidence.getLast();
     BigDecimal step = evidence.get(1).bounds().low().subtract(first.bounds().low());
     if (step.signum() <= 0) return null;
     BigDecimal delta =
-        last.price()
-            .subtract(first.price())
+        values.getLast()
+            .subtract(values.getFirst())
             .divide(BigDecimal.valueOf(evidence.size() - 1L), MathContext.DECIMAL128);
     if (delta.signum() < 0) return null;
     BigDecimal width = first.bounds().high().subtract(first.bounds().low());
@@ -133,8 +136,8 @@ public final class OriginalRangeRuleCalculator {
           || bounds.high().subtract(bounds.low()).compareTo(width) != 0
           || bounds.lowerInclusive() != first.bounds().lowerInclusive()
           || bounds.upperInclusive() != first.bounds().upperInclusive()
-          || band.price()
-                  .subtract(first.price().add(delta.multiply(n)))
+          || values.get(i)
+                  .subtract(values.getFirst().add(delta.multiply(n)))
                   .abs()
                   .compareTo(FLOAT_TOLERANCE)
               > 0) return null;
@@ -150,7 +153,8 @@ public final class OriginalRangeRuleCalculator {
         rule.taxIncluded(),
         List.copyOf(evidence),
         basis,
-        rule.extrapolationSources() == null ? List.of() : rule.extrapolationSources());
+        rule.extrapolationSources() == null ? List.of() : rule.extrapolationSources(),
+        rounding);
   }
 
   private Result result(
@@ -191,7 +195,11 @@ public final class OriginalRangeRuleCalculator {
       boolean taxIncluded,
       List<Band> evidence,
       String basis,
-      List<OriginalRangeWorkbookParser.CellSource> supportingSources) {}
+      List<OriginalRangeWorkbookParser.CellSource> supportingSources,
+      Rounding rounding) {}
+
+  /** 末档原公式的舍入位置；旧证据没有此字段时仍按其已保存的线性档差读取。 */
+  public record Rounding(BigDecimal anchorBeforeRounding, int scale) {}
 
   public record Result(
       BigDecimal factorValue,

@@ -25,6 +25,7 @@ public class TechnicalDataPublicSourceCheck {
   private final TechnicalDataManufacturingSourceQuery manufacturing;
   private final TechnicalDataPackageSourceCheck packaging;
   private final com.sanhua.marketingcost.service.NetLossRateQuery netLoss;
+  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom;
 
   public TechnicalDataPublicSourceCheck(
       CurrentU9BomGateway u9,
@@ -34,7 +35,9 @@ public class TechnicalDataPublicSourceCheck {
       TechnicalDataManufacturingSourceQuery manufacturing,
       TechnicalDataPackageSourceCheck packaging,
       com.sanhua.marketingcost.service.NetLossRateQuery netLoss, TechnicalDataSharedModules shared,
-      ElectronicDrawingSourceNodeRepository drawingSources) {
+      ElectronicDrawingSourceNodeRepository drawingSources,
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom) {
+    this.repriceBom = repriceBom;
     this.shared = shared;
     this.u9 = u9;
     this.salary = salary;
@@ -48,6 +51,10 @@ public class TechnicalDataPublicSourceCheck {
 
   /** BOM 组装和成本输入共同读取公共资料，价格在组树后的统一价格准备中检查。 */
   public List<TechnicalDataSourceFact> checkDataSources(QuoteBomReadContext context) {
+    return repriceBom.facts(context, () -> checkSelectedSources(context));
+  }
+
+  private List<TechnicalDataSourceFact> checkSelectedSources(QuoteBomReadContext context) {
     List<TechnicalDataSourceFact> facts = new ArrayList<>();
     var originalBom = checkOriginalBom(context, facts);
     facts.add(packaging.check(context, originalBom));
@@ -61,7 +68,7 @@ public class TechnicalDataPublicSourceCheck {
       QuoteBomReadContext context, List<TechnicalDataSourceFact> facts) {
     CurrentU9BomResult result;
     try {
-      result = u9.read(context);
+      result = repriceBom.original(context, () -> u9.read(context));
     } catch (RuntimeException exception) {
       result = CurrentU9BomResult.error("U9 原始 BOM 查询失败，请核实来源后重查");
     }
@@ -115,10 +122,12 @@ public class TechnicalDataPublicSourceCheck {
       // 已分派或跨报价共享的技术资料仍走原负责人的提交、确认校验。
       // 图库模块只检查明细是否取得；料号匹配、制造件原料和组树完整性由各自核算检查负责。
       if (shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM") == null) {
-        var drawing = drawingContexts.load(context.oaFormItemId(), context.businessUnitType(),
-            context.priceOrgCode(), context.accountingMonth());
+        var drawing = repriceBom.drawing(context, () -> drawingContexts.load(context.oaFormItemId(),
+            context.businessUnitType(), context.priceOrgCode(), context.accountingMonth()));
         if (drawing != null && drawing.active() && drawing.sourceVersionId() != null) {
-          boolean hasDetails = !drawingSources.findByVersionId(drawing.sourceVersionId()).isEmpty();
+          var savedRows = repriceBom.drawingRows(context);
+          boolean hasDetails = savedRows == null
+              ? !drawingSources.findByVersionId(drawing.sourceVersionId()).isEmpty() : !savedRows.isEmpty();
           String reference = codec.write(Map.of(
               "sourceVersionId", drawing.sourceVersionId(),
               "workflowStage", Objects.toString(drawing.workflowStage(), ""),
@@ -158,6 +167,25 @@ public class TechnicalDataPublicSourceCheck {
           "U9 原始来源尚未核实，不能判定缺原材料",
           null);
     try {
+      var savedRows = repriceBom.drawingRows(context);
+      if (savedRows != null) {
+        if (savedRows.isEmpty()) return fact(context, TechnicalDataModuleType.MANUFACTURING,
+            TechnicalDataAvailability.ERROR, "MANUFACTURING_SAVED_BOM_EMPTY", "已确认的图库 BOM 明细为空，请核实保存版本", null);
+        var childrenByParent = savedRows.stream().filter(row -> row.getParentCode() != null)
+            .collect(java.util.stream.Collectors.groupingBy(row -> row.getParentCode()));
+        var missing = savedRows.stream().filter(row -> "制造件".equals(row.getShapeAttr()))
+            .filter(parent -> parent.getPath() == null || parent.getLevel() == null || childrenByParent.getOrDefault(parent.getMaterialCode(), List.of()).stream().noneMatch(child ->
+                child.getPath() != null && child.getPath().startsWith(parent.getPath())
+                    && Objects.equals(child.getLevel(), parent.getLevel() + 1)
+                    && Objects.equals(child.getParentCode(), parent.getMaterialCode())))
+            .map(row -> row.getMaterialCode()).distinct().toList();
+        return fact(context, TechnicalDataModuleType.MANUFACTURING,
+            missing.isEmpty() ? TechnicalDataAvailability.AVAILABLE : TechnicalDataAvailability.MISSING,
+            missing.isEmpty() ? "MANUFACTURING_SAVED_BOM_AVAILABLE" : "MANUFACTURING_RAW_MISSING",
+            missing.isEmpty() ? "沿用本次已确认 BOM 的制造件下级关系"
+                : "已确认 BOM 中制造件缺少下级关系：" + String.join("、", missing),
+            "MONTHLY_BOM:" + repriceBom.snapshotId(context));
+      }
       var owner = shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM");
       boolean sharedSource = owner != null && (!Objects.equals(owner.quoteItemId(), context.oaFormItemId())
           || !Objects.equals(owner.accountingMonth(), context.accountingMonth()));
@@ -166,8 +194,9 @@ public class TechnicalDataPublicSourceCheck {
         return fact(context, TechnicalDataModuleType.MANUFACTURING, TechnicalDataAvailability.ERROR,
             "MANUFACTURING_SOURCE_SCOPE_MISMATCH", "原图库组织与本报价不一致，请核实来源", null);
       }
-      var drawing = drawingContexts.load(sharedSource ? owner.quoteItemId() : context.oaFormItemId(),
-          context.businessUnitType(), context.priceOrgCode(), sharedSource ? owner.accountingMonth() : context.accountingMonth());
+      var drawing = repriceBom.drawing(context, () -> drawingContexts.load(
+          sharedSource ? owner.quoteItemId() : context.oaFormItemId(), context.businessUnitType(),
+          context.priceOrgCode(), sharedSource ? owner.accountingMonth() : context.accountingMonth()));
       if (drawing == null || drawing.sourceVersionId() == null)
         return fact(
             context,

@@ -190,7 +190,7 @@ class ScrapPriceGenerationIntegrationTest {
             FinanceEffectivePriceTestSupport.service(sql, json),
             generation,
             com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json),
-            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, transactions, json));
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, transactions, json), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService.class));
     copper =
         new FinanceFactorCuAdjustmentService(monthly, batches, identities, sources, publication);
   }

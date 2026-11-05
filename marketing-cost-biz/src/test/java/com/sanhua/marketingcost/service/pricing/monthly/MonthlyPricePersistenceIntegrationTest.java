@@ -86,7 +86,7 @@ class MonthlyPricePersistenceIntegrationTest {
   static boolean migrated;
   static synchronized void migrate() throws Exception {
     if(migrated)return;
-    for(String file:List.of(MIGRATION,"db/V344__monthly_material_price_single_table.sql","db/V354__invoice_price_import.sql")) {
+    for(String file:List.of(MIGRATION,"db/V344__monthly_material_price_single_table.sql","db/V354__invoice_price_import.sql","db/V360__finance_correction_monthly_price.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource(file),"/tmp/mpp-storage.sql");
       var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_storage_test < /tmp/mpp-storage.sql");
       assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
@@ -549,7 +549,7 @@ class MonthlyPricePersistenceIntegrationTest {
 
   @Test void storageQueriesHavePhysicalIndexesAndNoCascadingHistoryDeletes() throws Exception {
     migrate();
-    assertIndex("lp_material_monthly_price","uk_monthly_price_identity",List.of("family_hash","applicability_hash","invoice_revision"));
+    assertIndex("lp_material_monthly_price","uk_monthly_price_identity",List.of("family_hash","applicability_hash","invoice_revision","finance_revision"));
     assertIndex("lp_material_monthly_price","idx_monthly_price_query",List.of("business_unit_type","pricing_month","material_code","id"));
     assertIndex("lp_material_monthly_price","idx_monthly_price_source",List.of("household_source_id","id"));
     assertIndex("lp_household_inquiry_price","uk_household_current",List.of("business_unit_type","current_material"));

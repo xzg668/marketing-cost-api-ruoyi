@@ -37,6 +37,28 @@ public class MonthlyPriceStorage {
     this.mapper=mapper;this.codec=codec;this.links=links;
   }
 
+  /** Publication takes the same catalog lock exclusively, before touching monthly selections. */
+  public void lockAndCheckFinance(MonthlyAdoptionPlan planned) {
+    requireAdoptionTransaction();
+    var references=new LinkedHashMap<MonthlyPriceRequest,Set<MonthlyFinanceReferences.Reference>>();
+    planned.selections().forEach((request,selection)->{
+      var refs=MonthlyFinanceReferences.read(codec.decode(codec.wrap(selection.fact().evidence().json()),JsonNode.class));
+      if(!refs.isEmpty())references.put(request,refs);
+    });
+    references.keySet().stream().map(request->request.family().businessUnitType()).distinct().sorted()
+        .forEach(mapper::lockFinancePublication);
+    var current=new HashMap<String,Long>();
+    references.forEach((request,refs)->{
+      if(planned.selections().get(request).monthlyPriceId()!=null)return;
+      for(var ref:refs) {
+        var family=request.family();String key=family.businessUnitType()+":"+family.month()+":"+ref.organization();
+        Long batch=current.computeIfAbsent(key,ignored->mapper.currentFinanceBatch(family.businessUnitType(),ref.organization(),family.month().toString()));
+        if(!Objects.equals(batch,ref.batchId()))
+          throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,"财务基价在采用前已更新，请重新取价");
+      }
+    });
+  }
+
   /** REPEATABLE_READ next-key locks cover existing rows and absent-key gaps, without lock rows. */
   public void lockFamilies(Collection<MonthlyPriceFamilyKey> families) {
     requireAdoptionTransaction();
@@ -71,6 +93,7 @@ public class MonthlyPriceStorage {
     // Even a newly available higher source needs a new identity after an old order was superseded.
     // Its typed evidence stays unchanged, and later invoice imports never invalidate that higher source.
     row.setInvoiceRevision(revision);
+    row.setFinanceRevision(mapper.financeRevision(hash));
     row.setFamilyHash(hash);row.setPricingMonth(key.month().toString());row.setBusinessUnitType(key.businessUnitType());
     row.setMaterialCode(key.materialCode());row.setSpecification(key.specification());row.setPricingUnit(key.unit());
     row.setCurrency(key.currency());row.setTaxBasis(key.taxBasis().name());row.setRequestedSupplierCode(key.requestedSupplierCode());

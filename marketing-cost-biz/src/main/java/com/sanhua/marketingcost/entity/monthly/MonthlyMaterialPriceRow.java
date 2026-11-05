@@ -11,6 +11,8 @@ import java.time.LocalDateTime;
 public class MonthlyMaterialPriceRow {
   private Long id;
   private Long invoiceRevision;
+  private Long financeRevision;
+  private Long supersededByFinanceBatchId;
   private String applicabilityHash;
   private String applicabilityJson;
   private Integer organizationMask;

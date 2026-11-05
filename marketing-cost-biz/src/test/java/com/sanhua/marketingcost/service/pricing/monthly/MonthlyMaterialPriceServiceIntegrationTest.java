@@ -91,6 +91,9 @@ class MonthlyMaterialPriceServiceIntegrationTest {
                 + " mpp_module_test < /tmp/monthly-use.sql");
     assertThat(scopePatch.getExitCode()).withFailMessage(scopePatch.getStderr()).isZero();
     new ResourceDatabasePopulator(new ClassPathResource("db/V354__invoice_price_import.sql")).execute(ds);
+    MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/V360__finance_correction_monthly_price.sql"),"/tmp/finance-correction.sql");
+    var financePatch=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot mpp_module_test < /tmp/finance-correction.sql");
+    assertThat(financePatch.getExitCode()).withFailMessage(financePatch.getStderr()).isZero();
     var config = new org.apache.ibatis.session.Configuration();
     config.setMapUnderscoreToCamelCase(true);
     config.addMapper(MonthlyPriceStorageMapper.class);

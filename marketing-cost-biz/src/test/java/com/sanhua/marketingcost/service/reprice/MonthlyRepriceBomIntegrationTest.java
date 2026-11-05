@@ -97,6 +97,7 @@ class MonthlyRepriceBomIntegrationTest {
   }
 
   @Test void targetMonthKeepsCompleteRepeatedChildPathsThenNextMonthAcquiresNewStructure() {
+    supplement("2025-12","APPROVED");
     var batch=launch();var task=task(batch);
     var first=repricing.prepare(batch.getRepriceNo(),task.getId());assertThat(first.ready()).isTrue();
     long id=first.bom().getSyncRecordId();
@@ -127,22 +128,59 @@ class MonthlyRepriceBomIntegrationTest {
     verify(LIVE_U9,times(2)).readLive(any());
   }
 
-  @Test void missingU9WaitsForApprovedTargetMonthSupplementWithoutUsingLastMonthOrDraft() {
+  @Test void missingU9ReusesLatestUnexpiredApprovedDrawingAndPreservesItsSourceMonth() {
     var batch=launch();var task=task(batch);when(LIVE_U9.readLive(any())).thenReturn(CurrentU9BomResult.notFound("目标月U9无BOM，请通过图库补录并确认"));
     supplement("2025-12","APPROVED");supplement("2026-01","DRAFT");
+    long sourceId=jdbc.queryForObject("SELECT id FROM lp_quote_bom_supplement_version WHERE version_status='APPROVED'",Long.class);
+    supplement("2026-02","APPROVED");
     var before=jdbc.queryForList("SELECT * FROM lp_quote_cost_run_version");
-    var pending=repricing.prepare(batch.getRepriceNo(),task.getId());
-    assertThat(pending.ready()).isFalse();assertThat(pending.problem()).contains("图库");
-    var input=jdbc.queryForObject("SELECT JSON_EXTRACT(request_snapshot_json,'$.bomInput') FROM lp_cost_run_task WHERE id=?",String.class,task.getId());
-    supplement("2026-01","APPROVED");
-    form.setCustomer("CHANGED");item.setPackageMethod("CHANGED");
+    var sourceBefore=jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_version");
     var available=repricing.prepare(batch.getRepriceNo(),task.getId());
-    assertThat(available.ready()).isTrue();assertThat(available.bom().getBomSource()).isEqualTo("ELECTRONIC_DRAWING_BOM");
+    assertThat(available.ready()).isTrue();
+    assertThat(available.bom().getBomSource()).isEqualTo("ELECTRONIC_DRAWING_BOM");
+    assertThat(available.bom().getCostPeriodMonth()).isEqualTo("2026-01");
+    assertThat(available.bom().getSyncBatchId()).isEqualTo("SUPPLEMENT_VERSION:"+sourceId);
+    var input=jdbc.queryForObject("SELECT JSON_EXTRACT(request_snapshot_json,'$.bomInput') FROM lp_cost_run_task WHERE id=?",String.class,task.getId());
+    form.setCustomer("CHANGED");item.setPackageMethod("CHANGED");
+    var again=repricing.prepare(batch.getRepriceNo(),task.getId());
+    assertThat(again.bom().getSyncRecordId()).isEqualTo(available.bom().getSyncRecordId());
     assertThat(available.bom().getCustomerCode()).isEqualTo("SAVED-CUSTOMER");
     assertThat(available.bom().getPackageMethod()).isEqualTo("BOX");
     assertThat(jdbc.queryForObject("SELECT JSON_EXTRACT(request_snapshot_json,'$.bomInput') FROM lp_cost_run_task WHERE id=?",String.class,task.getId())).isEqualTo(input);
     assertThat(jdbc.queryForList("SELECT * FROM lp_quote_cost_run_version")).isEqualTo(before);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_version")).isEqualTo(sourceBefore);
     verifyNoInteractions(STATUS);
+  }
+
+  @Test void targetMonthApprovedDrawingWinsOverPriorMonth() {
+    var batch=launch();
+    supplement("2025-12","APPROVED");supplement("2026-01","APPROVED");
+    long latestId=jdbc.queryForObject("SELECT MAX(id) FROM lp_quote_bom_supplement_version",Long.class);
+    when(LIVE_U9.readLive(any())).thenReturn(CurrentU9BomResult.notFound("missing"));
+    assertThat(repricing.prepare(batch.getRepriceNo(),task(batch).getId()).bom().getSyncBatchId())
+        .isEqualTo("SUPPLEMENT_VERSION:"+latestId);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={
+      "version_status='DRAFT'", "version_status='REJECTED'", "active_flag=0",
+      "reuse_valid_until='2025-12-31'", "reuse_valid_until=NULL", "effective_to='2025-12-31'",
+      "effective_from='2026-02-01'", "period_month='2026-02'", "composition_fingerprint=NULL",
+      "oa_form_item_id=302", "quote_product_code='OTHER'", "material_org_code='HOUSEHOLD'"})
+  void unavailableOrUnrelatedPriorDrawingDoesNotSatisfyMonthlyBom(String invalidation) {
+    var batch=launch();
+    when(LIVE_U9.readLive(any())).thenReturn(CurrentU9BomResult.notFound("missing"));
+    supplement("2025-12","APPROVED");
+    jdbc.update("UPDATE lp_quote_bom_supplement_version SET "+invalidation);
+    assertThat(repricing.prepare(batch.getRepriceNo(),task(batch).getId()).ready()).isFalse();
+  }
+
+  @Test void cachedDrawingSnapshotCannotBypassExpiredSourceValidationForNewRepriceTask() {
+    var batch=launch();when(LIVE_U9.readLive(any())).thenReturn(CurrentU9BomResult.notFound("missing"));
+    supplement("2025-12","APPROVED");
+    jdbc.update("UPDATE lp_quote_bom_supplement_version SET reuse_valid_until='2025-12-31'");
+    jdbc.update("INSERT INTO lp_quote_bom_monthly_snapshot(product_code,price_org_code,business_unit_type,customer_code,package_method,cost_period_month,sync_type,sync_status,active_flag,bom_source,bom_batch_id) VALUES('TOP','210','COMMERCIAL','SAVED-CUSTOMER','BOX','2026-01','AUTO','SUCCESS',1,'ELECTRONIC_DRAWING_BOM','EXPIRED')");
+    assertThat(repricing.prepare(batch.getRepriceNo(),task(batch).getId()).ready()).isFalse();
   }
 
   @Test void differentBusinessUnitApprovedSnapshotCannotSatisfyMissingBom() {
@@ -173,6 +211,9 @@ class MonthlyRepriceBomIntegrationTest {
 
   static void supplement(String month,String status) {
     jdbc.update("INSERT INTO lp_quote_bom_supplement_version(preparation_id,oa_no,oa_form_item_id,quote_product_code,product_type,supplement_scope,bom_source,version_no,version_status,active_flag,period_month,composition_fingerprint) VALUES(1,'MRP1130-TEST',301,'TOP','NON_BARE','NON_BARE_FULL_BOM','ELECTRONIC_DRAWING_BOM',?, ?,1,?,?)",jdbc.queryForObject("SELECT COALESCE(MAX(version_no),0)+1 FROM lp_quote_bom_supplement_version",Integer.class),status,month,UUID.randomUUID().toString());
+    var period=YearMonth.parse(month);
+    jdbc.update("UPDATE lp_quote_bom_supplement_version SET material_org_code='COMMERCIAL',effective_from=?,reuse_valid_until=? WHERE period_month=?",
+        period.atDay(1),period.plusMonths(5).atEndOfMonth(),month);
   }
   static List<BomRawHierarchy> tree(String name) {
     var rows=new ArrayList<BomRawHierarchy>();

@@ -87,7 +87,7 @@ class MonthlyPriceFolderIntegrationTest {
         mapper(FactorRowRefMapper.class), json, transactions, effective,
         com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(sql, transactions, json),
         com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json),
-        com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, transactions, json));
+        com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, transactions, json), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService.class));
     linked = new OriginalLinkedImportService(new OriginalLinkedWorkbookParser(canonical), linkedCalculator, linkedSnapshots,
         finance, mapper(FactorIdentityMapper.class), mapper(FactorUploadBatchMapper.class), mapper(PriceLinkedItemMapper.class), json, transactions, effective);
     ranges = new OriginalRangeImportService(new OriginalRangeWorkbookParser(), rangeCalculator, rangeSnapshots,

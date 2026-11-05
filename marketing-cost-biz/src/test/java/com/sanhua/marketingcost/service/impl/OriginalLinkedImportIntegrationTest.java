@@ -131,7 +131,7 @@ class OriginalLinkedImportIntegrationTest {
                 effectiveSessions, json),
             com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(effectiveSessions, transactions, json),
             com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(effectiveSessions, json),
-            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(effectiveSessions, transactions, json));
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(effectiveSessions, transactions, json), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService.class));
     publishFinance("CU_90000");
     service = service(items);
   }

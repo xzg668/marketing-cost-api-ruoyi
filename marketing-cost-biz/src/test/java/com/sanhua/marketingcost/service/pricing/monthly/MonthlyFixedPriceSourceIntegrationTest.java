@@ -33,7 +33,7 @@ class MonthlyFixedPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/fixed-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/fixed-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_fixed_source_test < /tmp/fixed-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new org.apache.ibatis.session.Configuration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyFixedSourceMapper.class);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -83,6 +83,31 @@ class MonthlyFixedPriceSourceIntegrationTest {
     price(code,"210","S1","10","2026-12-01","2027-12-31");
     var request=request(code,"210");var result=source.read(context(),Set.of(request));
     assertThat(result.values().get(request).selection().fact().price()).isEqualByComparingTo("88");
+  }
+  @Test void novemberKeepsLatestFixedPeriodWithoutResurrectingOlderSuppliers() throws Exception {
+    String code=code();
+    price(code,"210","S001296","0.3451","2025-11-01","2026-10-31");
+    price(code,"210","S001310","0.28908","2025-08-01","2026-07-31");
+    price(code,"210","S001358","0.35","2025-08-01","2026-07-31");
+    var october=request(code,"210");
+    assertThat(source.read(context(),Set.of(october)).values().get(october).selection().fact().price())
+        .isEqualByComparingTo("0.3451");
+    var month=YearMonth.of(2026,11);
+    var november=new Context("COMMERCIAL","MPP05-FIXED",1L,"TOP",month,
+        month.atEndOfMonth().atStartOfDay(),"fixture","210");
+    var request=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(month,"COMMERCIAL",code,null,
+        "件","CNY",TaxBasis.EXCLUDED,null),"210",NonCuConditions.empty(),BigDecimal.ONE);
+    var result=operation.resolveCandidates(november,Set.of(request));
+    assertThat(result.problems()).isEmpty();
+    assertThat(november.supplierReviews().reviews()).isEmpty();
+    var fact=result.values().get(request).selection().fact();
+    assertThat(fact.price()).isEqualByComparingTo("0.3451");
+    var saved=new ObjectMapper().readTree(fact.evidence().json()).path("source");
+    assertThat(saved.path("candidates").size()).isEqualTo(1);
+    assertThat(saved.path("selected").path("supplierCode").asText()).isEqualTo("S001296");
+    assertThat(saved.path("selected").path("effectiveTo").asText()).isEqualTo("2026-10-31");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?",Long.class,code)).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_supplier_price_decision WHERE material_code=?",Long.class,code)).isZero();
   }
   @Test void aFixedPeriodWithoutAnExpiryRemainsReadable() {
     String code=code();price(code,"210","S1","10","2026-01-01",null);

@@ -147,7 +147,7 @@ class FinanceEffectivePriceIntegrationTest {
             mock(FinanceEffectivePriceService.class),
             com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(sql, manager, json),
             com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json),
-            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, manager, json));
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, manager, json), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService.class));
     snapshots = new OriginalLinkedRuleSnapshot(json);
     calculator =
         mock(
@@ -1071,7 +1071,7 @@ class FinanceEffectivePriceIntegrationTest {
             service,
             com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(sql, manager, json),
             com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(sql, json),
-            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, manager, json));
+            com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceTestSupport.refresh(sql, manager, json), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService.class));
   }
 
   OriginalLinkedImportService linkedImporter(FinanceEffectivePriceService generation) {

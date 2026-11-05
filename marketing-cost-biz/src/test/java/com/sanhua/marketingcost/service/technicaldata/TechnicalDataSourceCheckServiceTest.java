@@ -34,8 +34,12 @@ class TechnicalDataSourceCheckServiceTest {
   private final TechnicalDataSharedModules shared = mock(TechnicalDataSharedModules.class);
   private final ElectronicDrawingSourceNodeRepository drawingSources = mock(ElectronicDrawingSourceNodeRepository.class);
   private final TechnicalDataManufacturingSourceQuery manufacturing = mock(TechnicalDataManufacturingSourceQuery.class);
+  private final com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper versions = mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper.class);
+  private final com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper savedDetails = mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper.class);
+  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope scope =
+      new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope(versions, savedDetails);
   private final TechnicalDataPublicSourceCheck publicSources = new TechnicalDataPublicSourceCheck(u9, salary, codec,
-      drawings, manufacturing, packaging, netLoss, shared, drawingSources);
+      drawings, manufacturing, packaging, netLoss, shared, drawingSources, scope);
   private final TechnicalDataSourceCheckService service = new TechnicalDataSourceCheckService(publicSources, prices,
       codec, mock(QuoteTechnicalDataRepository.class), mock(TechnicalDataPriceRequirements.class), mock(TechnicalDataPriceOwnership.class));
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L, 2L, "OA-1", "2026-09", "COMMERCIAL",
@@ -50,6 +54,50 @@ class TechnicalDataSourceCheckServiceTest {
     when(u9.read(any())).thenReturn(CurrentU9BomResult.available("U9", "V1", "BOM-1", 2));
     when(salary.read(anyString(), anyInt(), anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(), null));
     when(prices.calculate(any())).thenReturn(priceResult(List.of(), "READY"));
+  }
+
+  @Test void monthlyRepriceUsesChosenPriorDrawingAndChecksSourcesOnlyOnce() {
+    var version = new QuoteBomSupplementVersion();
+    version.setId(41L); version.setOaFormItemId(2L); version.setQuoteProductCode("PRODUCT");
+    version.setMaterialOrgCode("211"); version.setVersionStatus("APPROVED"); version.setActiveFlag(1);
+    version.setPeriodMonth("2026-08"); version.setReuseValidUntil(LocalDate.of(2027,1,31));
+    version.setCompositionFingerprint("composition-41");
+    when(versions.selectById(41L)).thenReturn(version);
+    var form = new OaForm(); form.setId(1L); form.setOaNo("OA-1"); form.setBusinessUnitType("COMMERCIAL");
+    var item = new OaFormItem(); item.setId(2L); item.setOaFormId(1L);
+    var input = new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomService.Input(form,item,
+        new com.sanhua.marketingcost.service.ingest.QuoteBomContext("2026-09","PRODUCT",
+            new com.sanhua.marketingcost.service.ingest.ResolvedCustomerKey("CUSTOMER",
+                com.sanhua.marketingcost.service.ingest.ResolvedCustomerKey.Source.OA_HEADER_CUSTOMER,null),
+            "",context.organization()));
+    var bom = new QuoteBomStatus(); bom.setSyncRecordId(50L); bom.setCostPeriodMonth("2026-09");
+    bom.setBomSource("ELECTRONIC_DRAWING_BOM"); bom.setSyncBatchId("SUPPLEMENT_VERSION:41");
+    var calculation = new com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation(
+        "MRP1130-test", "a".repeat(64),input,bom,context.scanAt());
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("no U9"));
+    when(manufacturing.inspect(any())).thenReturn(new TechnicalDataManufacturingSourceQuery.Assessment(
+        41L,"2026-08","verified",List.of(),null));
+    var parent=new QuoteBomSupplementDetail(); parent.setMaterialCode("MAKE");parent.setShapeAttr("制造件");parent.setLevel(1);parent.setPath("/PRODUCT/MAKE/");
+    var child=new QuoteBomSupplementDetail(); child.setMaterialCode("RAW");child.setParentCode("MAKE");child.setLevel(2);child.setPath("/PRODUCT/MAKE/RAW/");
+    when(savedDetails.selectList(any())).thenReturn(List.of(parent,child));
+    scope.use(calculation, () -> {
+      for(int i=0;i<3;i++) {
+        var facts=publicSources.checkDataSources(context);
+        assertThat(facts).filteredOn(row -> row.moduleType()==TechnicalDataModuleType.MANUFACTURING)
+            .allSatisfy(row -> assertThat(row.availability()).as(row.reason()).isEqualTo(TechnicalDataAvailability.AVAILABLE));
+      }
+      return null;
+    });
+    verifyNoInteractions(u9,drawings);
+    verify(versions,times(1)).selectById(41L);
+    verifyNoInteractions(manufacturing,drawingSources);
+    verify(savedDetails,times(1)).selectList(any());
+    when(savedDetails.selectList(any())).thenReturn(List.of(parent));
+    scope.use(calculation, () -> {
+      assertThat(publicSources.checkDataSources(context)).filteredOn(row -> row.moduleType()==TechnicalDataModuleType.MANUFACTURING)
+          .allSatisfy(row -> assertThat(row.availability()).isEqualTo(TechnicalDataAvailability.MISSING));
+      return null;
+    });
   }
 
   @Test void noOriginalBomRequiresProductDrawingAuxiliaryAndSolderEvenWhenReferenceDataExists() {

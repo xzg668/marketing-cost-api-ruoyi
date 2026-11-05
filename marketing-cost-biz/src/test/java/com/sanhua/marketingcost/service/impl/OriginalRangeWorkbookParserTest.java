@@ -92,6 +92,54 @@ class OriginalRangeWorkbookParserTest {
   }
 
   @Test
+  void folderPathsInUnusedBandDiagnosticsDoNotBlockAlreadyStagedRules() throws Exception {
+    try (var book = workbook("60000-64999", "65000-69999", "70000-74999", "75000-79999")) {
+      book.getSheet("矩阵").getRow(3).getCell(3).setCellValue("9.7850\u00a0");
+      var bytes = new ByteArrayOutputStream();
+      book.write(bytes);
+      var uploaded = parser.parse(bytes.toByteArray(), "11月文件夹/区间价格.xlsx", "COMMERCIAL").rules().getFirst();
+      var stored = parser.parse(bytes.toByteArray(), "区间价格.xlsx", "COMMERCIAL").rules().getFirst();
+      assertThat(uploaded.bands().getFirst().problem()).contains("11月文件夹/区间价格.xlsx");
+      assertThat(stored.bands().getFirst().problem()).doesNotContain("11月文件夹/");
+      var signatures = new com.sanhua.marketingcost.service.pricing.OriginalRuleSignature(
+          new com.fasterxml.jackson.databind.ObjectMapper(), calculator);
+      var plan = new com.sanhua.marketingcost.service.pricing.folder.MonthlyPriceFolderPlan();
+      var pending = new com.sanhua.marketingcost.service.pricing.folder.MonthlyPriceFolderModel.Candidate(
+          "upload", 1L, "11月文件夹/区间价格.xlsx", uploaded.sheet(), uploaded.row(), "RANGE", uploaded.identity(),
+          signatures.range(uploaded), signatures.describe(uploaded), null, "UPLOADED");
+      var saved = new com.sanhua.marketingcost.service.pricing.folder.MonthlyPriceFolderModel.Candidate(
+          "saved", null, "区间价格.xlsx", stored.sheet(), stored.row(), "RANGE", stored.identity(),
+          signatures.range(stored), signatures.describe(stored), 12L, "STAGED");
+      var group = plan.build(java.util.List.of(pending, saved)).getFirst();
+      assertThat(group.status()).isEqualTo("PREPARED");
+      assertThat(group.variantCount()).isEqualTo(1);
+      assertThat(group.candidates()).containsExactlyInAnyOrder(pending, saved);
+      assertThat(calculator.select(stored, new BigDecimal("70000")).sourcePrice()).isEqualByComparingTo("3");
+      assertThatThrownBy(() -> calculator.select(stored, new BigDecimal("60000")))
+          .hasMessageContaining("选中档价格不可用");
+      assertThat(signatures.describe(uploaded)).contains("11月文件夹/区间价格.xlsx");
+      book.getSheet("矩阵").getRow(3).getCell(7).setCellValue(3.01);
+      assertThat(signatures.range(parsed(book).rules().getFirst())).isNotEqualTo(signatures.range(stored));
+    }
+  }
+
+  @Test
+  void anUnavailableBandDoesNotBecomeTheSameRuleAsARealZeroPrice() throws Exception {
+    try (var book = workbook("60000-64999", "65000-69999", "70000-74999", "75000-79999")) {
+      var signatures = new com.sanhua.marketingcost.service.pricing.OriginalRuleSignature(
+          new com.fasterxml.jackson.databind.ObjectMapper(), calculator);
+      book.getSheet("矩阵").getRow(3).getCell(3).setCellValue("9.7850\u00a0");
+      var broken = parsed(book).rules().getFirst();
+      book.getSheet("矩阵").getRow(3).getCell(3).setCellValue(0);
+      var zero = parsed(book).rules().getFirst();
+      assertThat(signatures.range(broken)).isNotEqualTo(signatures.range(zero));
+      assertThat(calculator.select(zero, new BigDecimal("60000")).sourcePrice()).isZero();
+      assertThatThrownBy(() -> calculator.select(broken, new BigDecimal("60000")))
+          .hasMessageContaining("选中档价格不可用");
+    }
+  }
+
+  @Test
   void upwardProofHasNoArtificialCeilingAndDoesNotFillFractionalGaps() throws Exception {
     try (var book = workbook("90000-94999", "95000-99999", "100000-104999", "105000-109999")) {
       var rule = parsed(book).rules().getFirst();

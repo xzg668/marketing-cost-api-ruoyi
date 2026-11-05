@@ -50,21 +50,27 @@ public final class OriginalRuleSignature {
     var proof = ranges.extrapolation(rule);
     if (proof != null) description.append("\n外推：行情每变动").append(number(proof.factorStep()))
         .append("，单价变动").append(number(proof.priceStep()));
+    if (proof != null && proof.rounding() != null) description.append("（舍入前），按原公式 ROUND(续算价, ")
+        .append(proof.rounding().scale()).append(") 取整");
     return description.toString();
   }
 
   public String range(OriginalRangeWorkbookParser.Rule rule) {
     var proof = ranges.extrapolation(rule);
-    Object extrapolation = proof == null ? List.of() : Arrays.asList(
-        band(proof.anchor()), number(proof.factorStep()), number(proof.priceStep()), proof.taxIncluded());
+    Object extrapolation = proof == null ? List.of() : proof.rounding() == null ? Arrays.asList(
+        band(proof.anchor()), number(proof.factorStep()), number(proof.priceStep()), proof.taxIncluded())
+        : Arrays.asList(band(proof.anchor()), number(proof.factorStep()), number(proof.priceStep()), proof.taxIncluded(),
+            number(proof.rounding().anchorBeforeRounding()), proof.rounding().scale());
     return hash(List.of("RANGE", rule.taxIncluded(), rule.factorKey(), rule.factorUnit(),
         rule.bands().stream().map(this::band).toList(), extrapolation));
   }
 
   private Object band(OriginalRangeWorkbookParser.Band band) {
     var b = band.bounds();
+    // 诊断文字含上传路径/文件名/格址，不属于价格规则；仅保留该档不可用的状态。
+    // 完整原因仍由原稿快照和 describe 展示，选中不可用档时计算器仍须拒绝取价。
     return Arrays.asList(number(b.low()), number(b.high()), b.lowerInclusive(), b.upperInclusive(),
-        number(band.price()), band.problem() == null ? "" : band.problem());
+        number(band.price()), band.problem() == null ? "" : "UNAVAILABLE");
   }
 
   private String number(BigDecimal value) {

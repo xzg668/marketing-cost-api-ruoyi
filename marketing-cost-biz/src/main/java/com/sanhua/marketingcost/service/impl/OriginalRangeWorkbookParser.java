@@ -435,7 +435,7 @@ public final class OriginalRangeWorkbookParser {
     for (Row row : sheet)
       for (Cell cell : row) {
         String value = text(cell);
-        if (value.contains("上涨") || value.contains("下浮") || value.contains("下降")) {
+        if (OriginalRangeRoundingProof.isStepNote(value)) {
           var note = source(cell);
           result.add(note);
         }

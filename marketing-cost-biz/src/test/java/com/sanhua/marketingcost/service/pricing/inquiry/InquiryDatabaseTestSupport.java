@@ -109,7 +109,7 @@ public final class InquiryDatabaseTestSupport implements AutoCloseable {
                 sql, manager, json),
             com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(
                 sql, json),
-            refresh);
+            refresh, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService.class));
   }
 
   public void clearInquiries() {

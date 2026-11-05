@@ -74,6 +74,18 @@ class FixedPriceResolverTest {
     assertThat(result.unitPrice()).isEqualByComparingTo("12");
     assertThat(context.getSupplierPriceReviewContext().reviews()).isEmpty();
   }
+  @Test void changingMonthKeepsOnlyTheLatestFixedPeriodWhenAllPricesExpire() {
+    context.setPricingMonth("2026-11");
+    context.setPriceAsOfTime(LocalDate.parse("2026-11-30").atStartOfDay());
+    var result=resolve(List.of(row("S001296","0.3451","2025-11-01","2026-10-31"),
+        row("S001310","0.28908","2025-08-01","2026-07-31"),
+        row("S001358","0.35","2025-08-01","2026-07-31")));
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.3451");
+    assertThat(result.evidence().supplierCode()).isEqualTo("S001296");
+    assertThat(result.evidence().effectiveTo()).isEqualTo(LocalDate.parse("2026-10-31"));
+    assertThat(context.getSupplierPriceReviewContext().reviews()).isEmpty();
+    verifyNoInteractions(ratios,decisions);
+  }
   @Test void oneSupplierUsesLatestStartNotHighestPrice() {
     var result=resolve(List.of(row("A","64.7","2026-04-01","2027-03-31"),row("A","62.9","2026-10-01","2027-09-30")));
     assertThat(result.unitPrice()).isEqualByComparingTo("62.9");

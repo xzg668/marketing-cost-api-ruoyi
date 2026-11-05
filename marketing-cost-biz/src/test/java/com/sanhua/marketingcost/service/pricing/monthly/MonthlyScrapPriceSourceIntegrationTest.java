@@ -33,7 +33,7 @@ class MonthlyScrapPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/scrap-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_scrap_source_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyScrapSourceMapper.class);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -51,14 +51,60 @@ class MonthlyScrapPriceSourceIntegrationTest {
     jdbc.update("INSERT INTO lp_scrap_price(business_unit_type,price_month,material_code,material_name,supplier_code,supplier_name,price_type,fixed_price,source_formula,expression,factor_bindings_json,origin_type,rule_source_month,content_hash,created_by,created_at,updated_by,updated_at,source_file_name,source_file_sha256,source_sheet,source_row,source_json) VALUES(?,?,?,'fixture scrap',?,?,?, ?,?,?,?,'IMPORT',? ,?,'fixture',NOW(),'fixture',NOW(),'scrap-original.xlsx',?,'废料表',8,?)",bu,month,code,supplier,supplier,expression==null?"FIXED":"LINKED",price==null?null:new BigDecimal(price),expression,expression,expression==null?"{}":"{\"Cu\":\"AVG|1#CU\"}",month,"c".repeat(64),"d".repeat(64),"{\"originalFormula\":\"fixture source rule\"}");
     return jdbc.queryForObject("SELECT id FROM lp_scrap_price WHERE business_unit_type=? AND price_month=? AND material_code=? AND supplier_code <=> ?",Long.class,bu,month,code,supplier);
   }
-  static long publication(String bu,String month,String price){
+  static long publication(String bu,String month,String price){return publication(bu,month,price,1);}
+  static long publication(String bu,String month,String price,int revision){
     String batch=UUID.randomUUID().toString();
-    jdbc.update("INSERT INTO lp_factor_upload_batch(batch_no,import_type,price_month,business_unit_type,file_name,file_sha256,content_hash,uploaded_by,status,price_org_code,publication_revision,default_scheme_code,published_at) VALUES(?,'FINANCE_BASE',?,?,'finance-original.xlsx',?,?,'finance-fixture','PUBLISHED','210',1,'DEFAULT',NOW())",batch,month,bu,"a".repeat(64),"b".repeat(64));long batchId=jdbc.queryForObject("SELECT id FROM lp_factor_upload_batch WHERE batch_no=?",Long.class,batch);
+    jdbc.update("INSERT INTO lp_factor_upload_batch(batch_no,import_type,price_month,business_unit_type,file_name,file_sha256,content_hash,uploaded_by,status,price_org_code,publication_revision,default_scheme_code,published_at) VALUES(?,'FINANCE_BASE',?,?,'finance-original.xlsx',?,?,'finance-fixture','PUBLISHED','210',?,'DEFAULT',NOW())",batch,month,bu,"a".repeat(64),"b".repeat(64),revision);long batchId=jdbc.queryForObject("SELECT id FROM lp_factor_upload_batch WHERE batch_no=?",Long.class,batch);
     jdbc.update("INSERT INTO lp_factor_identity(business_unit_type,factor_seq_no,factor_name,short_name,price_source,canonical_factor_key) VALUES(?,?,'1#铜','1#CU','AVG','AVG|1#CU')",bu,batch);long identity=jdbc.queryForObject("SELECT id FROM lp_factor_identity WHERE factor_seq_no=?",Long.class,batch);
-    jdbc.update("INSERT INTO lp_factor_monthly_price(factor_identity_id,price_month,price,tax_included,source_upload_batch_id,status,price_org_code,scheme_code,condition_code,revision_no,unit,published_at) VALUES(?,?,?,1,?,'PUBLISHED','210','DEFAULT','GENERAL',1,'CNY/KG',NOW())",identity,month,new BigDecimal(price),batchId);long priceId=jdbc.queryForObject("SELECT id FROM lp_factor_monthly_price WHERE factor_identity_id=?",Long.class,identity);
+    jdbc.update("INSERT INTO lp_factor_monthly_price(factor_identity_id,price_month,price,tax_included,source_upload_batch_id,status,price_org_code,scheme_code,condition_code,revision_no,unit,published_at) VALUES(?,?,?,1,?,'PUBLISHED','210','DEFAULT','GENERAL',?,'CNY/KG',NOW())",identity,month,new BigDecimal(price),batchId,revision);long priceId=jdbc.queryForObject("SELECT id FROM lp_factor_monthly_price WHERE factor_identity_id=?",Long.class,identity);
     jdbc.update("INSERT INTO lp_factor_row_ref(factor_upload_batch_id,source_sheet_name,source_row_number,factor_identity_id,factor_monthly_price_id,source_column_number,source_cell_ref,scheme_code,condition_code,source_value_text,source_unit,source_number_format,conversion_basis) VALUES(?,'商用财务基价',3,?,?,4,'D3','DEFAULT','GENERAL',?,'CNY/KG','0.000000','IDENTITY')",batchId,identity,priceId,price);return batchId;
   }
   static MonthlyAdoptionPlan plan(MonthlyPriceRequest request,MonthlyAdoptionPlan.Selection selection){return new MonthlyAdoptionPlan(Map.of(request,selection),List.of(new MonthlyAdoptionPlan.Use("root/scrap",request,BigDecimal.ONE)),Set.of());}
+  @Test void correctionRetiresSharedScrapAndItsDependentPriceButPreservesFixedScrap() throws Exception {
+    String month="2065-01",material=code(),parent=code(),fixed=code();
+    publication("COMMERCIAL",month,"100");
+    rule(material,"COMMERCIAL",month,"S1",null,"[Cu]*0.5");
+    rule(fixed,"COMMERCIAL",month,"S1","7",null);
+    var child=request(material,"COMMERCIAL",month,"220");var root=request(parent,"COMMERCIAL",month,"220");
+    var fixedRequest=request(fixed,"COMMERCIAL",month,"220");var c=context("COMMERCIAL",month,"220");
+    var fixedOld=operation.adopt(c,plan(fixedRequest,operation.resolveCandidates(c,Set.of(fixedRequest)).values().get(fixedRequest).selection())).plan().selections().get(fixedRequest);
+    var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
+    config.addMapper(MonthlyPriceStorageMapper.class);config.addMapper(MonthlyPriceLinkMapper.class);
+    var factory=new SqlSessionFactoryBean();factory.setDataSource(jdbc.getDataSource());factory.setConfiguration(config);
+    var sql=new SqlSessionTemplate(factory.getObject());
+    var chain=new MonthlyMaterialPriceService(new MonthlyPriceStorage(sql.getMapper(MonthlyPriceStorageMapper.class),codec,sql.getMapper(MonthlyPriceLinkMapper.class)),new DataSourceTransactionManager(jdbc.getDataSource()),codec,
+        (context,requests,dependencies)->{
+          if(!requests.contains(root))return source.read(context,requests);
+          var children=dependencies.apply(Set.of(child));var selected=children.values().get(child).selection();
+          var values=new LinkedHashMap<>(children.values());
+          var fact=MonthlyAdoptionPlan.PriceFact.normal(selected.fact().price().multiply(new BigDecimal("2")),
+              MonthlyAdoptionPlan.SourceEvidence.ofJson("{\"sourceKind\":\"LINKED_LEGACY\",\"source\":{\"selected\":{\"id\":1}}}"),Set.of(child));
+          values.put(root,new Candidate(new MonthlyAdoptionPlan.Selection(null,new MonthlyPriceCoverage(Set.of("220"),QuantityInterval.all(),ConditionDomain.any()),fact),null));
+          return new Candidates(values,Map.of());
+        });
+    java.util.function.Supplier<MonthlyAdoptionPlan> adopt=()->{
+      var selected=new LinkedHashMap<MonthlyPriceRequest,MonthlyAdoptionPlan.Selection>();
+      chain.resolveCandidates(c,Set.of(root)).values().forEach((r,v)->selected.put(r,v.selection()));
+      return chain.adopt(c,new MonthlyAdoptionPlan(selected,List.of(new MonthlyAdoptionPlan.Use("parent",root,BigDecimal.ONE)),Set.of())).plan();
+    };
+    var old=adopt.get();
+    assertThat(old.selections().get(root).fact().price()).isEqualByComparingTo("100");
+    var transaction=new org.springframework.transaction.support.TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
+    transaction.executeWithoutResult(status->{
+      long corrected=publication("COMMERCIAL",month,"110",2);
+      int count=new com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService(jdbc,codec)
+          .refresh(new com.sanhua.marketingcost.dto.FinanceFactorImportContext("COMMERCIAL","210",month,null,null),corrected);
+      assertThat(count).isEqualTo(2);
+    });
+    var other=request(material,"COMMERCIAL",month,"210");
+    assertThat(chain.lookup(Set.of(child,other,root)).missing()).containsExactlyInAnyOrder(child,other,root);
+    assertThat(operation.lookup(Set.of(fixedRequest)).values().get(fixedRequest)).isEqualTo(fixedOld);
+    var revised=adopt.get();
+    assertThat(revised.selections().get(root).fact().price()).isEqualByComparingTo("110");
+    assertThat(revised.selections().get(child).fact().price()).isEqualByComparingTo("55");
+    assertThat(chain.readByIds("COMMERCIAL",Set.of(old.selections().get(root).monthlyPriceId())).values())
+        .containsExactlyInAnyOrderElementsOf(old.selections().values());
+  }
   @Test void fixedScrapIncludesZeroAndSharesNormalFactAcross210And220WithoutWritingCarryRows() throws Exception {
     String code=code();long ruleId=rule(code,"COMMERCIAL","2026-01",null,"0",null);var r210=request(code,"COMMERCIAL","2026-02","210");var r220=request(code,"COMMERCIAL","2026-02","220");
     long before=jdbc.queryForObject("SELECT COUNT(*) FROM lp_scrap_price",Long.class);prepared.set(0);var candidates=source.read(context("COMMERCIAL","2026-02","210"),Set.of(r210,r220));int count=prepared.get();

@@ -39,7 +39,7 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/original-linked-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_original_linked_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyOriginalLinkedSourceMapper.class);for(var mapper:List.of(PriceLinkedItemMapper.class,PriceRangeFactorRuleMapper.class,FinanceEffectivePriceMapper.class,MaterialPriceMonthMapper.class))configuration.addMapper(mapper);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -65,8 +65,9 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     var original=new OriginalLinkedWorkbookParser.Rule(key,"fixture linked material","原稿",8,"H8",expression,expression,"0.000000",false,new CompiledFormula(expression,List.of(),Map.of()),factors,BigDecimal.ZERO);
     var row=new PriceLinkedItem();row.setRuleIdentityKey(key.identityKey());row.setRuleRevision(1);row.setRuleStatus("PUBLISHED");row.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);row.setSourceKind("PUBLIC");row.setBusinessUnitType(bu);row.setOrgCode(org);row.setPricingMonth(month);row.setMaterialCode(code);row.setMaterialName("fixture linked material");row.setSpecModel("SPEC");row.setUnit("件");row.setSupplierCode(supplier);row.setSupplierName(supplierName);row.setTaxIncluded(0);row.setFormulaExpr(expression);row.setSourceInputSnapshotJson(snapshots.write(List.of(original),"controlled-original-version"));row.setSourceSheetName("原稿");row.setSourceRowNumber(8);row.setSourceFormulaCellRef("H8");row.setSourceFormulaExpr("original H8 formula");row.setEffectiveFrom(YearMonth.parse(month).atDay(1));row.setEffectiveTo(LocalDate.of(2099,1,1));row.setCreatedAt(LocalDateTime.now());row.setUpdatedAt(LocalDateTime.now());row.setDeleted(0);row.setTechnicalRevision(0);rules.insert(row);return row;
   }
-  static long publication(String bu,String month,String org){
-    String batch=UUID.randomUUID().toString();jdbc.update("INSERT INTO lp_factor_upload_batch(batch_no,import_type,price_month,business_unit_type,file_name,file_sha256,content_hash,uploaded_by,status,price_org_code,publication_revision,default_scheme_code,published_at) VALUES(?,'FINANCE_BASE',?,?,'finance-linked-original.xlsx',?,?,'finance-fixture','PUBLISHED',?,1,'DEFAULT',NOW())",batch,month,bu,"a".repeat(64),"b".repeat(64),org);long id=jdbc.queryForObject("SELECT id FROM lp_factor_upload_batch WHERE batch_no=?",Long.class,batch);
+  static long publication(String bu,String month,String org){return publication(bu,month,org,1);}
+  static long publication(String bu,String month,String org,int revision){
+    String batch=UUID.randomUUID().toString();jdbc.update("INSERT INTO lp_factor_upload_batch(batch_no,import_type,price_month,business_unit_type,file_name,file_sha256,content_hash,uploaded_by,status,price_org_code,publication_revision,default_scheme_code,published_at) VALUES(?,'FINANCE_BASE',?,?,'finance-linked-original.xlsx',?,?,'finance-fixture','PUBLISHED',?,?,'DEFAULT',NOW())",batch,month,bu,"a".repeat(64),"b".repeat(64),org,revision);long id=jdbc.queryForObject("SELECT id FROM lp_factor_upload_batch WHERE batch_no=?",Long.class,batch);
     for(String factor:org.equals("220")?List.of(PriceFactorContext.COPPER,"AVG|304/2B/1219"):List.of(PriceFactorContext.COPPER)){
       String seq=UUID.randomUUID().toString();jdbc.update("INSERT INTO lp_factor_identity(business_unit_type,factor_seq_no,factor_name,short_name,price_source,canonical_factor_key) VALUES(?, ?,?,?,'AVG',?)",bu,seq,factor,factor,factor);long identity=jdbc.queryForObject("SELECT id FROM lp_factor_identity WHERE factor_seq_no=?",Long.class,seq);
       for(String condition:org.equals("220")?List.of("NON_TENDER","TENDER"):List.of("GENERAL")){
@@ -78,6 +79,26 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
   }
   static void publish(String bu,String org){transaction.executeWithoutResult(status->effective.generateScope(bu,org));}
   static MonthlyAdoptionPlan plan(MonthlyPriceRequest request,MonthlyAdoptionPlan.Selection selection){return new MonthlyAdoptionPlan(Map.of(request,selection),List.of(new MonthlyAdoptionPlan.Use("root/linked",request,BigDecimal.ONE)),Set.of());}
+  @Test void financeCorrectionRefreshesAdoptedMonthlyPriceWithoutRewritingHistory() {
+    String month="2056-01", material=code();
+    publication("COMMERCIAL",month,"210");
+    rule(material,"COMMERCIAL",month,"210","S1","[cu]+5",false);
+    publish("COMMERCIAL","210");
+    var r=request(material,"COMMERCIAL",month,"210",NonCuConditions.empty());
+    var c=context("COMMERCIAL",month,"210");
+    var before=operation.adopt(c,plan(r,operation.resolveCandidates(c,Set.of(r)).values().get(r).selection())).plan().selections().get(r);
+    assertThat(before.fact().price()).isEqualByComparingTo("105");
+    long corrected=publication("COMMERCIAL",month,"210",2);
+    jdbc.update("UPDATE lp_factor_monthly_price SET revision_no=2,price=110 WHERE source_upload_batch_id=?",corrected);
+    publish("COMMERCIAL","210");
+    transaction.executeWithoutResult(status->new com.sanhua.marketingcost.service.financefactor.FinanceMonthlyPriceRefreshService(jdbc,codec)
+        .refresh(new com.sanhua.marketingcost.dto.FinanceFactorImportContext("COMMERCIAL","210",month,null,null),corrected));
+    assertThat(operation.lookup(Set.of(r)).missing()).as("更正财务基价后，旧月价退出当前取价").contains(r);
+    var after=operation.adopt(c,plan(r,operation.resolveCandidates(c,Set.of(r)).values().get(r).selection())).plan().selections().get(r);
+    assertThat(after.fact().price()).isEqualByComparingTo("115");
+    assertThat(after.monthlyPriceId()).isNotEqualTo(before.monthlyPriceId());
+    assertThat(operation.readByIds("COMMERCIAL",Set.of(before.monthlyPriceId())).get(before.monthlyPriceId())).isEqualTo(before);
+  }
   @Test void actualPublishedOriginalLinkedPriceAdoptsThenSurvivesTheRemovalOfSourceAndFinance() throws Exception {
     String month="2026-09";String code=code();long batch=publication("COMMERCIAL",month,"210");var row=rule(code,"COMMERCIAL",month,"210","S1","[cu]+5",false);publish("COMMERCIAL","210");var request=request(code,"COMMERCIAL",month,"210",NonCuConditions.empty());var c=context("COMMERCIAL",month,"210");long before=jdbc.queryForObject("SELECT COUNT(*) FROM lp_finance_effective_price",Long.class);var candidates=operation.resolveCandidates(c,Set.of(request));assertThat(candidates.problems()).isEmpty();var chosen=candidates.values().get(request).selection();assertThat(chosen.fact().price()).isEqualByComparingTo("105");assertThat(chosen.applicability().matches(request(code,"COMMERCIAL",month,"220",NonCuConditions.empty()))).isFalse();assertThat(chosen.fact().evidence().json()).contains("finance-linked-original.xlsx","D3","H8","controlled-original-version").doesNotContain("consumerOrg","oaNo");assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_finance_effective_price",Long.class)).isEqualTo(before);
     var saved=operation.adopt(c,plan(request,chosen));long id=saved.plan().selections().get(request).monthlyPriceId();jdbc.update("DELETE FROM lp_finance_effective_price WHERE original_id=? AND price_type='LINKED'",row.getId());jdbc.update("DELETE FROM lp_price_linked_item WHERE id=?",row.getId());jdbc.update("DELETE FROM lp_factor_row_ref WHERE factor_upload_batch_id=?",batch);jdbc.update("DELETE FROM lp_factor_monthly_price WHERE source_upload_batch_id=?",batch);jdbc.update("DELETE FROM lp_factor_upload_batch WHERE id=?",batch);int calls=sourceCalls.get();assertThat(operation.resolveCandidates(c,Set.of(request)).values().get(request).selection().monthlyPriceId()).isEqualTo(id);assertThat(sourceCalls.get()).isEqualTo(calls);assertThat(operation.readByIds("COMMERCIAL",Set.of(id)).get(id).fact().evidence()).isEqualTo(chosen.fact().evidence());
