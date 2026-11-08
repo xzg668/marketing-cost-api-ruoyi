@@ -107,6 +107,21 @@ class DepartmentFundCostMatchTest {
     return items.stream().filter(row -> code.equals(row.getCostCode())).findFirst().orElseThrow();
   }
 
+  @Test void selectedWholeOaInputKeepsDepartmentFeeWhenLiveOaHasChanged() {
+    var savedForm = new OaForm(); savedForm.setId(1L); savedForm.setOaNo("OA-DEPT-FALLBACK");
+    savedForm.setBusinessUnitType("COMMERCIAL"); savedForm.setSourceBusinessDivision("电子产品事业部");
+    var savedItem = new OaFormItem(); savedItem.setId(2L); savedItem.setOaFormId(1L);
+    savedItem.setMaterialNo("P-1"); savedItem.setBusinessUnitType("COMMERCIAL");
+    var selected = new com.sanhua.marketingcost.dto.CostRunQuotationInput(savedForm, savedItem);
+    savedForm.setSourceBusinessDivision("构造后被修改的资料");
+    selected.form().setSourceBusinessDivision("调用者修改了返回副本");
+    var fixture = new Fixture(null, "当前OA被改成其他事业部");
+    var cost = fixture.calculate(selected);
+    var original = new Fixture(null, "电子产品事业部").calculate();
+    assertThat(cost).usingRecursiveComparison().isEqualTo(original);
+    assertThat(item(cost, "WATER_POWER").getRate()).isEqualByComparingTo("0.062993");
+  }
+
   private static final class Fixture {
     final String masterDivision;
     final String oaDivision;
@@ -121,6 +136,10 @@ class DepartmentFundCostMatchTest {
     }
 
     List<CostRunCostItemDto> calculate() {
+      return calculate(null);
+    }
+
+    List<CostRunCostItemDto> calculate(com.sanhua.marketingcost.dto.CostRunQuotationInput selected) {
       var formMapper = mock(OaFormMapper.class);
       var itemMapper = mock(OaFormItemMapper.class);
       var rawMapper = mock(MaterialMasterRawMapper.class);
@@ -168,8 +187,11 @@ class DepartmentFundCostMatchTest {
       var context = CostRunContext.quote(form.getOaNo(), 2L, "P-1", null, null,
           "COMMERCIAL", "2026-10", "TEST");
       context.setPriceOrgCode("210"); context.setMaterialOrganizationCode("COMMERCIAL");
-      return service.listByMaterialCodes(form.getOaNo(), "P-1", Set.of("P-1"),
+      context.setQuotationInput(selected);
+      var result = service.listByMaterialCodes(form.getOaNo(), "P-1", Set.of("P-1"),
           context, List.of(), false, ignored -> {});
+      if (selected != null) org.mockito.Mockito.verifyNoInteractions(formMapper, itemMapper);
+      return result;
     }
 
     private CmsCostSourceEffective salary(String type, String subject, String amount) {

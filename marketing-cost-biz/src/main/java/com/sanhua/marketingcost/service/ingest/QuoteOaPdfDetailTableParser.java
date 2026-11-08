@@ -37,6 +37,7 @@ public class QuoteOaPdfDetailTableParser {
     List<Column> columns = inferColumns(lines.subList(range.startIndex() + 1, range.endIndex()), fields);
     if (columns.isEmpty()) {
       applyDenseFiSc006Fallback(context, request, lines, range);
+      applyAnnualVolumeUnit(request, lines, range);
       return;
     }
 
@@ -50,6 +51,55 @@ public class QuoteOaPdfDetailTableParser {
       request.getItems().add(item);
     }
     applyDenseFiSc006Fallback(context, request, lines, range);
+    applyAnnualVolumeUnit(request, lines, range);
+  }
+
+  /** Read the unit from the annual-demand column, including vertically wrapped PDF headers. */
+  private void applyAnnualVolumeUnit(QuoteIngestRequest request, List<TableLine> lines, TableRange range) {
+    DenseLayout layout = inferDenseLayout(lines, range);
+    DenseColumn annual = layout.column("annualVolume");
+    DenseColumn seq = layout.column("seq");
+    if (seq == null) {
+      for (TableLine line : lines.subList(range.startIndex() + 1, range.endIndex())) {
+        for (QuotePdfToken token : line.tokens()) {
+          if ("序号".equals(normalizeLabel(token.getText()))) {
+            seq = new DenseColumn(token.getX() - 4, token.getX() + token.getWidth() + 4);
+            break;
+          }
+        }
+        if (seq != null) break;
+      }
+    }
+    if (annual == null || seq == null) return;
+    final DenseColumn seqColumn = seq;
+    List<QuotePdfToken> header = new ArrayList<>();
+    String sourcePath = null;
+    for (int i = range.startIndex() + 1; i < range.endIndex(); i++) {
+      TableLine line = lines.get(i);
+      if (line.tokens().stream().anyMatch(token -> seqColumn.contains(token) && parseSeq(token.getText()) != null)) break;
+      for (QuotePdfToken token : line.tokens()) {
+        if (!annual.contains(token)) continue;
+        header.add(token);
+        if (sourcePath == null)
+          sourcePath = "PDF:page:" + (line.pageIndex() + 1) + ":line:" + (line.pageLineIndex() + 1) + ":annualVolumeUnit";
+      }
+    }
+    String label = normalizeLabel(joinRaw(header));
+    String unit = label.contains("万只") ? "TEN_THOUSAND_PIECES"
+        : label.contains("量只") ? "PIECES" : null;
+    if (unit == null) return;
+    for (QuoteIngestItemRequest item : request.getItems()) {
+      if (!StringUtils.hasText(item.getAnnualVolume()) || item.getExtraFields().stream()
+          .anyMatch(field -> "ANNUAL_VOLUME_UNIT".equals(field.getFieldCode()))) continue;
+      QuoteExtraFieldRequest field = new QuoteExtraFieldRequest();
+      field.setFieldCode("ANNUAL_VOLUME_UNIT");
+      field.setFieldName("预计年用量单位");
+      field.setFieldValue(unit);
+      field.setValueType("TEXT");
+      field.setSourceFieldName(joinRaw(header));
+      field.setSourceFieldPath(sourcePath);
+      item.getExtraFields().add(field);
+    }
   }
 
   private List<QuoteOaPdfFieldDefinition> tableFields(QuoteOaPdfTemplateDefinition template) {
@@ -295,6 +345,16 @@ public class QuoteOaPdfDetailTableParser {
       List<QuotePdfToken> rowTokens = denseRowTokens(lines, range, start.pageIndex(), fromY, toY);
       QuoteIngestItemRequest item =
           toDenseFiSc006Item(rowTokens, context.getTemplateDefinition(), layout, start.seq());
+      // Printed rows can leave only their sequence on the previous page.
+      if (!hasDenseProductIdentity(item) && i + 1 < starts.size()
+          && starts.get(i + 1).pageIndex() > start.pageIndex()) {
+        RowStart next = starts.get(i + 1);
+        for (int page = start.pageIndex() + 1; page <= next.pageIndex(); page++) {
+          float continuationEnd = page == next.pageIndex() ? next.y() - 24.0f : Float.POSITIVE_INFINITY;
+          rowTokens.addAll(denseRowTokens(lines, range, page, 0, continuationEnd));
+        }
+        item = toDenseFiSc006Item(rowTokens, context.getTemplateDefinition(), layout, start.seq());
+      }
       if (item != null) {
         items.add(item);
       }
@@ -704,7 +764,7 @@ public class QuoteOaPdfDetailTableParser {
     if (column != null) {
       for (QuotePdfToken token : tokens) {
         String text = trimToNull(token.getText());
-        if (column.contains(token) && text != null && text.matches("\\d+(?:个)?月")) {
+        if (column.contains(token) && text != null && text.matches("\\d+(?:(?:个)?月)?")) {
           return text.replaceFirst("(?:个)?月$", "");
         }
       }
@@ -765,6 +825,7 @@ public class QuoteOaPdfDetailTableParser {
     if ("期月".equals(compact) || "月".equals(compact)) {
       return true;
     }
+    if (Set.of("万", "只", "万只", "预计年", "用量").contains(compact)) return true;
     if (compact.contains("预计年用")
         || compact.contains("量只")
         || compact.contains("总成")

@@ -12,6 +12,7 @@ public class MonthlyMaterialPriceRow {
   private Long id;
   private Long invoiceRevision;
   private Long financeRevision;
+  private Long householdRevision;
   private Long supersededByFinanceBatchId;
   private String applicabilityHash;
   private String applicabilityJson;

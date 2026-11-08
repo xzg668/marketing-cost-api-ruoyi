@@ -134,6 +134,18 @@ class MonthlyRepriceQueryControllerTest {
     verify(queryService).listCostItems("MRP-001", 11L);
   }
 
+  @Test void sourcesArePaginatedAndProtectedLikeOtherResultDetails() throws Exception {
+    var source = new com.sanhua.marketingcost.dto.MonthlyRepriceSourceDto(1L, "OA-A", 9L, 8L, true);
+    when(queryService.pageSources("MRP-001", 11L, 2, 20))
+        .thenReturn(new MonthlyRepricePageResponse<>(21, List.of(source)));
+    var response = controller.sources("MRP-001", 11L, 2, 20).getData();
+    assertThat(response.getTotal()).isEqualTo(21);
+    assertThat(response.getList()).containsExactly(source);
+    assertThat(MonthlyRepriceQueryController.class.getMethod("sources", String.class, Long.class,
+        Integer.class, Integer.class).getAnnotation(PreAuthorize.class).value())
+        .isEqualTo(MonthlyRepriceQueryController.QUERY_PERMISSION);
+  }
+
   @Test
   @DisplayName("GET /audit-logs：组装审计日志分页筛选排序请求")
   void auditLogsBuildsQueryRequest() {

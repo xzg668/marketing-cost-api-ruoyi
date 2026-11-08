@@ -26,7 +26,10 @@ import org.testcontainers.utility.*;
 @Tag("integration")
 class MonthlyOriginalLinkedPriceSourceIntegrationTest {
   static final MySQLContainer<?> MYSQL=new MySQLContainer<>(DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
-      .withDatabaseName("mpp_original_linked_test").withUsername("root").withPassword("mpp-linked-test-only").withConfigurationOverride("monthly-pricing/mysql");
+      .withDatabaseName("mpp_original_linked_test").withUsername("root").withPassword("mpp-linked-test-only").withConfigurationOverride("monthly-pricing/mysql")
+          .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","monthly-price-tests"))
+          .withLabel("sales-cost.run",UUID.randomUUID().toString())
+          .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   static com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader financeReader;static JdbcTemplate jdbc;static MonthlyOriginalLinkedPriceSource source;static AtomicInteger prepared=new AtomicInteger();
   static PriceLinkedItemMapper rules;static OriginalLinkedRuleSnapshot snapshots;static FinanceEffectivePriceService effective;static org.springframework.transaction.support.TransactionTemplate transaction;
   static MonthlyMaterialPriceService operation;static MonthlyPriceDocumentCodec codec;static AtomicInteger sourceCalls=new AtomicInteger();
@@ -39,7 +42,7 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/original-linked-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_original_linked_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyOriginalLinkedSourceMapper.class);for(var mapper:List.of(PriceLinkedItemMapper.class,PriceRangeFactorRuleMapper.class,FinanceEffectivePriceMapper.class,MaterialPriceMonthMapper.class))configuration.addMapper(mapper);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -53,7 +56,7 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     source=new MonthlyOriginalLinkedPriceSource(sql.getMapper(MonthlyOriginalLinkedSourceMapper.class),new MaterialPriceMonthSelector(sql.getMapper(MaterialPriceMonthMapper.class)),finance,effective,sql.getMapper(MonthlySupplierInputMapper.class),new SupplierPriceSelectionService(null,null),new OriginalLinkedPriceRuntime(snapshots,calculator,finance,json),codec);
     var storage=new MonthlyPriceStorage(sql.getMapper(MonthlyPriceStorageMapper.class),codec,sql.getMapper(MonthlyPriceLinkMapper.class));operation=new MonthlyMaterialPriceService(storage,new DataSourceTransactionManager(ds),codec,(context,requests,dependencies)->{sourceCalls.incrementAndGet();return source.read(context,requests);});
   }
-  @AfterAll static void stop(){MYSQL.stop();}
+  @AfterAll static void stop(){if (!Boolean.getBoolean("mpp.mysql.retain")) MYSQL.stop();}
   static Context context(String bu,String month,String org){return new Context(bu,"MPP05-LINKED",1L,"TOP",YearMonth.parse(month),YearMonth.parse(month).atDay(23).atStartOfDay(),"fixture",org);}
   static MonthlyPriceRequest request(String code,String bu,String month,String org,NonCuConditions terms){return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.parse(month),bu,code,"SPEC","件","CNY",TaxBasis.EXCLUDED,null),org,terms,BigDecimal.ONE);}
   static String code(){return "MPP05-linked-"+UUID.randomUUID();}

@@ -30,6 +30,22 @@ public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
       @Param("fingerprint") String fingerprint, @Param("now") LocalDateTime now,
       @Param("userId") Long userId, @Param("name") String name);
 
+  @Update("""
+      UPDATE lp_quote_tech_module SET required_flag=#{required},module_status=#{status},
+        requirement_reason_code=#{reasonCode},requirement_reason=#{reason},
+        source_availability=#{availability},
+        source_reference=#{fingerprint},source_checked_at=#{now},
+        assignee_user_id=#{userId},assignee_name=#{name},oa_edit_allowed=1,
+        last_validation_code='TECHNICAL_BOM_PRICE_CHECKED',last_validation_message=#{reason},
+        row_version=row_version+1,updated_at=#{now}
+      WHERE id=#{id} AND row_version=#{expectedVersion}
+      """)
+  int refreshBomPrice(@Param("id") Long id, @Param("expectedVersion") int expectedVersion,
+      @Param("required") boolean required, @Param("status") String status,
+      @Param("reasonCode") String reasonCode, @Param("reason") String reason,
+      @Param("availability") String availability, @Param("fingerprint") String fingerprint, @Param("now") LocalDateTime now,
+      @Param("userId") Long userId, @Param("name") String name);
+
   // 和模块查询使用同一 Mapper，更新后清掉当前事务的 MyBatis 查询缓存，供 OA 分派读取最新缺口。
   @Update("""
       UPDATE lp_quote_tech_module SET required_flag=#{requirement.required},

@@ -6,7 +6,6 @@ import com.sanhua.marketingcost.dto.ThreeExpenseRateImportResponse;
 import com.sanhua.marketingcost.dto.ThreeExpenseRateRequest;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
-import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.ThreeExpenseRateService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -367,9 +366,8 @@ public class ThreeExpenseRateServiceImpl implements ThreeExpenseRateService {
     entity.setProductLine(trimToNull(entity.getProductLine()));
     entity.setSourceType(defaultIfBlank(entity.getSourceType(), "EXCEL_IMPORT"));
     entity.setImportBatchNo(trimToNull(entity.getImportBatchNo()));
-    entity.setBusinessUnitType(defaultIfBlank(
-        entity.getBusinessUnitType(),
-        defaultIfBlank(BusinessUnitContext.getCurrentBusinessUnitType(), inferBusinessUnitType(entity))));
+    // 三项费用统一维护在商用；产品口径只区分匹配规则，不改变业务单元。
+    entity.setBusinessUnitType("COMMERCIAL");
     if (entity.getPeriodYear() == null || entity.getPeriodYear() <= 0) {
       entity.setPeriodYear(resolvePeriodYear(entity));
     }
@@ -407,10 +405,6 @@ public class ThreeExpenseRateServiceImpl implements ThreeExpenseRateService {
       return defaultValue;
     }
     return value.trim();
-  }
-
-  private String inferBusinessUnitType(ThreeExpenseRate entity) {
-    return "家代商代销产品".equals(entity.getProductCategory()) ? "HOUSEHOLD" : "COMMERCIAL";
   }
 
   private boolean hasRequired(ThreeExpenseRate entity) {

@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
@@ -57,16 +59,19 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   private final CostRunEngine costRunEngine;
   private final QuoteCostPriceScenarioMapper scenarioMapper;
   private final com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting monthlyCosting;
+  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceCostingReuse reuse;
 
   public QuoteCuAdjustmentCalcServiceImpl(
       PricePrepareBatchMapper batchMapper, FinancePricePrepareService financePricePrepareService,
       QuoteCostRunVersionService versionService, QuoteCostRunVersionMapper versionMapper,
       CostRunEngine costRunEngine, QuoteCostPriceScenarioMapper scenarioMapper,
-      com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting monthlyCosting) {
+      com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting monthlyCosting,
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceCostingReuse reuse) {
     this.batchMapper = batchMapper; this.financePricePrepareService = financePricePrepareService;
     this.versionService = versionService; this.versionMapper = versionMapper;
     this.costRunEngine = costRunEngine; this.scenarioMapper = scenarioMapper;
     this.monthlyCosting = monthlyCosting;
+    this.reuse = reuse;
   }
 
   @Override
@@ -82,15 +87,17 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
 
     QuoteCostRunVersion version = createVersion(scope, oaBatch, financePrepare);
     CostRunContext context = buildContext(scope, oaBatch, financePrepare, version);
-    CostRunObjectResult costResult = requireCostResult(costRunEngine.run(context));
-    validateNoAdjustmentCostItem(costResult);
-    validateRequiredRates(costResult);
+    var shared = request.reprice() == null ? null : reuse.resolve(request.reprice(),version,context,this::validateOrdinary);
+    CostRunObjectResult costResult = shared == null ? requireCostResult(costRunEngine.run(context)) : shared.ordinary();
+    validateOrdinary(costResult);
     BigDecimal financeMaterialCost = uniqueCostAmount(costResult, COST_CODE_MATERIAL);
     BigDecimal totalCost = uniqueCostAmount(costResult, COST_CODE_TOTAL);
-    validateResultTotal(costResult, totalCost);
 
-    var stored = Objects.requireNonNull(monthlyCosting, "报价核算必须配置月价成本存储")
-        .save(version, costResult, scope.form().getCopperPrice());
+    Objects.requireNonNull(monthlyCosting, "报价核算必须配置月价成本存储");
+    var customerPrices = CustomerMaterialPrices.fromQuotation(scope.form());
+    var stored = shared == null ? monthlyCosting.saveMaterials(version, costResult, customerPrices)
+        : monthlyCosting.saveCalculatedMaterials(version, shared.monthly(), customerPrices, shared.numbers());
+    if (shared != null) reuse.bind(request.reprice(), shared.groupId());
     version = stored.version();
     var calculation = stored.snapshot().calculation();
     financeMaterialCost = calculation.financeMaterialCost();
@@ -315,8 +322,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         scope.item().getMaterialNo());
     if (scope.request().reprice() != null) {
       var saved = scope.request().reprice();
-      context.setScene(CostRunContext.SCENE_MONTHLY_REPRICE);
-      context.setRepriceNo(saved.repriceNo()); context.setBomSourcePolicy("MONTHLY_SNAPSHOT");
+      context = saved.costContext();
+      context.getQuotationInput().requireFor(context, scope.oaNo(), scope.productCode());
       organization = saved.input().context().organization();
     }
     context.setPriceOrgCode(organization.priceOrgCode());
@@ -334,6 +341,11 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
       throw new IllegalStateException("财务场景成本核算结果不完整");
     }
     return result;
+  }
+
+  private void validateOrdinary(CostRunObjectResult result) {
+    requireCostResult(result); validateNoAdjustmentCostItem(result); validateRequiredRates(result);
+    validateResultTotal(result,uniqueCostAmount(result,COST_CODE_TOTAL));
   }
 
   private BigDecimal uniqueCostAmount(CostRunObjectResult result, String costCode) {

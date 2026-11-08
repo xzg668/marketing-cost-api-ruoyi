@@ -7,6 +7,10 @@ import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.HashMap;
+import com.sanhua.marketingcost.dto.CostRunFeeQuery;
+import com.sanhua.marketingcost.service.costing.CostRunFeeSources;
 import org.springframework.stereotype.Service;
 
 /** 核算与补录共用的公共取率：组织内有效料品 → 裸品 → 年度、业务单元配置。 */
@@ -63,6 +67,67 @@ public class NetLossRateQuery {
     return resolve(matches.getFirst(), organization, year, businessUnit);
   }
 
+  public record Lookup(String code, String model, String organization, int year, String businessUnit) {}
+
+  /** Resolve the same public selection for a bounded batch; supplemental values remain consumer-owned. */
+  public List<Source> lookupBatch(List<Lookup> requests,
+      CostRunFeeSources sources) {
+    var stable = List.copyOf(requests);
+    if (stable.size() > 64) throw new IllegalArgumentException("净损失率每批最多64个产品对象");
+    stable.forEach(q -> requireContext(q.organization(), q.year(), q.businessUnit()));
+    var matches = new ArrayList<List<MaterialMasterRaw>>();
+    stable.forEach(q -> matches.add(List.of()));
+    var codePositions = new ArrayList<Integer>();
+    var codeQueries = new ArrayList<CostRunFeeQuery.Material>();
+    for (int i = 0; i < stable.size(); i++) {
+      var q = stable.get(i);
+      if (!blank(q.code())) {
+        codePositions.add(i);
+        codeQueries.add(new CostRunFeeQuery.Material(q.code().trim(), q.organization()));
+      }
+    }
+    var byCode = sources.readMaterial(codeQueries);
+    for (int i = 0; i < codePositions.size(); i++) matches.set(codePositions.get(i), byCode.get(i));
+    var modelPositions = new ArrayList<Integer>();
+    var modelQueries = new ArrayList<CostRunFeeQuery.NetLossModel>();
+    for (int i = 0; i < stable.size(); i++) {
+      var q = stable.get(i);
+      if (matches.get(i).isEmpty() && !blank(q.model())) {
+        modelPositions.add(i);
+        modelQueries.add(new CostRunFeeQuery.NetLossModel(q.model().trim(), q.organization()));
+      }
+    }
+    var byModel = sources.readNetLossModel(modelQueries);
+    for (int i = 0; i < modelPositions.size(); i++) matches.set(modelPositions.get(i), byModel.get(i));
+    var ratePositions = new ArrayList<Integer>();
+    var rateQueries = new ArrayList<CostRunFeeQuery.QualityLoss>();
+    for (int i = 0; i < stable.size(); i++) {
+      var q = stable.get(i); var found = matches.get(i);
+      if (found.size() == 1 && !blank(bareCode(found.getFirst()))) {
+        ratePositions.add(i);
+        rateQueries.add(new CostRunFeeQuery.QualityLoss(
+            q.year(), bareCode(found.getFirst()).trim(), q.businessUnit()));
+      }
+    }
+    var selectedRates = new HashMap<Integer, QualityLossRate>();
+    var ratesByScope = sources.readQualityLoss(rateQueries);
+    for (int i = 0; i < ratePositions.size(); i++) {
+      var rows = ratesByScope.get(i);
+      if (rows.size() > 1) throw new org.apache.ibatis.exceptions.TooManyResultsException("同一年度、裸品和业务单元存在多条净损失率");
+      if (!rows.isEmpty()) selectedRates.put(ratePositions.get(i), rows.getFirst());
+    }
+    var result = new ArrayList<Source>();
+    for (int i = 0; i < stable.size(); i++) {
+      var q = stable.get(i); var found = matches.get(i);
+      result.add(found.size() == 1
+          ? resolve(found.getFirst(), q.organization(), q.year(), q.businessUnit(), selectedRates.get(i))
+          : missing(found.isEmpty() ? "NET_LOSS_PRODUCT_MISSING" : "NET_LOSS_PRODUCT_AMBIGUOUS",
+              found.isEmpty() ? "未找到对应的有效成品料品档案" : "对应多个成品，请在补录中选择参考成品或直接填写",
+              q.code(), q.organization(), q.year(), q.businessUnit()));
+    }
+    return List.copyOf(result);
+  }
+
   public List<Source> search(String searchBy, String keyword, String organization, int year, String businessUnit) {
     requireContext(organization, year, businessUnit);
     if (!("CODE".equals(searchBy) || "MODEL".equals(searchBy)) || blank(keyword) || keyword.trim().length() > 100) {
@@ -78,13 +143,23 @@ public class NetLossRateQuery {
   }
 
   private Source resolve(MaterialMasterRaw material, String organization, int year, String businessUnit) {
-    String bare = !blank(material.getMainCategoryCode()) && material.getMainCategoryCode().trim().startsWith("11")
-        ? material.getMaterialCode() : material.getBareCode();
-    if (blank(bare)) return source(material, null, organization, year, businessUnit, null, "MISSING",
-        "NET_LOSS_BARE_MISSING", "该成品未维护裸品料号");
-    var rate = rates.selectOne(Wrappers.lambdaQuery(QualityLossRate.class)
+    String bare = bareCode(material);
+    var rate = blank(bare) ? null : rates.selectOne(Wrappers.lambdaQuery(QualityLossRate.class)
         .eq(QualityLossRate::getRateYear, year).eq(QualityLossRate::getBareProductCode, bare.trim())
         .eq(QualityLossRate::getBusinessUnitType, businessUnit));
+    return resolve(material, organization, year, businessUnit, rate);
+  }
+
+  private static String bareCode(MaterialMasterRaw material) {
+    return !blank(material.getMainCategoryCode()) && material.getMainCategoryCode().trim().startsWith("11")
+        ? material.getMaterialCode() : material.getBareCode();
+  }
+
+  private Source resolve(MaterialMasterRaw material, String organization, int year, String businessUnit,
+      QualityLossRate rate) {
+    String bare = bareCode(material);
+    if (blank(bare)) return source(material, null, organization, year, businessUnit, null, "MISSING",
+        "NET_LOSS_BARE_MISSING", "该成品未维护裸品料号");
     if (rate == null) return source(material, bare.trim(), organization, year, businessUnit, null,
         "MISSING", "NET_LOSS_RATE_MISSING", "该裸品暂无本核算年度、业务单元的净损失率");
     if (!validPublicRate(rate.getLossRate())) {

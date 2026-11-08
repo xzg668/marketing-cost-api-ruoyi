@@ -157,7 +157,7 @@ public class OaTechnicalBatchRepository {
   }
 
   public void received(String id, OaWorkflowResult result) {
-    // 审批通知可能先于同步 HTTP 回执到达，已被通知确认的提交不能被迟到回执降级。
+    // I02 保留既有节点确认规则；I03 的节点通知不再确认提交成功。
     if ("SUCCESS".equals(find(id, true).status())) return;
     requireOne(
       jdbc.update(
@@ -192,25 +192,6 @@ public class OaTechnicalBatchRepository {
         UPDATE lp_oa_technical_batch SET status='OA_ACCEPTED',result_json=?,updated_at=NOW(3)
         WHERE id=? AND operation='I02' AND status IN ('SENDING','UNKNOWN','OA_ACCEPTED')
         """, codec.write(result), batch.id()));
-  }
-
-  /** 全部产品冻结提交已由通知确认后，解除本人的 I03 结果未确认状态。 */
-  public void confirmSubmissionNotification(String id, long notificationId) {
-    var batch = find(id, true);
-    if (batch == null || !"I03".equals(batch.operation()) || "SUCCESS".equals(batch.status())) return;
-    if (!java.util.Set.of("SENDING", "UNKNOWN", "OA_ACCEPTED").contains(batch.status())) {
-      throw new IllegalStateException("本次 I03 尚未发送或已明确失败，不能用审批通知确认");
-    }
-    boolean pending = Boolean.TRUE.equals(jdbc.queryForObject("""
-        SELECT EXISTS(SELECT 1 FROM lp_oa_integration_message m
-          LEFT JOIN lp_quote_tech_submission s ON s.outbound_message_id=m.id
-          WHERE m.technical_batch_id=? AND COALESCE(s.submission_status,'') NOT IN ('SENT','APPROVED','RETURNED'))
-        """, Boolean.class, id));
-    if (pending) throw new IllegalStateException("通知未覆盖本人本次提交的全部产品，请核对任务关联");
-    var result = new OaWorkflowResult("OA-NOTIFY:" + notificationId, OaWorkflowResult.Status.SUCCESS,
-        null, "0", "OA状态通知已确认本次提交受理", batch.request().path("requestId").asText(), null, 0);
-    jdbc.update("UPDATE lp_oa_technical_batch SET status='SUCCESS',result_json=?,updated_at=NOW(3) WHERE id=?",
-        codec.write(result), id);
   }
 
   public void linkMessage(String batchId, long messageId) {

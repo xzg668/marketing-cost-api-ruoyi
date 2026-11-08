@@ -36,7 +36,10 @@ import org.testcontainers.utility.DockerImageName;
 @Tag("integration")
 class SupplierSupplyRatioIncrementalIntegrationTest {
   static final MySQLContainer<?> MYSQL=new MySQLContainer<>(DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
-      .withDatabaseName("mrp02_ratio_test").withUsername("root").withPassword("mrp02-test-only").withConfigurationOverride("monthly-pricing/mysql");
+      .withDatabaseName("mrp02_ratio_test").withUsername("root").withPassword("mrp02-test-only").withConfigurationOverride("monthly-pricing/mysql")
+      .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","supplier-ratio-tests"))
+      .withLabel("sales-cost.run",java.util.UUID.randomUUID().toString())
+      .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   static HikariDataSource ds;static JdbcTemplate jdbc;static SqlSessionTemplate sql;
   static AnnotationConfigApplicationContext context;static SupplierSupplyRatioImportService imports;
   static SupplierSupplyRatioService queries;static CommitObserver observer;
@@ -62,7 +65,7 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
     context=new AnnotationConfigApplicationContext(Config.class);imports=context.getBean(SupplierSupplyRatioImportService.class);queries=context.getBean(SupplierSupplyRatioService.class);observer=context.getBean(CommitObserver.class);
     assertThat(org.springframework.aop.support.AopUtils.isAopProxy(imports)).isTrue();
   }
-  @AfterAll static void stop(){if(context!=null)context.close();if(ds!=null)ds.close();MYSQL.stop();}
+  @AfterAll static void stop(){if(context!=null)context.close();if(ds!=null)ds.close();if(!Boolean.getBoolean("mpp.mysql.retain"))MYSQL.stop();}
   @BeforeEach void clean(){jdbc.update("DELETE FROM lp_business_change_log");jdbc.update("DELETE FROM lp_supplier_supply_ratio");observer.committed.clear();auth("COMMERCIAL");}
   @AfterEach void logout(){SecurityContextHolder.clearContext();}
   static void auth(String unit){var a=new UsernamePasswordAuthenticationToken("mrp02-finance",null);a.setDetails(Map.of("businessUnitType",unit));SecurityContextHolder.getContext().setAuthentication(a);}
@@ -79,11 +82,33 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
       book.write(out);return out.toByteArray();
     }
   }
-  @Test void addingOnlyCLeavesEveryOriginalAAndBFieldUntouched() {
-    save(row("000A","0.6"),row("000B","0.4"));var original=all();
-    var result=save(row("000C","0.2"));assertThat(result.getNewRelations()).isEqualTo(1);assertThat(result.getDeactivatedRows()).isZero();
-    assertThat(all().subList(0,2)).isEqualTo(original);assertThat(logs()).isEqualTo(3);
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_supplier_supply_ratio WHERE is_active=1",Integer.class)).isEqualTo(3);
+  @Test void importedMaterialReplacesItsSupplierSetAndUnmentionedMaterialCarriesForward() {
+    save(row("000A","0.6"),row("000B","0.4"),row("OTHER","000D","1"));
+    var other=jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE material_code='OTHER'");
+    var result=save(row("000C","1"));
+    assertThat(result.getNewRelations()).isEqualTo(1);
+    assertThat(result.getDeactivatedRows()).isEqualTo(2);
+    assertThat(jdbc.queryForList("SELECT supplier_code FROM lp_supplier_supply_ratio WHERE material_code='000M' AND is_active=1",String.class)).containsExactly("000C");
+    assertThat(jdbc.queryForList("SELECT supply_ratio FROM lp_supplier_supply_ratio WHERE material_code='000M' AND is_active=0 ORDER BY id",BigDecimal.class)).containsExactly(new BigDecimal("0.600000"),new BigDecimal("0.400000"));
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE material_code='OTHER'")).isEqualTo(other);
+    assertThat(logs()).isEqualTo(6);
+  }
+  @Test void removalOnlyImportIsLoggedAndRepeatedFileIsANoOp() throws Exception {
+    save(row("000A","0.6"),row("000B","0.4"));
+    observer.committed.clear();
+    var result=imports.importExcel(new ByteArrayInputStream(workbook(row("000A","0.6"))),"replace.xlsx","COMMERCIAL","finance",null);
+    assertThat(result.getUnchangedRows()).isEqualTo(1);
+    assertThat(result.getInsertedRows()).isZero();
+    assertThat(result.getDeactivatedRows()).isEqualTo(1);
+    assertThat(result.getBatchNo()).isNotNull();
+    var removed=queries.changes("000M","000B",result.getBatchNo(),1,20,null).records().getFirst();
+    assertThat(removed.importFileName()).isEqualTo("replace.xlsx");
+    assertThat(new ObjectMapper().readTree(removed.afterValue()).path("isActive").asInt()).isZero();
+    assertThat(observer.committed).hasSize(1);
+    var before=all();int count=logs();
+    assertThat(save(row("000A","0.6")).getBatchNo()).isNull();
+    assertThat(all()).isEqualTo(before);assertThat(logs()).isEqualTo(count);
+    assertThat(observer.committed).hasSize(1);
   }
 
   @Test void unnamedWorkbookImportsIdempotentlyAndLaterCodeKeepsOneCurrentRelationship() throws Exception {
@@ -96,15 +121,17 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
     assertThat(imports.importExcel(new ByteArrayInputStream(file),"names.xlsx","COMMERCIAL","finance",null).getUnchangedRows()).isEqualTo(2);
     assertThat(all()).isEqualTo(original);
     a.setSupplierCode("000A");
-    assertThat(save(a).getChangedRelations()).isEqualTo(1);
+    assertThat(save(a,b).getChangedRelations()).isEqualTo(1);
     assertThat(current("000A").get("supplier_name")).isEqualTo("供应商甲");
     a.setSupplierCode(null);
-    assertThat(save(a).getUnchangedRows()).isEqualTo(1);
+    assertThat(save(a,b).getUnchangedRows()).isEqualTo(2);
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_supplier_supply_ratio WHERE is_active=1",Integer.class)).isEqualTo(2);
   }
-  @Test void changingOnlyAAndBRetainsCAndRecordsExactPreviousAndNextVersions() throws Exception {
+  @Test void replacingSupplierSetRetiresOmittedCAndRecordsExactPreviousAndNextVersions() throws Exception {
     save(row("000A","0.5"),row("000B","0.3"),row("000C","0.2"));var c=current("000C");var a=current("000A");
-    var result=save(row("000A","0.4"),row("000B","0.4"));assertThat(result.getChangedRelations()).isEqualTo(2);assertThat(current("000C")).isEqualTo(c);
+    var result=save(row("000A","0.4"),row("000B","0.4"));assertThat(result.getChangedRelations()).isEqualTo(2);
+    assertThat(result.getRemovedRelations()).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT is_active FROM lp_supplier_supply_ratio WHERE id=?",Integer.class,c.get("id"))).isZero();
     var page=queries.changes("000M","000A",result.getBatchNo(),1,20,null);assertThat(page.total()).isEqualTo(1);var log=page.records().getFirst();
     assertThat(log.previousVersionId()).isEqualTo(((Number)a.get("id")).longValue());assertThat(log.versionId()).isEqualTo(((Number)current("000A").get("id")).longValue());
     var json=new ObjectMapper();assertThat(json.readTree(log.beforeValue()).get("supplyRatio").decimalValue()).isEqualByComparingTo("0.5");assertThat(json.readTree(log.afterValue()).get("supplyRatio").decimalValue()).isEqualByComparingTo("0.4");
@@ -150,6 +177,28 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
     try{assertThatThrownBy(()->save(row("000A","0.4"),row("000B","0.6"))).hasStackTraceContaining("MRP02_ROW_ROLLBACK");}finally{jdbc.execute("DROP TRIGGER mrp02_row_failure");}
     assertThat(all()).isEqualTo(original);assertThat(logs()).isEqualTo(1);
   }
+  @Test void removalAuditFailureRollsBackBothNewValuesAndRetirements() {
+    save(row("000A","0.5"),row("000B","0.5"));var original=all();int events=observer.committed.size();
+    jdbc.execute("CREATE TRIGGER ratio_removal_failure BEFORE INSERT ON lp_business_change_log FOR EACH ROW BEGIN IF NEW.idempotency_key LIKE 'SUPPLIER_RATIO_REPLACED:%' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='REMOVAL_ROLLBACK'; END IF; END");
+    try { assertThatThrownBy(()->save(row("000A","1"))).hasStackTraceContaining("REMOVAL_ROLLBACK"); }
+    finally { jdbc.execute("DROP TRIGGER ratio_removal_failure"); }
+    assertThat(all()).isEqualTo(original);assertThat(logs()).isEqualTo(2);assertThat(observer.committed).hasSize(events);
+  }
+  @Test void reimportingLegacyDatedRatioCreatesTheNewOpenEndedCurrentVersion() {
+    save(row("000A","1"));
+    jdbc.update("UPDATE lp_supplier_supply_ratio SET effective_from='2026-01-01',effective_to='2026-03-31' WHERE material_code='000M'");
+    var result=save(row("000A","1"));
+    assertThat(result.getChangedRelations()).isEqualTo(1);
+    assertThat(current("000A").get("effective_from")).isNull();assertThat(current("000A").get("effective_to")).isNull();
+    assertThat(jdbc.queryForObject("SELECT effective_to FROM lp_supplier_supply_ratio WHERE is_active=0",java.sql.Date.class)).isEqualTo(java.sql.Date.valueOf("2026-03-31"));
+  }
+  @Test void concurrentMaterialReplacementsNeverCombineTwoSupplierSets() throws Exception {
+    save(row("000A","1"));
+    concurrent(2,i->i==0?save(row("000B","0.6"),row("000C","0.4")):save(row("000D","1")));
+    var current=jdbc.queryForList("SELECT supplier_code FROM lp_supplier_supply_ratio WHERE is_active=1 ORDER BY supplier_code",String.class);
+    assertThat(current).isIn(List.of("000B","000C"),List.of("000D"));
+    assertThat(observer.committed).hasSize(3);
+  }
   @Test void eightConcurrentFirstImportsPersistOneCurrentVersionAndOneLog() throws Exception {
     concurrent(8,i->save(row("000A","0.5")));assertThat(all()).hasSize(1);assertThat(logs()).isEqualTo(1);assertThat(observer.committed).hasSize(1);
   }
@@ -179,10 +228,10 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
   }
   @Test void currentHistoryAndBatchFiltersReconcileWithoutChangingAnyRows() {
     var first=save(row("000A","0.5"),row("000B","0.5"));var changed=save(row("000A","0.6"));var original=all();
-    assertThat(queries.page("000M",null,null,null,null,null,null,1,1,20,null).getTotal()).isEqualTo(2);
-    assertThat(queries.page("000M",null,null,null,null,null,null,0,1,20,null).getTotal()).isEqualTo(1);
+    assertThat(queries.page("000M",null,null,null,null,null,null,1,1,20,null).getTotal()).isEqualTo(1);
+    assertThat(queries.page("000M",null,null,null,null,null,null,0,1,20,null).getTotal()).isEqualTo(2);
     assertThat(queries.page(null,null,null,null,null,first.getBatchNo(),null,null,1,20,null).getTotal()).isEqualTo(2);
-    assertThat(queries.changes(null,null,changed.getBatchNo(),1,20,null).total()).isEqualTo(1);assertThat(all()).isEqualTo(original);assertThat(logs()).isEqualTo(3);
+    assertThat(queries.changes(null,null,changed.getBatchNo(),1,20,null).total()).isEqualTo(2);assertThat(all()).isEqualTo(original);assertThat(logs()).isEqualTo(4);
   }
   @Test void metadataChangesAreVersionedButFileOrDecimalScaleChangesAreNot() {
     save(row("000A","0.6"));var changed=row("000A","0.600000");changed.setUnit("套");assertThat(save(changed).getChangedRelations()).isEqualTo(1);var original=all();

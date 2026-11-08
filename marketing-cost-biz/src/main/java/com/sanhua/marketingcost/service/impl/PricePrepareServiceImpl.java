@@ -152,6 +152,12 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   }
 
   @Override
+  @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+  public PricePrepareCalculationResult calculateForTechnical(PricePrepareGenerateRequest request) {
+    return execute(normalize(request, currentTime(), null, true), false);
+  }
+
+  @Override
   @Transactional(
       rollbackFor = Exception.class,
       isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
@@ -178,15 +184,47 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     if (generated.getGapCount() > 0) {
       // The enclosing calculation rolls these temporary gaps back. Preserve actionable details
       // in the returned failure before the worker records it on the durable task.
-      var details = gapMapper.selectList(Wrappers.<PricePrepareGap>lambdaQuery()
-          .eq(PricePrepareGap::getPrepareNo, generated.getPrepareNo())
-          .eq(PricePrepareGap::getBusinessUnitType, request.getBusinessUnitType())
-          .orderByAsc(PricePrepareGap::getId).last("LIMIT 10")).stream()
-          .map(gap -> (StringUtils.hasText(gap.getGapMaterialCode()) ? gap.getGapMaterialCode() : gap.getMaterialCode())
-              + "：" + gap.getMessage()).distinct().collect(java.util.stream.Collectors.joining("；"));
+      var issues=new java.util.LinkedHashSet<PricePrepareGenerateResult.Issue>();
+      long after=0;
+      while(true) {
+        var page=gapMapper.selectList(Wrappers.<PricePrepareGap>lambdaQuery()
+            .eq(PricePrepareGap::getPrepareNo,generated.getPrepareNo())
+            .eq(PricePrepareGap::getBusinessUnitType,request.getBusinessUnitType())
+            .gt(PricePrepareGap::getId,after).orderByAsc(PricePrepareGap::getId).last("LIMIT 256"));
+        if(page.isEmpty())break;
+        for(var gap:page)issues.add(new PricePrepareGenerateResult.Issue(
+            StringUtils.hasText(gap.getGapMaterialCode())?gap.getGapMaterialCode():gap.getMaterialCode(),
+            gap.getMaterialName(),gap.getReasonCode(),gap.getMessage()));
+        after=page.getLast().getId();
+      }
+      generated.setIssues(java.util.List.copyOf(issues));
+      var details = issues.stream().limit(10).map(issue->issue.materialCode()+"："+issue.message())
+          .collect(java.util.stream.Collectors.joining("；"));
       if (!details.isBlank()) generated.setMessage(generated.getMessage() + "；" + details);
     }
     return generated;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public MonthlyQuotationPrices.Demand repriceDemand(
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation input, String effectiveBuild) {
+    var saved = input.input();
+    var request = new PricePrepareGenerateRequest();
+    request.setOaNo(saved.form().getOaNo()); request.setOaFormItemId(saved.item().getId());
+    request.setTopProductCode(saved.context().productCode()); request.setPeriodMonth(saved.context().costPeriodMonth());
+    request.setBusinessUnitType(saved.form().getBusinessUnitType()); request.setPriceAsOfTime(input.priceAsOfTime());
+    var req = normalize(request,currentTime(),new RepriceScope(input,effectiveBuild));
+    var rows = loadRows(req);
+    if (rows == null || rows.isEmpty()) throw invalidBomScope("调价批量取价缺少已准备的BOM结算明细");
+    effectiveBuild(req,rows);
+    var session = monthlySessions.open(req.oaNo(),req.businessUnitType(),req.periodMonth(),req.priceAsOfTime(),
+        req.scenarioContext().forOrganization(rows.getFirst().getPriceOrgCode()));
+    var plans = mergePlanItems(itemClassifier.classify(rows),initBatch(req,currentTime(),false)).stream()
+        .filter(this::isReadyNormalItem).toList();
+    var inputs = normalMaterialPricePrepareStrategy.inputs(session,plans).values().stream()
+        .map(MonthlyQuotationPrices::item).toList();
+    return new MonthlyQuotationPrices.Demand(session.context(),inputs);
   }
 
   private PricePrepareGenerateResult generateNormalized(NormalizedGenerateRequest req) {
@@ -227,16 +265,16 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     var finalPlan = session == null ? new MonthlyAdoptionPlan(Map.of(), List.of(), Set.of()) : session.plan();
     if (!STATUS_SUCCESS.equals(result.getSummary().getStatus()) || !adopted.equals(finalPlan))
       throw new org.springframework.dao.ConcurrencyFailureException("月价采用后计价范围变化，请重新准备当前报价");
+    var references = new ArrayList<MonthlyPriceStorage.PreparationReference>();
     for (var item : result.getItems()) if (MonthlyPreparationPrice.KIND.equals(item.getResultRefType())) {
       var evidence = monthlyCodec.decode(item.getInputSnapshotJson(), MonthlyPreparationPrice.class);
       var selected = finalPlan.selections().get(evidence.request());
       if (selected == null || !selected.equals(evidence.selection()) || selected.monthlyPriceId() == null)
         throw new IllegalStateException("准备明细缺少本次采用的月价依据");
-      if (req.reprice() == null)
-        monthlyStorage.attachPreparation(req.businessUnitType(),item.getId(),selected.monthlyPriceId(),selected.fact().type());
-      else monthlyStorage.attachRepricePreparation(req.businessUnitType(),req.reprice().input().repriceNo(),
-          item.getId(),selected.monthlyPriceId(),selected.fact().type());
+      references.add(new MonthlyPriceStorage.PreparationReference(item.getId(), evidence.request(), selected));
     }
+    monthlyStorage.attachPreparations(req.businessUnitType(),
+        req.reprice() == null ? null : req.reprice().input().repriceNo(), references);
     return result.getSummary();
   }
 
@@ -466,7 +504,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       var inputs = evidence.capture(row, adoptedInputs, roots.get(row.getSettlementKey()));
       if (inputs.uses().isEmpty()) throw new IllegalStateException("已计价准备缺少实际月价输入：" + row.getMaterialCode());
       row.setInputSnapshotJson(evidence.attach(row, inputs));
-      if (execution.persist) {
+      if (execution.persist && execution.publishOrdinary) {
         var patch = new PricePrepareItem(); patch.setId(row.getId()); patch.setInputSnapshotJson(row.getInputSnapshotJson());
         if (itemMapper.updateById(patch) != 1) throw new IllegalStateException("准备月价依据保存失败");
       }
@@ -877,7 +915,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
 
   private void saveItem(PricePrepareItem item, Execution execution) {
     execution.items.add(item);
-    if (execution.persist) {
+    if (execution.persist && execution.publishOrdinary) {
       upsertItem(item);
     }
   }
@@ -1021,13 +1059,18 @@ public class PricePrepareServiceImpl implements PricePrepareService {
 
   private NormalizedGenerateRequest normalize(PricePrepareGenerateRequest request,
       LocalDateTime batchStartedAt, RepriceScope reprice) {
+    return normalize(request, batchStartedAt, reprice, false);
+  }
+
+  private NormalizedGenerateRequest normalize(PricePrepareGenerateRequest request,
+      LocalDateTime batchStartedAt, RepriceScope reprice, boolean technicalPreview) {
     if (request == null || !StringUtils.hasText(request.getOaNo())) {
       throw new IllegalArgumentException("oaNo is required");
     }
     String businessUnitType =
         firstText(request.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType());
     String periodMonth =
-        reprice == null ? pricingPeriods.requireActiveMonth(request.getPeriodMonth(), businessUnitType)
+        reprice == null && !technicalPreview ? pricingPeriods.requireActiveMonth(request.getPeriodMonth(), businessUnitType)
             : CostPricingPeriodUtils.normalizePricingMonth(request.getPeriodMonth());
     String sourceType =
         StringUtils.hasText(request.getSourceType())
@@ -1121,6 +1164,18 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private PricePrepareCalculationResult finishExecution(
       PricePrepareBatch batch, Execution execution) {
     if (execution.persist) {
+      if (!execution.publishOrdinary) {
+        // initBatch inserted a fresh identity; persist each final repricing document once, after
+        // its complete monthly inputs exist. Previews need neither writes nor compression.
+        var evidence = new MonthlyPreparationEvidence(monthlyCodec);
+        for (var item : execution.items) {
+          if (item.getId() != null || !batch.getPrepareNo().equals(item.getPrepareNo()))
+            throw new IllegalStateException("新调价准备不能覆盖既有明细或混用批次");
+          item.setInputSnapshotJson(evidence.compact(item));
+          normalizeItemForDb(item);
+          if (itemMapper.insert(item) != 1) throw new IllegalStateException("调价准备最终依据保存失败");
+        }
+      }
       batchMapper.updateById(batch);
       if (execution.publishOrdinary) currentStateService.finalizeBatch(batch);
     }

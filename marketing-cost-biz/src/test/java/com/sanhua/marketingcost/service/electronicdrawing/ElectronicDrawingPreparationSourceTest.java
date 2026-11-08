@@ -28,6 +28,7 @@ class ElectronicDrawingPreparationSourceTest {
   final com.sanhua.marketingcost.service.QuoteProductBomPreparationService preparation =
       mock(com.sanhua.marketingcost.service.QuoteProductBomPreparationService.class);
   final QuoteBomPreparationRecordMapper preparations = mock(QuoteBomPreparationRecordMapper.class);
+  final DrawingVerificationService verifications = mock(DrawingVerificationService.class);
   final ElectronicDrawingPreparationSource service =
       new ElectronicDrawingPreparationSource(
           contexts,
@@ -39,10 +40,37 @@ class ElectronicDrawingPreparationSourceTest {
           new com.sanhua.marketingcost.integration.oa.OaMessageCodec(
               new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()),
           sourceNodes,
-          preparation,
-          preparations);
+          verifications);
   QuoteBomSupplementVersion version;
   final QuoteTechTask sourceTask = new QuoteTechTask();
+
+  @Test
+  void readingAnExistingMonthlySnapshotDoesNotRequireStartingANewVerification() {
+    when(verifications.current(any())).thenReturn(java.util.Optional.empty());
+    assertThat(service.currentBlockReason(99L, "2026-10", "COMMERCIAL", "210")).isNull();
+    verifyNoInteractions(converter, versions);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"WAIT_REVIEW", "FAILED", "REQUESTING"})
+  void anOldApprovedBomCannotReplaceAnUnfinishedLatestVerification(String state) {
+    version.setVersionStatus("APPROVED");
+    var task = new DrawingVerificationTask(); task.setTaskState(state);
+    when(verifications.current(any())).thenReturn(java.util.Optional.of(task));
+    assertThat(service.currentBlockReason(2L, "2026-09", "COMMERCIAL", "210")).isNotBlank();
+    verifyNoInteractions(converter);
+  }
+
+  @Test
+  void aNewResultMustBeConsumedIntoTheCurrentSourceBeforeReadingTheBom() {
+    var task = new DrawingVerificationTask(); task.setTaskState("RECEIVED");
+    task.setCurrentResultId(30L); task.setConsumedResultId(20L); version.setDrawingResultId(20L);
+    when(verifications.current(any())).thenReturn(java.util.Optional.of(task));
+    assertThat(service.currentBlockReason(2L, "2026-09", "COMMERCIAL", "210")).contains("等待处理");
+    task.setConsumedResultId(30L); version.setDrawingResultId(30L);
+    assertThat(service.currentBlockReason(2L, "2026-09", "COMMERCIAL", "210")).isNull();
+    verifyNoInteractions(converter);
+  }
 
   @BeforeEach
   void setup() {
@@ -102,7 +130,7 @@ class ElectronicDrawingPreparationSourceTest {
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(strings = {"DRAFT", "APPROVED"})
-  void sharedApprovedDrawingUsesNewQuoteMonthAndRejectsChangedOriginalNodes(String sourceStatus) {
+  void historicalSharedSnapshotStillRejectsChangedOriginalNodes(String sourceStatus) {
     version.setVersionStatus(sourceStatus);
     var product = new QuoteTechProduct();
     product.setId(10L);
@@ -125,45 +153,7 @@ class ElectronicDrawingPreparationSourceTest {
         com.sanhua.marketingcost.service.technicaldata.TechnicalDataDrawingSnapshot.from(
             contexts.load(2L, "COMMERCIAL", "210", "2026-09"), version, List.of(row));
     when(content.drawingBom(approved)).thenReturn(frozen);
-    var prepared =
-        new com.sanhua.marketingcost.dto.quotebom.QuoteProductBomPreparationPreview(
-            100L,
-            null,
-            98L,
-            99L,
-            "NEW-OA",
-            "P",
-            null,
-            null,
-            false,
-            "2026-10",
-            "READY",
-            null,
-            true,
-            false,
-            false,
-            "ELECTRONIC_DRAWING_EXCEL",
-            true,
-            1,
-            null,
-            null,
-            false,
-            0,
-            "OA",
-            2L,
-            "APPROVED_TECH_DRAWING",
-            null,
-            List.of(),
-            List.of(),
-            null,
-            List.of(),
-            List.of());
-    when(preparation.prepareByOaFormItem(eq(99L), any(), eq("2026-10"))).thenReturn(prepared);
-    assertThat(service.prepareSharedDrawing(99L, "2026-10")).isTrue();
-    var snapshot = service.snapshot(99L, "2026-10", "COMMERCIAL", "210", "CUSTOMER", "BOX");
-    assertThat(snapshot.getSourceOaFormItemId()).isEqualTo(99L);
-    assertThat(snapshot.getCostPeriodMonth()).isEqualTo("2026-10");
-    assertThat(snapshot.getBomBatchId()).startsWith("ED_SHARED:80:5:");
+    var snapshot = historicalSnapshot();
     assertThat(service.rows(snapshot)).hasSize(1);
     verify(converter, never()).publish(any());
     row.setQty(new java.math.BigDecimal("3.0"));
@@ -192,11 +182,18 @@ class ElectronicDrawingPreparationSourceTest {
             contexts.load(2L, "COMMERCIAL", "210", "2026-09"), previous, List.of(row));
     when(content.drawingBom(approved)).thenReturn(frozen);
     assertThatThrownBy(
-            () -> service.snapshot(99L, "2026-10", "COMMERCIAL", "210", "CUSTOMER", "BOX"))
+            () -> service.rows(historicalSnapshot()))
         .hasMessageContaining("来源版本已更新")
         .hasMessageNotContaining("退回");
     verify(snapshots, never()).insert(any(QuoteBomMonthlySnapshot.class));
     verifyNoInteractions(preparation, preparations);
+  }
+
+  private QuoteBomMonthlySnapshot historicalSnapshot() {
+    var row = new QuoteBomMonthlySnapshot();
+    row.setSourceOaFormItemId(99L); row.setCostPeriodMonth("2026-10"); row.setBusinessUnitType("COMMERCIAL");
+    row.setPriceOrgCode("210"); row.setProductCode("P"); row.setBomBatchId("ED_SHARED:80:5:fingerprint-1");
+    row.setStructureFingerprint("fingerprint-1"); return row;
   }
 
   @Test

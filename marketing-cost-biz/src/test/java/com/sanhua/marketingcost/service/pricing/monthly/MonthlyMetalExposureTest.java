@@ -8,9 +8,20 @@ import java.time.YearMonth;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 
-class MonthlyCopperExposureTest {
+class MonthlyMetalExposureTest {
   final MonthlyPriceDocumentCodec codec = new MonthlyPriceDocumentCodec(new ObjectMapper());
-  final MonthlyCopperExposure exposure = new MonthlyCopperExposure(codec);
+  final MonthlyMetalExposure exposure = new MonthlyMetalExposure(codec);
+
+  @Test void silverTinAndBoardGradesAreMaterialDifferenceFactors() {
+    for (String key : List.of("AVG|1#AG", "AVG|SN", "AVG|304/2B/1219", "AVG|316L/2B 1.0*1219*C")) {
+      var range = selection(1, "RANGE_FACTOR", Map.of("calculationJson", json(Map.of("factorKey", key))), Set.of());
+      assertThat(exposure.read(Map.of(request("NEW-METALS"), range))).as(key).containsEntry(1L, true);
+    }
+    for (String key : List.of("AVG|PCU", "AVG|A00", "AVG|黄金AU9999", "AVG|3040")) {
+      var range = selection(1, "RANGE_FACTOR", Map.of("calculationJson", json(Map.of("factorKey", key))), Set.of());
+      assertThat(exposure.read(Map.of(request("UNCHANGED"), range))).as(key).containsEntry(1L, false);
+    }
+  }
 
   @Test void actualCapturedFactorDependenciesRemainAffectedWhenThePricesAreEqual() {
     var a = request("A"); var b = request("B"); var c = request("C");
@@ -25,7 +36,7 @@ class MonthlyCopperExposureTest {
         .containsExactlyInAnyOrderEntriesOf(Map.of(1L, true, 2L, true, 3L, true));
   }
 
-  @Test void unusedPublicationCopperAndOtherMetalsDoNotMarkAConstantPrice() {
+  @Test void usedZincIsAffectedButUnusedPublicationCopperDoesNotMarkAConstantPrice() {
     var calculation = Map.of("inputs", Map.of("zn", 10), "factorBindings", Map.of(
         "cu", Map.of("canonicalKey", PriceFactorContext.COPPER), "zn", Map.of("canonicalKey", "AVG|ZN")));
     var original = selection(1, "LINKED", Map.of("calculationJson", json(calculation)), Set.of());
@@ -33,7 +44,7 @@ class MonthlyCopperExposureTest {
         "calculatorVersion", "MONTHLY_LINKED_FORMULA_V1", "factorKeys", Map.of(),
         "context", Map.of("financial", Map.of("factors", Map.of())))), Set.of());
     assertThat(exposure.read(Map.of(request("A"), original, request("B"), legacy)))
-        .containsExactlyInAnyOrderEntriesOf(Map.of(1L, false, 2L, false));
+        .containsExactlyInAnyOrderEntriesOf(Map.of(1L, true, 2L, false));
   }
 
   @Test void scrapDependenciesFollowOnlyTheSelectedRuleAndFixedAndHouseholdStayUnaffected() {

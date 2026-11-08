@@ -24,7 +24,12 @@ public final class HouseholdInquiryModels {
   public record Preview(long batchId,String previewId,String publishRequestId,String previewFingerprint,
       Instant expiresAt,String status,PreviewContent content) {}
   public record PublishRequest(String previewId,String publishRequestId,String previewFingerprint) {}
-  public record PublishedRow(String materialCode,Action action,long versionId,int revisionNo,Long previousVersionId,boolean priceChanged,boolean historicalValue) {}
+  public record PublishedRow(String materialCode,Action action,long versionId,int revisionNo,Long previousVersionId,boolean priceChanged,boolean historicalValue,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String specification) {
+    public PublishedRow(String materialCode,Action action,long versionId,int revisionNo,Long previousVersionId,boolean priceChanged,boolean historicalValue) {
+      this(materialCode,action,versionId,revisionNo,previousVersionId,priceChanged,historicalValue,null);
+    }
+  }
   public record PublishResult(long batchId,String publishRequestId,String status,List<PublishedRow> rows,
       int mergedDuplicateRows,int newVersions,String fileSha256) {
     public PublishResult { rows=List.copyOf(rows); }

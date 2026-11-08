@@ -39,6 +39,10 @@ import org.testcontainers.utility.MountableFile;
 @Tag("integration")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class DrawingVerificationOrchestrationIntegrationTest extends BomMapperTestBase {
+  @org.springframework.test.context.DynamicPropertySource
+  static void pricingMonth(org.springframework.test.context.DynamicPropertyRegistry registry) {
+    registry.add("monthly.reprice.go-live-months.COMMERCIAL", CostPricingPeriodUtils::currentPricingMonth);
+  }
   @Autowired DrawingVerificationService service;
   @Autowired DrawingVerificationTaskMapper tasks;
   @Autowired DrawingVerificationResultMapper results;
@@ -377,7 +381,8 @@ class DrawingVerificationOrchestrationIntegrationTest extends BomMapperTestBase 
     properties.setEnabled(true);
     properties.setBaseUrl(URI.create("http://127.0.0.1:" + server.getAddress().getPort()));
     properties.setRequestTimeout(Duration.ofSeconds(10));
-    var http = new HttpDrawingVerificationClient(properties, codec, new ObjectMapper());
+    var http = new HttpDrawingVerificationClient(properties, codec, new ObjectMapper(),
+        new com.sanhua.marketingcost.integration.drawing.DrawingVerificationCallGuard(jdbc.getDataSource()));
     doAnswer(call -> http.verify(call.getArgument(0))).when(client).verify(any());
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       var pending =

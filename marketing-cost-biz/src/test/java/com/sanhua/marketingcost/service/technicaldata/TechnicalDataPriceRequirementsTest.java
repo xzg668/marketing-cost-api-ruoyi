@@ -76,7 +76,7 @@ class TechnicalDataPriceRequirementsTest {
     when(tasks.findModules(2L)).thenReturn(List.of(module("SOLDER")));
     when(content.solder(draft)).thenReturn(solder("PART"));
     var owner = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceOwner(
-        "PART", 41L, 42L, 43L, "王工", "READY", "PENDING", 44L, "210", "COMMERCIAL", "只", "CNY");
+        "PART", 41L, 42L, 43L, "王工", "READY", "PENDING", 44L, "210", "COMMERCIAL", "只", "CNY", "SOURCE-PRODUCT");
     when(ownership.find("PART")).thenReturn(owner);
     var original = new QuoteTechDataVersion(); original.setId(44L); original.setProductId(42L); original.setVersionStatus("DRAFT");
     when(repository.findVersion(44L)).thenReturn(Optional.of(original));
@@ -88,12 +88,47 @@ class TechnicalDataPriceRequirementsTest {
       assertThat(row.status()).isEqualTo("SHARED");
       assertThat(row.requiresEntry()).isFalse();
       assertThat(row.unitPrice()).isNull();
-      assertThat(row.message()).contains("已有资料", "43");
+      assertThat(row.message()).contains("已引用原产品", "SOURCE-PRODUCT", "无需重复补录");
     });
+    var waiting = MakePartMaterialPriceResolveResult.miss("PART", "ERROR", "原补录尚未提交", null);
+    waiting.setFailureReason("WAITING");
+    when(prices.calculateMaterialUnitPrice(anyString(), any(), any(), any(), any(), any(), any(), any())).thenReturn(waiting);
+    assertThat(service.checkModuleReferences(task, product).items()).singleElement()
+        .satisfies(row -> assertThat(row.status()).isEqualTo("SHARED"));
+    waiting.setFailureReason("INVALID_INPUT");
+    assertThat(service.checkModuleReferences(task, product).issues()).isNotEmpty();
     when(prices.calculateMaterialUnitPrice(anyString(), any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(MakePartMaterialPriceResolveResult.ok("PART", "FIXED", new BigDecimal("12.5"), "已确认补录价", null));
     assertThat(service.checkModuleReferences(task, product).items()).singleElement()
         .satisfies(row -> assertThat(row.status()).isEqualTo("AVAILABLE"));
+  }
+
+  @Test void onlyFailedOwnedEditableDraftCanResumeAsSupplementRatherThanEffectivePrice() {
+    var priceModule = module("PRICE"); priceModule.setId(4L); priceModule.setModuleStatus("PENDING");
+    priceModule.setRequirementReasonCode("TECHNICAL_BOM_PRICE_FAILED"); draft.setVersionStatus("DRAFT");
+    when(tasks.findModules(2L)).thenReturn(List.of(module("SOLDER"), priceModule));
+    when(content.solder(draft)).thenReturn(solder("PART"));
+    when(ownership.find("PART")).thenReturn(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceOwner(
+        "PART", 4L, 2L, 1L, "王工", "PENDING", "PENDING", 3L, "210", "COMMERCIAL", "只", "CNY", "SOURCE-PRODUCT"));
+    when(content.prices(draft)).thenReturn(new Prices(List.of(new PriceItem("original", "PART", "210", "只", "CNY",
+        "FIXED", new BigDecimal("12.5"), null, null, null, null, null, null))));
+    var waiting = MakePartMaterialPriceResolveResult.miss("PART", "ERROR", "原补录尚未提交", null);
+    waiting.setFailureReason("WAITING");
+    when(prices.calculateMaterialUnitPrice(anyString(), any(), any(), any(), any(), any(), any(), any())).thenReturn(waiting);
+    var resumed = service.checkModuleReferences(task, product);
+    assertThat(resumed.issues()).isEmpty();
+    assertThat(resumed.items()).singleElement().satisfies(row -> {
+      assertThat(row.status()).isEqualTo("MISSING"); assertThat(row.requiresEntry()).isTrue();
+      assertThat(row.unitPrice()).isNull();
+    });
+    draft.setVersionStatus("SUBMITTED");
+    assertThat(service.checkModuleReferences(task, product).issues()).isNotEmpty();
+    draft.setVersionStatus("DRAFT"); priceModule.setModuleStatus("SUBMITTED");
+    assertThat(service.checkModuleReferences(task, product).issues()).isNotEmpty();
+    priceModule.setModuleStatus("PENDING"); priceModule.setRequirementReasonCode("OTHER_FAILURE");
+    assertThat(service.checkModuleReferences(task, product).issues()).isNotEmpty();
+    priceModule.setRequirementReasonCode("TECHNICAL_BOM_PRICE_FAILED"); waiting.setFailureReason("INVALID_INPUT");
+    assertThat(service.checkModuleReferences(task, product).issues()).isNotEmpty();
   }
 
   @org.junit.jupiter.params.ParameterizedTest
@@ -207,6 +242,53 @@ class TechnicalDataPriceRequirementsTest {
     assertThat(service.check(task, product).issues()).contains("GLASS：来源状态异常");
   }
 
+  @Test void composedBomUsesActualPricingGapsInsteadOfUnfilteredModuleMaterials() {
+    var price = module("PRICE"); price.setRequirementReasonCode("TECHNICAL_BOM_PRICE_CHECKED");
+    when(tasks.findModules(2L)).thenReturn(List.of(price, module("SOLDER")));
+    when(content.solder(draft)).thenReturn(solder("EXCLUDED_CHILD"));
+    bomGaps();
+    var result = service.check(task, product);
+    assertThat(result.issues()).isEmpty();
+    assertThat(result.items()).extracting(TechnicalDataPriceRequirement::materialNo)
+        .containsExactly("GLASS", "MISSING");
+    verify(prices, never()).calculateMaterialUnitPrice(eq("EXCLUDED_CHILD"), any(), any(), any(), any(), any(), any(), any());
+    verify(preparation, never()).generate(any());
+  }
+
+  @Test void emptyPricingScopeIsNotReportedAsAllPricesAvailable() {
+    var prepared = bomGaps(); prepared.setGaps(List.of()); prepared.getSummary().setStatus("SUCCESS");
+    assertThat(service.checkComposedBom(task, product).issues()).contains("尚未生成实际计价物料，不能判定价格已齐全");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"RAW_PRICE_ERROR", "SCRAP_PRICE_ERROR"})
+  void composedManufacturingDependencyUsesSavedSharedPriceInsteadOfTreatingPendingApprovalAsFailure(String reason) {
+    var prepared = bomGaps();
+    var gap = new PricePrepareGap(); gap.setGapMaterialCode("PART"); gap.setGapType("PRICE_SOURCE_ERROR");
+    gap.setReasonCode(reason); gap.setMessage("原补录尚未全部提交：价格"); prepared.setGaps(List.of(gap));
+    var waiting = MakePartMaterialPriceResolveResult.miss("PART", "ERROR", "原补录尚未全部提交：价格", null);
+    waiting.setFailureReason("WAITING");
+    when(prices.calculateMaterialUnitPrice(anyString(), any(), any(), any(), any(), any(), any(), any())).thenReturn(waiting);
+    when(ownership.find("PART")).thenReturn(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceOwner(
+        "PART", 41L, 42L, 43L, "王工", "READY", "PENDING", 44L, "210", "COMMERCIAL", "只", "CNY", "SOURCE-PRODUCT"));
+    var original = new QuoteTechDataVersion(); original.setId(44L); original.setProductId(42L); original.setVersionStatus("DRAFT");
+    when(repository.findVersion(44L)).thenReturn(Optional.of(original));
+    when(content.prices(original)).thenReturn(new Prices(List.of(new PriceItem("source", "PART", "210", "只", "CNY",
+        "FIXED", BigDecimal.TEN, null, null, null, null, null, null))));
+    var result = service.checkComposedBom(task, product);
+    assertThat(result.issues()).isEmpty();
+    assertThat(result.items()).singleElement().satisfies(row -> {
+      assertThat(row.status()).isEqualTo("SHARED"); assertThat(row.unitPrice()).isNull();
+    });
+    verify(prices).calculateMaterialUnitPrice(eq("PART"), any(), any(), any(), any(), any(), any(),
+        eq("SCRAP_PRICE_ERROR".equals(reason) ? MakePartMaterialPriceResolveService.Purpose.SCRAP : MakePartMaterialPriceResolveService.Purpose.MATERIAL));
+    waiting.setFailureReason("INVALID_INPUT");
+    assertThat(service.checkComposedBom(task, product).issues()).isNotEmpty();
+    gap.setReasonCode("SOURCE_CONFLICT");
+    assertThat(service.checkComposedBom(task, product).issues()).isNotEmpty();
+    verify(preparation, never()).generate(any());
+  }
+
   private com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult bomGaps() {
     product.setMaterialNo("TOP");
     when(jdbc.queryForList(anyString(), nullable(Long.class), eq("2026-09")))
@@ -219,7 +301,7 @@ class TechnicalDataPriceRequirementsTest {
     var waiting = new PricePrepareGap(); waiting.setGapMaterialCode("GLASS");
     waiting.setGapType("MISSING_PRICE"); waiting.setReasonCode("WAITING"); waiting.setPriceType("FIXED");
     prepared.setGaps(List.of(missing, waiting));
-    when(preparation.calculate(any())).thenReturn(prepared);
+    when(preparation.calculateForTechnical(any())).thenReturn(prepared);
     return prepared;
   }
 

@@ -71,6 +71,23 @@ public class OaWorkflowNotificationService {
       }
     }
   }
+
+  /** I03 已落定实际 HTTP 回执后，处理同批次提前收到的节点通知。 */
+  @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+  public void completeSubmissionNotifications(String batchId, boolean accepted, boolean rejected) {
+    if (!accepted && !rejected) return;
+    for (long id : repository.pendingSubmissionNotifications(batchId)) {
+      var message = messages.findById(id);
+      if (rejected) repository.rejectSubmissionNotification(id);
+      else {
+        var event = OaWorkflowNotification.parse(codec.readQuotation(message.rawPayload()));
+        var document = repository.document(message.peer(), event.requestId());
+        repository.lockForm(document.id());
+        if (repository.lockCurrentSubmission(batchId)) receive(message.peer(), message.rawPayload());
+        else repository.rejectSubmissionNotification(id);
+      }
+    }
+  }
   private static OaIntegrationException conflict(String code, String message) {
     return OaIntegrationException.conflict(code, message);
   }

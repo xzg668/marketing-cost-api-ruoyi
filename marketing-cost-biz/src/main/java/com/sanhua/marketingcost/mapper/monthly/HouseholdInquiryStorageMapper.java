@@ -8,6 +8,11 @@ import org.apache.ibatis.annotations.*;
 
 @Mapper
 public interface HouseholdInquiryStorageMapper {
+  record MaterialIdentity(String materialCode,String organizationCode,String materialModel,String materialSpec) {}
+  @Select("SELECT EXISTS(SELECT 1 FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id WHERE p.business_unit_type=#{unit} AND p.material_code IS NULL AND b.status='PUBLISHED' AND b.source_month<=#{month})")
+  boolean hasModelSources(@Param("unit") String unit,@Param("month") String month);
+  @Select("<script>SELECT material_code,organization_code,material_model,material_spec FROM lp_material_master_raw WHERE active_flag=1 AND organization_code=#{organization} AND material_code IN <foreach collection='codes' item='code' open='(' separator=',' close=')'>#{code}</foreach></script>")
+  List<MaterialIdentity> materialIdentities(@Param("organization") String organization,@Param("codes") Collection<String> codes);
   @Insert("""
       INSERT INTO lp_household_inquiry_import_batch(business_unit_type,preview_id,publish_request_id,
         preview_fingerprint,file_key,file_sha256,file_name,worksheet_name,parser_schema,source_month,
@@ -43,12 +48,26 @@ public interface HouseholdInquiryStorageMapper {
       <script>
       SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
       FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id
-      WHERE p.business_unit_type=#{unit} AND b.status='PUBLISHED' AND p.current_material IN
+      WHERE p.business_unit_type=#{unit} AND b.status='PUBLISHED' AND p.current_match IN
       <foreach collection="materials" item="material" open="(" separator="," close=")">#{material}</foreach>
       ORDER BY p.material_code
       </script>
       """)
   List<HouseholdInquiryPriceRow> current(@Param("unit") String unit,@Param("materials") Collection<String> materials);
+
+  @Select("""
+      <script>
+      SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
+      FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id
+      WHERE p.business_unit_type=#{unit} AND b.status='PUBLISHED' AND b.source_month &lt;= #{month}
+      AND p.match_key IN <foreach collection="materials" item="code" open="(" separator="," close=")">#{code}</foreach>
+      AND NOT EXISTS (SELECT 1 FROM lp_household_inquiry_price n JOIN lp_household_inquiry_import_batch nb ON nb.id=n.import_batch_id
+        WHERE n.business_unit_type=p.business_unit_type AND n.match_key=p.match_key AND nb.status='PUBLISHED'
+        AND nb.source_month &lt;= #{month} AND (nb.source_month &gt; b.source_month OR (nb.source_month=b.source_month AND n.revision_no &gt; p.revision_no)))
+      ORDER BY p.material_code
+      </script>
+      """)
+  List<HouseholdInquiryPriceRow> asOfMonth(@Param("unit") String unit,@Param("materials") Collection<String> materials,@Param("month") String month);
 
   @Select("""
       SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256

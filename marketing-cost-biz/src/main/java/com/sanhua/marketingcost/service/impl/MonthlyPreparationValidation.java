@@ -25,10 +25,14 @@ public final class MonthlyPreparationValidation {
     if (inputs == null || !inputs.equals(evidence.capture(row, plan, root)))
       throw new IllegalArgumentException("准备底稿与本次月价范围不一致");
     var expected = new HashMap<MonthlyPriceRequest, BigDecimal>();
+    BigDecimal calculationUnitPrice = row.getUnitPrice();
     if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType())) {
       var captured = codec.decode(row.getInputSnapshotJson(), MonthlyPreparationPrice.class);
       price(row, captured, row.getMaterialCode(), row.getUnitPrice(), row.getQuantity(),
           financial, plan, scenarios, expected);
+      // The saved amount used the full price; the unit-price column rounds to eight decimals.
+      calculationUnitPrice = (financial ? captured.financialPrice() : captured.customerPrice())
+          .multiply(captured.unitPriceMultiplier());
     } else if ("MAKE_PART_PRICE".equals(row.getResultRefType())) {
       var rows = new MakePartCalculationEvidence(json).rows(row);
       if (rows == null) throw new IllegalArgumentException("制造准备缺少保存的计算行");
@@ -78,7 +82,7 @@ public final class MonthlyPreparationValidation {
     expected.forEach((request, quantity) -> {
       if (actual.get(request).compareTo(quantity) != 0) throw new IllegalArgumentException("准备实际用量与保存依据不一致");
     });
-    decimal(row.getAmount(), row.getQuantity().multiply(row.getUnitPrice()), "准备金额");
+    decimal(row.getAmount(), row.getQuantity().multiply(calculationUnitPrice), "准备金额");
   }
 
   private void price(PricePrepareItem parent, MonthlyPreparationPrice value, String code,

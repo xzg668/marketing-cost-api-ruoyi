@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.pricing.monthly;
 
+import com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices;
+
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
@@ -20,13 +22,16 @@ public final class MonthlyQuotationSessions implements QuotationPriceSessions {
   private final MonthlyPriceStorage storage;
   private final MonthlyPriceDocumentCodec codec;
   private final OaFormItemExtraFieldMapper extraFields;
+  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceScope;
 
   public MonthlyQuotationSessions(OaFormMapper forms, OaFormItemMapper items,
       MonthlyQuotationPrices prices, MonthlyPriceScenarios scenarios, MonthlyPriceStorage storage,
-      MonthlyPriceDocumentCodec codec, OaFormItemExtraFieldMapper extraFields) {
+      MonthlyPriceDocumentCodec codec, OaFormItemExtraFieldMapper extraFields,
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceScope) {
     this.forms = forms; this.items = items; this.prices = prices; this.scenarios = scenarios;
     this.storage = storage; this.codec = codec;
     this.extraFields = extraFields;
+    this.repriceScope = repriceScope;
   }
 
   public QuotationPriceSession open(String oaNo, String businessUnit, String month,
@@ -40,9 +45,10 @@ public final class MonthlyQuotationSessions implements QuotationPriceSessions {
     var reviews = Objects.requireNonNull(request.supplierReviews(), "Quotation supplier context is required");
     var session = Objects.requireNonNull(request.scope(), "Quotation price scope is required").initialize(() -> {
       Long itemId = reviews.oaFormItemId();
-      if (itemId == null) itemId = uniqueProductItem(request);
-      var item = itemId == null ? null : items.selectById(itemId);
-      var form = item == null ? null : forms.selectById(item.getOaFormId());
+      var selected = repriceScope.quotation(request);
+      if (itemId == null) itemId = selected == null ? uniqueProductItem(request) : selected.item().getId();
+      var item = selected == null ? (itemId == null ? null : items.selectById(itemId)) : selected.item();
+      var form = selected == null ? (item == null ? null : forms.selectById(item.getOaFormId())) : selected.form();
       if (form == null || !Objects.equals(request.oaNo(), form.getOaNo())
           || !Objects.equals(request.businessUnit(), item.getBusinessUnitType())
           || (request.productCode() != null && !request.productCode().equals(QuoteProductIdentityUtils.resolveCostingCode(item))))
@@ -52,15 +58,15 @@ public final class MonthlyQuotationSessions implements QuotationPriceSessions {
       var scopedReviews = reviews.oaFormItemId() == null
           ? new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(itemId).forOrganization(reviews.priceOrgCode())
           : reviews;
+      var annualUsage = selected == null ? null : repriceScope.annualUsage(request);
+      if (annualUsage == null) annualUsage = new AnnualUsageInput(item.getAnnualVolume(),
+          item.getAnnualVolume() == null ? null : extraFields.selectAnnualVolumeUnit(itemId));
       var context = new MonthlyMaterialPrices.Context(request.businessUnit(), request.oaNo(), itemId,
           QuoteProductIdentityUtils.resolveCostingCode(item), YearMonth.parse(request.month()),
           request.priceAsOfTime(), actor, scopedReviews.priceOrgCode(), scopedReviews,
-          new AnnualUsageInput(item.getAnnualVolume(), item.getAnnualVolume() == null ? null : extraFields.selectAnnualVolumeUnit(itemId)));
-      var copper = form.getCopperPrice();
-      if (copper != null && copper.signum() <= 0) copper = null;
-      BoardTerms board = form.getSus304Price() == null && form.getSus316lPrice() == null && !Boolean.TRUE.equals(form.getBoardTender())
-          ? null : new BoardTerms(form.getSus304Price(), form.getSus316lPrice(), Boolean.TRUE.equals(form.getBoardTender()));
-      return new MonthlyQuotationSession(context, copper, prices, scenarios, storage, codec, board);
+          annualUsage);
+      return new MonthlyQuotationSession(context, CustomerMaterialPrices.fromQuotation(form),
+          prices, scenarios, storage, codec, Boolean.TRUE.equals(form.getBoardTender()));
     });
     var scope = session.context();
     if (!scope.oaNo().equals(request.oaNo()) || !scope.businessUnitType().equals(request.businessUnit())

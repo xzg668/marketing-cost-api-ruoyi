@@ -53,27 +53,33 @@ public class MonthlyCostComparisonProjection {
         rows.add(line(object,product,byPreparation.get(binding.financialItemId()),line.paths(),input));
       }
     } else for(var part:saved.parts()) {
-      var row=input.bomRows().get(part.getBomRowId());
+      var row=part.getBomRowId()==null?null:input.bomRows().get(part.getBomRowId());
       // SET:v1 hashes may have been made from a physical path, a raw id or a transient row id.
       // Without the saved path, treating that opaque key as a BOM path can invent additions/removals.
       String path=row==null?null:row.getPath();
-      if(path==null || path.isBlank()) throw new IllegalStateException("历史部品未保存计价路径，无法可靠跨月对应："+part.getPartCode());
-      rows.add(line(object,product,part,List.of(path),input));
+      if(path==null || path.isBlank()) {
+        if(part.getId()==null)throw new IllegalStateException("历史部品缺少保存行标识");
+        rows.add(line(object,product,part,List.of(),"LEGACY:"+v.getId()+":"+part.getId(),input));
+      } else rows.add(line(object,product,part,List.of(path),input));
     }
     return new Panel(object,YearMonth.parse(v.getPricingMonth()),v.getId(),rows,product);
   }
   private Line line(ObjectIdentity object,ProductMonth product,CostRunPartItem part,List<String> paths,
       MonthlyCostComparisonInputs.Loaded input) {
+    return line(object,product,part,paths,null,input);
+  }
+  private Line line(ObjectIdentity object,ProductMonth product,CostRunPartItem part,List<String> paths,String unmatched,
+      MonthlyCostComparisonInputs.Loaded input) {
     if(part==null || part.getAmount()==null) throw new IllegalStateException("保存部品或实际材料金额缺失");
     paths=paths.stream().map(MonthlyBomPricingScope::pathKey).sorted().toList();
     var parents=paths.stream().map(p->{int i=p.lastIndexOf('/');return i<0?"":p.substring(0,i);}).distinct().toList();
-    String unit=null;var bom=input.bomRows().get(part.getBomRowId());if(bom!=null) unit=bom.getUnit();
-    if(unit==null && input.saved().snapshot()!=null) {
+    String unit=null;var bom=part.getBomRowId()==null?null:input.bomRows().get(part.getBomRowId());if(bom!=null) unit=bom.getUnit();
+    if(unit==null && !paths.isEmpty() && input.saved().snapshot()!=null && input.saved().snapshot().calculation()!=null) {
       final String first=paths.getFirst();
       unit=input.saved().snapshot().calculation().effectiveUses().stream().filter(u->MonthlyBomPricingScope.pathKey(u.path()).equals(first))
           .map(u->u.request().family().unit()).filter(Objects::nonNull).findFirst().orElse(null);
     }
-    return new Line(new Key(object,paths,String.join(";",parents),part.getPartCode()),product.parent(),part.getPartName(),unit,
+    return new Line(new Key(object,paths,String.join(";",parents),part.getPartCode(),unmatched),product.parent(),part.getPartName(),unit,
         product.completedAt(),product.financeCuPrice(),Map.of(Metric.MATERIAL,part.getAmount()),
         product.productProperty(),product.lossRate(),product.wageSource(),product.unapproved());
   }

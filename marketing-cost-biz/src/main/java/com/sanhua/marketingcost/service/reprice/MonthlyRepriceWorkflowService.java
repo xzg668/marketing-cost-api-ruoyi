@@ -15,20 +15,22 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class MonthlyRepriceWorkflowService {
   public record View(MonthlyRepriceBatch batch, boolean quotationBlocked, boolean canOperate,
-      List<String> problems) {}
+      List<String> problems,com.sanhua.marketingcost.dto.MonthlyRepriceUncalculated.Statistics statistics) {}
   private final MonthlyQuotationControl control;
   private final MonthlyRepriceContractService contracts;
   private final MonthlyRepriceContractMapper mapper;
   private final MonthlyRepriceWorkflowMapper workflow;
-  private final MonthlyRepriceCheckService checks;
+  private final MonthlyRepricePublicationService publications;
   private final MonthlyRepriceProperties properties;
+  private final com.sanhua.marketingcost.mapper.MonthlyRepriceUncalculatedMapper uncalculated;
   private final TransactionTemplate transaction;
 
   public MonthlyRepriceWorkflowService(MonthlyQuotationControl control,MonthlyRepriceContractService contracts,
-      MonthlyRepriceContractMapper mapper,MonthlyRepriceWorkflowMapper workflow,MonthlyRepriceCheckService checks,
-      MonthlyRepriceProperties properties,PlatformTransactionManager manager) {
+      MonthlyRepriceContractMapper mapper,MonthlyRepriceWorkflowMapper workflow,MonthlyRepricePublicationService publications,
+      MonthlyRepriceProperties properties,PlatformTransactionManager manager,
+      com.sanhua.marketingcost.mapper.MonthlyRepriceUncalculatedMapper uncalculated) {
     this.control=control;this.contracts=contracts;this.mapper=mapper;this.workflow=workflow;
-    this.checks=checks;this.properties=properties;transaction=new TransactionTemplate(manager);
+    this.publications=publications;this.properties=properties;this.uncalculated=uncalculated;transaction=new TransactionTemplate(manager);
     transaction.setTimeout(120);
   }
   public View current() {
@@ -44,29 +46,22 @@ public class MonthlyRepriceWorkflowService {
     return control.serialized(unit,()->view(unit,contracts.enqueue(unit,
         YearMonth.parse(com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth()))));
   }
-  public View retry(String no) {
+  public View retry(String no,com.sanhua.marketingcost.dto.MonthlyRepriceUncalculated.RetrySelection selection) {
     String unit=unit();MonthlyRepriceContractService.requireOperator(unit);
     return control.serialized(unit,()->transaction.execute(tx->{
-      requireBatch(no,unit);return view(unit,contracts.retry(no));
+      requireBatch(no,unit);return view(unit,contracts.retry(no,selection));
     }));
   }
   public View confirm(String no,long revision) {
     String unit=unit();MonthlyRepriceContractService.requireOperator(unit);
-    return control.serialized(unit,()->{
-      var confirmed=transaction.execute(tx->{
-      var batch=requireBatch(no,unit);
-      if(!"CONFIRMED".equals(batch.getStatus())) {
-        if(!"WAIT_CONFIRM".equals(batch.getStatus()) || batch.getResultRevision()!=revision
-            || !java.util.Objects.equals(batch.getCheckedRevision(),revision))
-          throw new IllegalStateException("请刷新并确认当前检查通过的结果");
-        var report=checks.verify(batch);
-        if(!report.passed()) throw new IllegalStateException("确认检查失败："+String.join("；",report.problems()));
-      }
-      return contracts.confirm(no,revision);
-      });
-      // Read control only after the confirmation transaction has committed.
-      return view(unit,confirmed);
-    });
+    return view(unit,publications.confirm(no,revision));
+  }
+
+  public View recheck(String no) {
+    String unit=unit();MonthlyRepriceContractService.requireOperator(unit);
+    return control.serialized(unit,()->transaction.execute(tx->{
+      requireBatch(no,unit);return view(unit,contracts.recheck(no));
+    }));
   }
   private MonthlyRepriceBatch requireBatch(String no,String unit) {
     var batch=mapper.lock(no);
@@ -80,7 +75,7 @@ public class MonthlyRepriceWorkflowService {
         .map(t->t.getOaNo()+" / "+t.getProductCode()+"："+t.getErrorMessage()).toList():List.of();
     // Saved check details include quotation identities; expose them only to authorized operators.
     if(batch!=null && !canOperate) batch.setCheckResultJson(null);
-    return new View(batch,control.blocked(unit),canOperate,problems);
+    return new View(batch,control.blocked(unit),canOperate,problems,batch==null?null:uncalculated.statistics(batch.getId()));
   }
   private static String unit() {
     String unit=BusinessUnitContext.getCurrentBusinessUnitType();MonthlyRepriceContract.unit(unit);return unit;

@@ -30,7 +30,7 @@ class MonthlyQuotationBomPricingTest {
   void setup() {
     prices =
         new MonthlyQuotationPrices(
-            monthly, new HouseholdMonthlyPriceSource(household, null, priorities));
+            monthly, new HouseholdMonthlyPriceSource(household, null, priorities, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader.class)));
     pricing = new MonthlyQuotationBomPricing(prices, sessions, materials);
     when(sessions.open(any())).thenReturn(session);
   }

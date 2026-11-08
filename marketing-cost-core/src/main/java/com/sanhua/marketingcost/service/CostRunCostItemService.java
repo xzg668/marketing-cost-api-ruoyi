@@ -8,6 +8,10 @@ import java.util.Set;
 import java.util.function.IntConsumer;
 
 public interface CostRunCostItemService {
+  /** Resolve actual sources without running the full ordinary cost calculation or persisting output. */
+  com.sanhua.marketingcost.service.costing.ResolvedOrdinaryCost resolve(
+      CostRunContext context, List<CostRunPartItemDto> currentPartItems);
+
   List<CostRunCostItemDto> listStoredByOaNo(String oaNo, String productCode);
 
   List<CostRunCostItemDto> listStoredByCostRunNo(String costRunNo);

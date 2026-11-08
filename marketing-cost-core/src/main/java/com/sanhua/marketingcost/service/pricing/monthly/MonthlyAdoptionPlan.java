@@ -1,13 +1,5 @@
 package com.sanhua.marketingcost.service.pricing.monthly;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.StreamReadConstraints;
-import com.fasterxml.jackson.core.StreamReadFeature;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -17,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.TreeMap;
 
 /** Pure adoption input; request entries are lookup conditions, not database unique keys. */
 public record MonthlyAdoptionPlan(
@@ -124,38 +115,8 @@ public record MonthlyAdoptionPlan(
   }
 
   public record SourceEvidence(String json) {
-    private static final int MAX_UTF8_BYTES = 1024 * 1024;
-    private static final int MAX_CONTAINER_DEPTH = 64;
-    private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
-        // Use the exact big-number parser for long integer-valued decimal tokens.
-        .enable(StreamReadFeature.USE_FAST_BIG_NUMBER_PARSER)
-        .streamReadConstraints(StreamReadConstraints.builder()
-            // Raw tokens may contain redundant zeros; canonical numbers have a separate limit.
-            .maxNumberLength(MAX_UTF8_BYTES).build())
-        .build())
-        .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-        .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
-        .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-
     public SourceEvidence {
-      if (json == null || json.isBlank()) {
-        throw new IllegalArgumentException("A nonempty source evidence object is required");
-      }
-      if (json.length() > MAX_UTF8_BYTES
-          || json.getBytes(StandardCharsets.UTF_8).length > MAX_UTF8_BYTES) {
-        throw new IllegalArgumentException("Source evidence exceeds the 1 MiB UTF-8 limit");
-      }
-      try {
-        JsonNode node = JSON.readTree(json);
-        if (!node.isObject() || node.isEmpty()) {
-          throw new IllegalArgumentException("Source evidence must be a nonempty JSON object");
-        }
-        var output = new BoundedJson();
-        canonical(node, 0, output);
-        json = output.text.toString();
-      } catch (JsonProcessingException invalidJson) {
-        throw new IllegalArgumentException("Source evidence must be unambiguous valid JSON", invalidJson);
-      }
+      json = ExactJsonDocument.canonicalObject(json, 1024 * 1024);
     }
 
     public static SourceEvidence ofJson(String json) {
@@ -171,59 +132,5 @@ public record MonthlyAdoptionPlan(
       }
     }
 
-    private static void canonical(JsonNode node, int depth, BoundedJson output)
-        throws JsonProcessingException {
-      if (node.isContainerNode() && depth >= MAX_CONTAINER_DEPTH) {
-        throw new IllegalArgumentException("Source evidence exceeds 64 nested containers");
-      }
-      if (node.isObject()) {
-        var fields = new TreeMap<String, JsonNode>();
-        node.fields().forEachRemaining(entry -> fields.put(entry.getKey(), entry.getValue()));
-        output.append("{");
-        boolean first = true;
-        for (var field : fields.entrySet()) {
-          if (!first) output.append(",");
-          first = false;
-          output.append(JSON.writeValueAsString(field.getKey()));
-          output.append(":");
-          canonical(field.getValue(), depth + 1, output);
-        }
-        output.append("}");
-        return;
-      }
-      if (node.isArray()) {
-        output.append("[");
-        boolean first = true;
-        for (JsonNode value : node) {
-          if (!first) output.append(",");
-          first = false;
-          canonical(value, depth + 1, output);
-        }
-        output.append("]");
-        return;
-      }
-      if (node.isNumber()) {
-        output.append(MonthlyPriceCanonical.number(node.decimalValue()));
-        return;
-      }
-      output.append(node.toString());
-    }
-
-    private static final class BoundedJson {
-      private final StringBuilder text = new StringBuilder();
-      private int bytes;
-
-      private void append(String token) {
-        if (token.length() > MAX_UTF8_BYTES - bytes) {
-          throw new IllegalArgumentException("Canonical source evidence exceeds 1 MiB");
-        }
-        int tokenBytes = token.getBytes(StandardCharsets.UTF_8).length;
-        if (tokenBytes > MAX_UTF8_BYTES - bytes) {
-          throw new IllegalArgumentException("Canonical source evidence exceeds 1 MiB");
-        }
-        text.append(token);
-        bytes += tokenBytes;
-      }
-    }
   }
 }

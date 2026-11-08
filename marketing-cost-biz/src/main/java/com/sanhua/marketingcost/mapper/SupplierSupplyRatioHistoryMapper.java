@@ -22,7 +22,8 @@ public interface SupplierSupplyRatioHistoryMapper {
 
   @Select("""
       <script>SELECT l.id,l.biz_detail_id previous_version_id,l.biz_id version_id,
-        r.material_code,r.supplier_code,r.material_name,r.supplier_name,r.import_file_name,
+        r.material_code,r.supplier_code,r.material_name,r.supplier_name,
+        COALESCE(JSON_UNQUOTE(JSON_EXTRACT(l.after_value,'$.importFileName')),r.import_file_name) import_file_name,
         l.submit_batch_no batch_no,l.changed_by_name,l.changed_at,l.change_reason,l.before_value,l.after_value
       """ + FILTER + " ORDER BY l.id DESC LIMIT #{size} OFFSET #{offset}</script>")
   List<SupplierSupplyRatioChange> list(@Param("unit") String unit, @Param("material") String material,

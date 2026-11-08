@@ -41,6 +41,12 @@ public class CostRunContext {
   private java.util.Map<String, java.math.BigDecimal> priceVariableOverrides = java.util.Map.of();
   /** 当前报价产品/月份经审核生效的技术资料；为空时按既有 CMS/标准包装规则计算。 */
   private EffectiveTechnicalDataInput effectiveTechnicalData;
+  /** 调价已选定的完整OA资料；只供本次执行使用，不重复写入成本快照。 */
+  @JsonIgnore
+  private CostRunQuotationInput quotationInput;
+  /** 本次批量准备的公共输入；不序列化、不作为跨进程缓存。 */
+  @JsonIgnore
+  private com.sanhua.marketingcost.service.costing.CostRunPreparedInputs preparedInputs;
   /**
    * 核算引擎内部进度回调。
    *

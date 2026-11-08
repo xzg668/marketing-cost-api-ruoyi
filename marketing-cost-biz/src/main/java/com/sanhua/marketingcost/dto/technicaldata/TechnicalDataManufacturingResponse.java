@@ -9,7 +9,11 @@ public record TechnicalDataManufacturingResponse(Long productId, int expectedVer
     TechnicalDataSupplementContent.Manufacturing saved, List<String> issues,
     List<CalculationInput> calculationInputs,
     boolean bomComposed, String bomMessage,
-    List<com.sanhua.marketingcost.service.technicaldata.TechnicalDataMaterialPriceQuery.PriceRequirement> priceRequirements) {
+    List<com.sanhua.marketingcost.service.technicaldata.TechnicalDataMaterialPriceQuery.PriceRequirement> priceRequirements,
+    List<ReusedItem> reusedItems) {
+  public record ReusedItem(Long parentSourceNodeId, Long sourceProductId, String sourceProductCode,
+      Long technicalVersionId, String sourceReference, String rawMaterialNo, String rawMaterialDrawingNo,
+      String unit, BigDecimal grossWeightKg, BigDecimal netLengthMm, String rawMaterialName, String rawMaterialSpec) {}
   public record CalculationInput(String parentSourceNodeId, String rawMaterialNo,
       BigDecimal grossWeightG, BigDecimal netWeightG, BigDecimal netLengthMm,
       BigDecimal purchasingQuantity, String purchasingUnit) {}

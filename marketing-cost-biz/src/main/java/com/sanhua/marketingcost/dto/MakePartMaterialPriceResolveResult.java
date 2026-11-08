@@ -11,6 +11,7 @@ public class MakePartMaterialPriceResolveResult {
   private String priceType;
   private BigDecimal unitPrice;
   private String status;
+  private String failureReason;
   private String remark;
   private String trace;
   private com.sanhua.marketingcost.service.pricing.PriceResolveEvidence evidence;

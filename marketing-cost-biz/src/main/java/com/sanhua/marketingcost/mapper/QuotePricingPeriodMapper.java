@@ -9,7 +9,7 @@ public interface QuotePricingPeriodMapper {
   @Select("""
       SELECT pricing_month FROM lp_monthly_reprice_batch
       WHERE business_unit_type=#{unit} AND contract_version=1
-        AND status='CONFIRMED' AND confirmed_at IS NOT NULL
+        AND confirmed_at IS NOT NULL
       ORDER BY pricing_month DESC LIMIT 1
       """)
   String confirmedMonth(String unit);

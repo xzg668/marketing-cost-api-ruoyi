@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 class MonthlyRepriceBomReadScopeTest {
   private final QuoteBomSupplementVersionMapper versions = mock(QuoteBomSupplementVersionMapper.class);
-  private final MonthlyRepriceBomReadScope scope = new MonthlyRepriceBomReadScope(versions, mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper.class));
+  private final MonthlyRepriceBomReadScope scope = new MonthlyRepriceBomReadScope(versions, mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper.class), mock(com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.class));
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L,2L,"OA","2026-11",
       "COMMERCIAL","PRODUCT",null,null,null,"210","COMMERCIAL",LocalDate.of(2026,11,1),LocalDateTime.of(2026,11,4,1,0));
 
@@ -25,6 +25,7 @@ class MonthlyRepriceBomReadScopeTest {
       var result=scope.original(context, () -> { throw new AssertionError("must not query U9 twice"); });
       assertThat(result.status()).isEqualTo(CurrentU9BomResult.Status.AVAILABLE);
       assertThat(result.monthlySnapshotId()).isEqualTo(51L);
+      assertThat(scope.drawingHierarchy(null)).isNull();
       assertThat(scope.facts(context,List::of)).isEmpty();
       assertThat(scope.facts(context,() -> { throw new AssertionError("must not repeat checks"); })).isEmpty();
       return null;
@@ -77,8 +78,30 @@ class MonthlyRepriceBomReadScopeTest {
       var selected=scope.drawing(context,() -> {throw new AssertionError("month lookup");});
       assertThat(selected.sourceVersionId()).isEqualTo(41L);
       assertThat(selected.accountingMonth()).isEqualTo("2026-10");
+      assertThat(scope.costingDrawing(2L, "2026-11", () -> { throw new AssertionError("must use selected BOM"); }))
+          .isSameAs(selected);
+      assertThatThrownBy(() -> scope.costingDrawing(3L, "2026-11", () -> null)).hasMessageContaining("不能跨");
+      assertThatThrownBy(() -> scope.costingDrawing(2L, "2026-10", () -> null)).hasMessageContaining("不能跨");
+      List<java.util.function.Consumer<QuoteBomMonthlySnapshot>> mismatches = List.of(
+          snapshot -> snapshot.setId(52L),
+          snapshot -> snapshot.setBomBatchId("SUPPLEMENT_VERSION:42"),
+          snapshot -> snapshot.setBomSource("U9"),
+          snapshot -> snapshot.setSourceOaFormItemId(3L),
+          snapshot -> snapshot.setProductCode("OTHER"),
+          snapshot -> snapshot.setCostPeriodMonth("2026-10"),
+          snapshot -> snapshot.setPriceOrgCode("220"));
+      for (var mismatch : mismatches) {
+        var snapshot = new QuoteBomMonthlySnapshot();
+        snapshot.setId(51L);snapshot.setBomBatchId("SUPPLEMENT_VERSION:41");
+        snapshot.setBomSource("ELECTRONIC_DRAWING_BOM");snapshot.setSourceOaFormItemId(2L);
+        snapshot.setProductCode("PRODUCT");snapshot.setCostPeriodMonth("2026-11");
+        snapshot.setPriceOrgCode("210");
+        mismatch.accept(snapshot);
+        assertThatThrownBy(() -> scope.drawingHierarchy(snapshot)).hasMessageContaining("来源不一致");
+      }
       return null;
     });
+    assertThat(scope.drawingHierarchy(null)).isNull();
     source.setReuseValidUntil(LocalDate.of(2026,10,31));
     assertThatThrownBy(() -> scope.use(calculation("2026-11",true),() -> null)).hasMessageContaining("已失效");
     source.setReuseValidUntil(LocalDate.of(2027,3,31));source.setOaFormItemId(3L);

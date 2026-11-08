@@ -46,6 +46,7 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
   @Autowired private TechnicalDataVersionContentCodec codec;
   @Autowired private QuoteBomPreparationRecordMapper preparations;
   @Autowired private JdbcTemplate jdbc;
+  @Autowired private org.mybatis.spring.SqlSessionTemplate sqlSession;
   @Autowired private com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingSourceNodeRepository sourceNodes;
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechModuleMapper moduleMapper;
   @Autowired private com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort contexts;
@@ -55,11 +56,174 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
   @Autowired private com.sanhua.marketingcost.service.MakePartPricePrepareStrategy monthlyManufacturing;
   @Autowired private com.sanhua.marketingcost.mapper.BomCostingRowMapper costingRows;
   @MockBean private ElectronicDrawingU9SubBomPort u9;
+  @Autowired private TechnicalDataActorProvider actors;
   private Long taskId, productId, itemId, sourceId;
   private String key;
 
   @Autowired private TechnicalDataPriceApplicationService priceEntry;
+  @Autowired private TechnicalDataBomPriceCheck bomPriceCheck;
   @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository oaRecipients;
+
+  @Test void savingCompleteManufacturingChecksOrdinaryPurchasedBomChildrenBeforeApproval() {
+    confirmC();
+    jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?", key + "-C");
+    var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    assertThat(saved.bomComposed()).isTrue();
+    var result = priceEntry.get(productId, null, WANG);
+    assertThat(result.requirements().issues()).isEmpty();
+    assertThat(result.requirements().items()).filteredOn(row -> row.requiresEntry())
+        .extracting(row -> row.materialNo()).contains(key + "-C").doesNotContain(key, key + "-A", key + "-B");
+    assertThat(jdbc.queryForObject("SELECT current_bom_build_batch_id FROM lp_quote_costing_workspace WHERE oa_form_item_id=? AND period_month='2026-09'", String.class, itemId)).isNotBlank();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code LIKE ?", Long.class, key + "%")).isZero();
+    assertThat(repository.findProduct(productId).orElseThrow().getEffectiveVersionId()).isNull();
+    assertThatThrownBy(() -> bomPriceCheck.check(productId, LI)).hasMessageContaining("本人正在补录");
+  }
+
+  @Test void composedBomWithPublicPricesNeedsNoPriceEntryAndDoesNotAdoptMonthlyPrices() {
+    confirmC(); fixedPrice(key + "-RAW", "kg");
+    service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    var price = moduleMapper.selectByTaskId(taskId).stream().filter(row -> "PRICE".equals(row.getModuleType())).findFirst().orElseThrow();
+    assertThat(price.getRequirementReasonCode()).isEqualTo("TECHNICAL_BOM_PRICE_CHECKED");
+    assertThat(price.getSourceAvailability()).isEqualTo("AVAILABLE");
+    assertThat(price.getRequiredFlag()).isZero();
+    assertThat(priceEntry.get(productId, null, WANG).requirements().issues()).isEmpty();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code LIKE ?", Long.class, key + "%")).isZero();
+  }
+
+  @Test void siblingBomAutomaticallyReferencesSavedPriceWithoutRepeatedEntry() throws Exception {
+    confirmC();
+    service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    completePrice(WANG);
+    String raw = key + "-RAW";
+    createSibling(); fixedPrice(key + "-A", "只");
+    var input = request(service.read(productId, null, WANG), true);
+    input.getItems().forEach(row -> row.setRawMaterialNo(raw));
+    service.save(productId, input, WANG);
+    var checked = priceEntry.get(productId, null, WANG);
+    assertThat(checked.requirements().issues()).isEmpty();
+    assertThat(checked.requirements().items()).anySatisfy(row -> {
+      assertThat(row.materialNo()).isEqualTo(raw); assertThat(row.status()).isEqualTo("SHARED");
+    });
+    assertThat(checked.moduleStatus()).isEqualTo("READY");
+    assertThat(checked.issues()).isEmpty();
+    assertThat(checked.content().items()).isEmpty();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_price_claim WHERE material_code=?", Long.class, raw)).isEqualTo(1);
+    assertThat(repository.findProduct(productId).orElseThrow().getEffectiveVersionId()).isNull();
+  }
+
+  @Test void failedBomPriceCheckKeepsManufacturingDraftAndPreventsSubmission() {
+    confirmC();
+    jdbc.update("DELETE FROM lp_make_part_no_scrap_confirmation WHERE material_no=?", key + "-RAW");
+    var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    assertThat(saved.saved().items()).hasSize(2);
+    var price = moduleMapper.selectByTaskId(taskId).stream().filter(row -> "PRICE".equals(row.getModuleType())).findFirst().orElseThrow();
+    assertThat(price.getSourceAvailability()).isEqualTo("ERROR");
+    assertThat(price.getRequirementReason()).contains("废料关系");
+    assertThat(validation.validate(taskId, 101L, WANG).issues()).anySatisfy(issue ->
+        assertThat(issue.code()).isEqualTo("BOM_PRICE_CHECK_REQUIRED"));
+  }
+
+  @Test void oaLinkRetriesFailedCheckWithTheOriginalSavedPriceIntact() {
+    confirmC();
+    service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    completePrice(WANG);
+    var before = codec.prices(repository.findVersion(repository.findProduct(productId).orElseThrow().getCurrentEditVersionId()).orElseThrow());
+    jdbc.update("UPDATE lp_quote_tech_module SET required_flag=0,module_status='PENDING',source_availability='ERROR',requirement_reason_code='TECHNICAL_BOM_PRICE_FAILED',requirement_reason='计价检查失败' WHERE product_id=? AND module_type='PRICE'", productId);
+    sqlSession.clearCache();
+    var actor = actors.current();
+    assertThat(actor.userId()).isEqualTo(101L); assertThat(actor.scopedFormId()).isNotNull();
+    var retry = bomPriceCheck.check(productId, actor);
+    assertThat(retry.issues()).isEmpty();
+    var price = priceEntry.get(productId, null, actor);
+    assertThat(price.moduleStatus()).isEqualTo("READY");
+    assertThat(price.content()).isEqualTo(before);
+    assertThat(price.issues()).isEmpty();
+    var otherForm = new TechnicalDataActor(101L, "王工", actor.authorities(), actor.scopedFormId() + 10000);
+    assertThatThrownBy(() -> bomPriceCheck.check(productId, otherForm)).hasMessageContaining("本人正在补录");
+  }
+
+  private void fixedPrice(String material, String unit) {
+    jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) VALUES('210',?,'test',?,10,0,'TEST','2026-09-01','2027-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())", material, unit);
+  }
+
+  @Test void threeRolledUpManufacturingProductsRecoverWithOneSavedPrice() throws Exception {
+    // 与正式资料相同：特殊原料上卷为制造母件，取价要穿过制造件计算，不能只测普通采购行。
+    String raw = key + "-RAW";
+    jdbc.update("UPDATE lp_material_master_raw SET material_name='不锈钢板带' WHERE material_code=?", raw);
+    jdbc.update("INSERT INTO lp_bom_settlement_rule(rule_code,rule_name,rule_category,settlement_action,settlement_row_type,sub_ref_type,match_condition_json,mark_subtree_cost_required,priority,enabled,business_unit_type,deleted) VALUES(?,'test raw rollup','SPECIAL_PURCHASE_ROLLUP','ROLLUP_TO_PARENT','SPECIAL_ROLLUP_PARENT','SPECIAL_ROLLUP_CHILD',JSON_OBJECT('nodeConditions',JSON_ARRAY(JSON_OBJECT('field','material_code','op','EQ','value',?)), 'parentConditions',JSON_ARRAY(JSON_OBJECT('field','material_code','op','LIKE','value','-B'))),1,1,1,'COMMERCIAL',0)", key, raw);
+    confirmC(); service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    completePrice(WANG);
+    long original = productId;
+    var ids = new java.util.ArrayList<Long>(); ids.add(original);
+    var savedPrice = codec.prices(repository.findVersion(repository.findProduct(original).orElseThrow().getCurrentEditVersionId()).orElseThrow());
+    for (int n = 0; n < 2; n++) {
+      createSibling(); fixedPrice(key + "-A", "只");
+      var input = request(service.read(productId, null, WANG), true);
+      input.getItems().forEach(row -> row.setRawMaterialNo(raw));
+      service.save(productId, input, WANG); ids.add(productId);
+    }
+    for (long id : ids) jdbc.update("UPDATE lp_quote_tech_module SET required_flag=0,module_status='PENDING',source_availability='ERROR',requirement_reason_code='TECHNICAL_BOM_PRICE_FAILED',requirement_reason='检查失败' WHERE product_id=? AND module_type='PRICE'", id);
+    sqlSession.clearCache();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_bom_costing_row WHERE oa_no=? AND settlement_row_type='SPECIAL_ROLLUP_PARENT'", Long.class, repository.findTask(taskId).orElseThrow().getOaNo())).isGreaterThanOrEqualTo(3);
+    for (long id : ids) {
+      var checked = bomPriceCheck.check(id, actors.current());
+      assertThat(checked.issues()).as("product=" + id).isEmpty();
+      var price = priceEntry.get(id, null, actors.current());
+      assertThat(price.moduleStatus()).isEqualTo("READY"); assertThat(price.issues()).isEmpty();
+      if (id == original) assertThat(price.content()).isEqualTo(savedPrice);
+      else assertThat(price.requirements().items()).anySatisfy(row -> {
+        assertThat(row.materialNo()).isEqualTo(raw); assertThat(row.status()).isEqualTo("SHARED");
+      });
+    }
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_price_claim WHERE material_code=?", Long.class, raw)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?", Long.class, raw)).isZero();
+    var submissions = new java.util.ArrayList<TechnicalDataSubmissionRemark.SubmittedProduct>();
+    for (long id : ids) {
+      var product = repository.lockProduct(id).orElseThrow();
+      var person = new Recipient(id, product.getTaskId(), 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING", "PRICE"), 1L,
+          "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
+      var frozen = versions.freeze(product, person, product.getRowVersion(), 101L);
+      var submitted = new QuoteTechSubmission(); submitted.setContentSchemaVersion(2);
+      submitted.setModuleTypesJson("[\"DRAWING_BOM\",\"MANUFACTURING\",\"PRICE\"]");
+      submitted.setContentSnapshotJson(codec.versionContentJson(frozen, codec.readReferenceSnapshot(frozen.getReferenceSnapshotJson()), List.of(), List.of(), List.of()));
+      submissions.add(new TechnicalDataSubmissionRemark.SubmittedProduct(product.getMaterialNo(), submitted));
+    }
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    var remark = new TechnicalDataSubmissionRemark(mapper).generateDocument(submissions);
+    assertThat(remark).contains("引用");
+    var client = new com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalSubmissionClient(mapper, null);
+    var payload = client.preview(new com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalSubmissionClient.Request(
+        "FLOW-TEST", "101", remark, "http://localhost/technical-data/forms/7"));
+    assertThat(payload.path("remark").asText()).isEqualTo(remark);
+  }
+
+  @Test void returnedManufacturingRebuildsBomFromLatestSavedDataAndResubmitsOnlyTheNewInputs() {
+    confirmC(); service.save(productId, request(service.read(productId, null, WANG), true), WANG); completePrice(WANG);
+    var person = new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("DRAWING_BOM", "MANUFACTURING", "PRICE"), 1L,
+        "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null);
+    var first = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, repository.findProduct(productId).orElseThrow().getRowVersion(), 101L);
+    var before = codec.manufacturing(first);
+    versions.restore(repository.lockProduct(productId).orElseThrow(), person, first.getId(), 101L);
+    String nextRaw = key + "-NEW-RAW"; material(nextRaw, nextRaw, "采购件", "kg"); fixedPrice(nextRaw, "kg");
+    jdbc.update("INSERT INTO lp_make_part_no_scrap_confirmation(business_unit_type,material_no,effective_from_month,confirm_reason) VALUES('COMMERCIAL',?,'2026-09','test no scrap')", nextRaw);
+    var input = request(service.read(productId, null, WANG), true);
+    input.getItems().forEach(row -> { row.setRawMaterialNo(nextRaw); row.setGrossWeightKg(new BigDecimal("0.020")); });
+    var saved = service.save(productId, input, WANG);
+    assertThat(saved.issues()).isEmpty();
+    assertThat(bomPriceCheck.check(productId, actors.current()).issues()).isEmpty();
+    assertThat(jdbc.queryForList("SELECT material_code,qty_per_parent FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? AND node_source_type='TECH_RAW'", sourceId)).hasSize(2).allSatisfy(row -> {
+      assertThat(row.get("material_code")).isEqualTo(nextRaw);
+      assertThat((BigDecimal) row.get("qty_per_parent")).isEqualByComparingTo("0.020");
+    });
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_bom_costing_row WHERE oa_form_item_id=? AND material_code=?", Long.class, itemId, nextRaw)).isPositive();
+    var next = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, repository.findProduct(productId).orElseThrow().getRowVersion(), 101L);
+    assertThat(codec.manufacturing(next).items()).allSatisfy(row -> {
+      assertThat(row.rawMaterialNo()).isEqualTo(nextRaw); assertThat(row.grossWeightKg()).isEqualByComparingTo("0.020");
+    });
+    assertThat(codec.manufacturing(repository.findVersion(first.getId()).orElseThrow())).isEqualTo(before);
+    assertThat(repository.lockModules(productId).stream().filter(row -> "MANUFACTURING".equals(row.getModuleType())).findFirst().orElseThrow().getCurrentVersionId()).isEqualTo(next.getId());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE product_id=? AND version_status='DRAFT'", Long.class, productId)).isEqualTo(1);
+  }
 
   @Test void missingPricesStayInTheManufacturingTechniciansOpenTodoAndCanBeFrozenTogether() {
     jdbc.update("INSERT INTO lp_oa_integration_message(source_system,environment,direction,request_id,interface_type,schema_version,occurred_at,raw_payload,payload_hash,allowed_business_units) VALUES('TEST','UNIT','OUTBOUND',?,'TASK_DISPATCH',1,NOW(3),'{}',REPEAT('b',64),'COMMERCIAL')", key);
@@ -188,44 +352,29 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE product_id=? AND version_status='SUBMITTED'", Integer.class, productId)).isZero();
   }
 
+  @AfterEach void clearActor() { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+
   @BeforeEach void fixture() throws Exception {
     key = "TW09-" + UUID.randomUUID().toString().substring(0, 8);
     jdbc.update("INSERT INTO oa_form(oa_no,accounting_period_month,business_unit_type) VALUES(?,'2026-09','COMMERCIAL')", key);
     Long formId = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, key);
-    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,customer_drawing,business_unit_type) VALUES(?,?,?,'COMMERCIAL')", formId, key, key);
-    itemId = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, formId);
-    var preparation = new QuoteBomPreparationRecord();
-    preparation.setOaFormId(formId); preparation.setOaFormItemId(itemId); preparation.setOaNo(key);
-    preparation.setQuoteProductCode(key); preparation.setProductType("NON_BARE");
-    preparation.setCostPeriodMonth("2026-09"); preparation.setPriceOrgCode("210"); preparation.setMaterialOrganizationCode("COMMERCIAL");
-    preparation.setPreparationStatus("NEED_TECH"); preparation.setActiveFlag(1); preparation.setElectronicWorkflowVersion(0);
-    preparations.insert(preparation);
-    var task = new QuoteTechTask(); task.setTaskNo(key); task.setOaFormId(formId); task.setOaFormItemId(itemId);
-    task.setOaNo(key); task.setAccountingMonth("2026-09"); task.setBusinessUnitType("COMMERCIAL"); task.setApplicableOrgCode("210");
-    task.setAssigneeUserId(101L); task.setAssigneeName("王工"); taskId = persistence.createTask(task).getId();
-    var product = new QuoteTechProduct(); product.setTaskId(taskId); product.setOaFormItemId(itemId); product.setQuoteNo(key);
-    product.setAccountingMonth("2026-09"); product.setContentSchemaVersion(2); product.setMaterialNo(key);
-    product.setSourceFingerprint("a".repeat(64)); product.setSourceSnapshotJson("{\"sourceModel\":\"OA-MODEL\"}");
-    productId = persistence.createProduct(product).getId();
-    for (String type : TechnicalDataModuleType.orderedCodes()) {
-      boolean required = Set.of("DRAWING_BOM", "MANUFACTURING", "PROFILE").contains(type);
-      var module = new QuoteTechModule(); module.setProductId(productId); module.setModuleType(type);
-      module.setRequiredFlag(required ? 1 : 0); module.setModuleStatus(required ? "PENDING" : "NOT_REQUIRED");
-      module.setSourceAvailability(required ? "MISSING" : "AVAILABLE"); module.setSourceReference("TEST-U9-NOT-FOUND");
-      module.setSourceCheckedAt(LocalDateTime.now()); module.setRequirementReasonCode("TEST_CHECK"); module.setRequirementReason("实际缺失原料关系");
-      module.setEntryMode(required ? "MANUAL" : "NONE"); module.setAssigneeUserId("PROFILE".equals(type) ? 102L : 101L);
-      module.setAssigneeName("PROFILE".equals(type) ? "李工" : "王工"); persistence.createModule(module);
-    }
+    var principal = new com.sanhua.marketingcost.integration.oa.oauth.OaOAuthPrincipal("oa-tech-1", "王工", 101L, formId);
+    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+        new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null,
+            List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("technical:data:task:edit"))));
+    createProduct(formId, key);
     material(key, key, "制造件", "只"); material(key + "-A", key + "-DA", "制造件", "只");
     material(key + "-B", key + "-DB", "制造件", "只"); material(key + "-RAW", key + "-DR", "采购件", "kg");
+    String fixtureKey = key;
     when(u9.query(any())).thenAnswer(call -> {
       SubBomQuery query = call.getArgument(0);
-      if (!query.parentMaterialCode().equals(key + "-A")) return SubBomResult.failure(Status.NOT_FOUND, query.parentMaterialCode(), "无正式下级");
-      return SubBomResult.available(key + "-A", "210", "COMMERCIAL", List.of(new U9Node("u1", null, 101L, 1001L,
-          key + "-RAW", "已有原料", "T2", null, key + "-DR", "采购件", "111001008", "RAW", "RAW",
+      if (!query.parentMaterialCode().equals(fixtureKey + "-A")) return SubBomResult.failure(Status.NOT_FOUND, query.parentMaterialCode(), "无正式下级");
+      return SubBomResult.available(fixtureKey + "-A", "210", "COMMERCIAL", List.of(new U9Node("u1", null, 101L, 1001L,
+          fixtureKey + "-RAW", "已有原料", "T2", null, fixtureKey + "-DR", "采购件", "111001008", "RAW", "RAW",
           "主制造", "V1", new BigDecimal("0.015"), BigDecimal.ONE, "kg", 1)));
     });
     sourceId = attachHistoricalDrawing();
+    jdbc.update("INSERT INTO lp_make_part_no_scrap_confirmation(business_unit_type,material_no,effective_from_month,confirm_reason) VALUES('COMMERCIAL',?,'2026-09','test confirmed no scrap')", key + "-RAW");
   }
 
   @Test void partialSaveSurvivesFinanceResolutionAndComposesExactParentsWithoutMultiplyingSingleWeightTwice() {
@@ -451,8 +600,134 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN (?,?)",Integer.class,key+"-RAW",scrap)).isZero();
   }
 
+  private void createProduct(Long formId, String oaNo) {
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,customer_drawing,business_unit_type) VALUES(?,?,?,'COMMERCIAL')", formId, key, key);
+    itemId = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=? AND material_no=?", Long.class, formId, key);
+    var preparation = new QuoteBomPreparationRecord();
+    preparation.setOaFormId(formId); preparation.setOaFormItemId(itemId); preparation.setOaNo(oaNo);
+    preparation.setQuoteProductCode(key); preparation.setProductType("NON_BARE");
+    preparation.setCostPeriodMonth("2026-09"); preparation.setPriceOrgCode("210"); preparation.setMaterialOrganizationCode("COMMERCIAL");
+    preparation.setPreparationStatus("NEED_TECH"); preparation.setActiveFlag(1); preparation.setElectronicWorkflowVersion(0);
+    preparations.insert(preparation);
+    var task = new QuoteTechTask(); task.setTaskNo(key); task.setOaFormId(formId); task.setOaFormItemId(itemId);
+    task.setOaNo(oaNo); task.setAccountingMonth("2026-09"); task.setBusinessUnitType("COMMERCIAL"); task.setApplicableOrgCode("210");
+    task.setAssigneeUserId(101L); task.setAssigneeName("王工"); taskId = persistence.createTask(task).getId();
+    var product = new QuoteTechProduct(); product.setTaskId(taskId); product.setOaFormItemId(itemId); product.setQuoteNo(oaNo);
+    product.setAccountingMonth("2026-09"); product.setContentSchemaVersion(2); product.setMaterialNo(key);
+    product.setSourceFingerprint("a".repeat(64)); product.setSourceSnapshotJson("{\"sourceModel\":\"OA-MODEL\"}");
+    productId = persistence.createProduct(product).getId();
+    for (String type : TechnicalDataModuleType.orderedCodes()) {
+      boolean required = Set.of("DRAWING_BOM", "MANUFACTURING", "PROFILE").contains(type);
+      var module = new QuoteTechModule(); module.setProductId(productId); module.setModuleType(type);
+      module.setRequiredFlag(required ? 1 : 0); module.setModuleStatus(required ? "PENDING" : "NOT_REQUIRED");
+      module.setSourceAvailability(required ? "MISSING" : "AVAILABLE"); module.setSourceReference("TEST-U9-NOT-FOUND");
+      module.setSourceCheckedAt(LocalDateTime.now()); module.setRequirementReasonCode("TEST_CHECK"); module.setRequirementReason("实际缺失原料关系");
+      module.setEntryMode(required ? "MANUAL" : "NONE"); module.setAssigneeUserId("PROFILE".equals(type) ? 102L : 101L);
+      module.setAssigneeName("PROFILE".equals(type) ? "李工" : "王工"); persistence.createModule(module);
+    }
+  }
+
+  @Test void sameManufacturedComponentIsOfferedFromSiblingWithoutCopyingOtherComponentsOrWritingOnRead() throws Exception {
+    confirmC();
+    var first = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    long originalProduct = productId;
+    String originalKey = key;
+    createSibling();
+    var before = jdbc.queryForMap("SELECT (SELECT COUNT(*) FROM lp_quote_tech_data_version) versions, (SELECT COUNT(*) FROM lp_quote_bom_supplement_detail) details");
+    var response = service.read(productId, null, WANG);
+    var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().valueToTree(response);
+    assertThat(json.path("reusedItems").size()).as("共同制造件应自动带出，其他制造件仍待填写").isEqualTo(1);
+    assertThat(json.path("reusedItems").get(0).path("sourceProductId").asLong()).isEqualTo(originalProduct);
+    assertThat(json.path("reusedItems").get(0).path("rawMaterialNo").asText()).isEqualTo(originalKey + "-RAW");
+    assertThat(jdbc.queryForMap("SELECT (SELECT COUNT(*) FROM lp_quote_tech_data_version) versions, (SELECT COUNT(*) FROM lp_quote_bom_supplement_detail) details")).isEqualTo(before);
+    assertThat(codec.manufacturing(repository.findVersion(first.versionId()).orElseThrow())).isEqualTo(first.saved());
+    var reference = response.reusedItems().getFirst();
+    var input = new TechnicalDataManufacturingSaveRequest.Item();
+    input.setParentSourceNodeId(reference.parentSourceNodeId()); input.setRawMaterialNo(reference.rawMaterialNo());
+    input.setGrossWeightKg(reference.grossWeightKg()); input.setNetLengthMm(reference.netLengthMm());
+    input.setReuseReference(reference.sourceReference());
+    var write = request(response, false); write.setItems(List.of(input));
+    var partial = service.save(productId, write, WANG);
+    assertThat(partial.saved().items()).singleElement().satisfies(row -> {
+      assertThat(row.sourceVersionId()).isEqualTo(sourceId);
+      assertThat(row.sourceReference()).isEqualTo(reference.sourceReference());
+      assertThat(row.grossWeightKg()).isEqualByComparingTo("0.012");
+    });
+    assertThat(partial.reusedItems()).isEmpty();
+    assertThat(partial.issues()).isNotEmpty(); // 不同制造件仍须有自己的原料资料。
+    input.setReuseReference(null);
+    var other = new TechnicalDataManufacturingSaveRequest.Item();
+    other.setParentSourceNodeId(response.source().nodes().stream().filter(row -> row.state() == TechnicalDataManufacturingSourceQuery.State.MISSING_RAW
+        && !row.sourceNodeId().equals(reference.parentSourceNodeId())).findFirst().orElseThrow().sourceNodeId());
+    other.setRawMaterialNo(originalKey + "-RAW"); other.setGrossWeightKg(new BigDecimal("0.013")); other.setNetLengthMm(BigDecimal.TEN);
+    var complete = request(partial, false); complete.setItems(List.of(input, other));
+    var result = service.save(productId, complete, WANG);
+    assertThat(result.issues()).isEmpty(); assertThat(result.bomComposed()).isTrue();
+    assertThat(result.saved().items()).hasSize(2);
+    assertThat(result.saved().items().getFirst().sourceReference()).isEqualTo(reference.sourceReference());
+    var child = jdbc.queryForMap("SELECT qty_per_top,qty_per_parent FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? AND node_source_type='TECH_RAW' AND parent_code=?", sourceId, originalKey + "-B");
+    assertThat((BigDecimal) child.get("qty_per_parent")).isEqualByComparingTo("0.012");
+    assertThat((BigDecimal) child.get("qty_per_top")).isEqualByComparingTo("0.108"); // 本产品 9 件，而原产品为 4/3 件。
+    assertThat(codec.manufacturing(repository.findVersion(first.versionId()).orElseThrow())).isEqualTo(first.saved());
+    assertThat(repository.findProduct(productId).orElseThrow().getEffectiveVersionId()).isNull();
+
+  }
+
+  @Test void siblingReuseRejectsChangedSourceAndHidesAnotherPersonsDraft() throws Exception {
+    confirmC();
+    var original = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    long ownerId = productId;
+    createSibling();
+    var response = service.read(productId, null, WANG);
+    var reference = response.reusedItems().getFirst();
+    jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=102 WHERE product_id=? AND module_type='MANUFACTURING'", ownerId);
+    sqlSession.clearCache(); // 下一次 HTTP 读取使用新会话；直接 SQL 造变更不能保留测试会话缓存。
+    assertThat(service.read(productId, null, WANG).reusedItems()).isEmpty();
+    jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=101 WHERE product_id=? AND module_type='MANUFACTURING'", ownerId);
+    sqlSession.clearCache(); // 下一次 HTTP 读取使用新会话；直接 SQL 造变更不能保留测试会话缓存。
+    jdbc.update("UPDATE lp_quote_tech_data_version SET manufacturing_json=JSON_SET(manufacturing_json,'$.items[0].grossWeightKg',0.02,'$.items[0].quantityPerParent',0.02) WHERE id=?", original.versionId());
+    sqlSession.clearCache(); // 下一次 HTTP 读取使用新会话；直接 SQL 造变更不能保留测试会话缓存。
+    var input = new TechnicalDataManufacturingSaveRequest.Item();
+    input.setParentSourceNodeId(reference.parentSourceNodeId()); input.setRawMaterialNo(reference.rawMaterialNo());
+    input.setGrossWeightKg(reference.grossWeightKg()); input.setNetLengthMm(reference.netLengthMm()); input.setReuseReference(reference.sourceReference());
+    var write = request(response, false); write.setItems(List.of(input));
+    assertThatThrownBy(() -> service.save(productId, write, WANG)).hasMessageContaining("引用的制造件资料已变化");
+    assertThat(service.read(productId, null, WANG).saved()).isNull();
+    assertThat(service.read(productId, null, WANG).reusedItems()).isEmpty(); // 同一制造件不同用量，不能任取一行。
+  }
+
+  @Test void siblingReuseRequiresMatchingNetWeightAndLiveSource() throws Exception {
+    confirmC(); service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    long ownerId = productId, ownerSource = sourceId;
+    createSibling();
+    assertThat(service.read(productId, null, WANG).reusedItems()).hasSize(1);
+    jdbc.update("UPDATE lp_electronic_drawing_source_node SET reference_weight=11 WHERE supplement_version_id=? AND source_sequence='2'", sourceId);
+    sqlSession.clearCache(); // 下一次 HTTP 读取使用新会话；直接 SQL 造变更不能保留测试会话缓存。
+    assertThat(service.read(productId, null, WANG).reusedItems()).isEmpty();
+    jdbc.update("UPDATE lp_electronic_drawing_source_node SET reference_weight=10 WHERE supplement_version_id=? AND source_sequence='2'", sourceId);
+    sqlSession.clearCache(); // 下一次 HTTP 读取使用新会话；直接 SQL 造变更不能保留测试会话缓存。
+    jdbc.update("UPDATE lp_electronic_drawing_source_node SET qty=99 WHERE supplement_version_id=? AND source_sequence='2'", ownerSource);
+    sqlSession.clearCache(); // 下一次 HTTP 读取使用新会话；直接 SQL 造变更不能保留测试会话缓存。
+    assertThat(service.read(productId, null, WANG).reusedItems()).isEmpty();
+  }
+
+
+  private void createSibling() throws Exception {
+    Long formId = repository.findTask(taskId).orElseThrow().getOaFormId();
+    String originalKey = key;
+    key += "-NEXT";
+    material(key, key, "制造件", "只");
+    material(key + "-A", key + "-DA", "采购件", "只");
+    material(key + "-B", key + "-DB", "制造件", "只");
+    createProduct(formId, jdbc.queryForObject("SELECT oa_no FROM oa_form WHERE id=?", String.class, formId));
+    sourceId = attachHistoricalDrawing();
+    confirmC();
+    jdbc.update("UPDATE lp_electronic_drawing_source_node SET resolved_material_code=?,drawing_code=?,qty=9 WHERE supplement_version_id=? AND source_sequence='2'", originalKey + "-B", originalKey + "-DB", sourceId);
+  }
+
   private void confirmC() {
     material(key + "-C", key + "-DC", "采购件", "只");
+    jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) VALUES('210',?,'purchased','只',10,0,'TEST','2026-09-01','2027-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())", key + "-C");
     Long node = jdbc.queryForObject("SELECT id FROM lp_electronic_drawing_source_node WHERE supplement_version_id=? AND source_sequence='4'", Long.class, sourceId);
     assertThat(sourceNodes.updateResolution(node, "UNMATCHED", "MANUALLY_SELECTED", key + "-C", "FINANCE", LocalDateTime.now())).isTrue();
   }

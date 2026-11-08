@@ -51,6 +51,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
             classes = {
                 BusinessUnitRepriceLockGuardImpl.class,
                 MonthlyRepriceQueryServiceImpl.class,
+                com.sanhua.marketingcost.service.ingest.QuoteCostResultHistoryServiceImpl.class,
                 QuoteBatchCostRunServiceImpl.class,
                 com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService.class,
                 QuoteFinalSubmissionService.class,

@@ -17,6 +17,9 @@ public class MonthlyRepriceBatchDto {
   private String executionBackend;
   private String status;
   private Integer totalCount;
+  private Integer scopeVersion;
+  private Integer sourceCount;
+  private Integer unresolvedSourceCount;
   private Integer successCount;
   private Integer failedCount;
   private Integer skippedCount;
@@ -48,6 +51,9 @@ public class MonthlyRepriceBatchDto {
     dto.setExecutionBackend(batch.getExecutionBackend());
     dto.setStatus(batch.getStatus());
     dto.setTotalCount(batch.getTotalCount());
+    dto.setScopeVersion(batch.getScopeVersion());
+    dto.setSourceCount(batch.getSourceCount());
+    dto.setUnresolvedSourceCount(batch.getUnresolvedSourceCount());
     dto.setSuccessCount(batch.getSuccessCount());
     dto.setFailedCount(batch.getFailedCount());
     dto.setSkippedCount(batch.getSkippedCount());

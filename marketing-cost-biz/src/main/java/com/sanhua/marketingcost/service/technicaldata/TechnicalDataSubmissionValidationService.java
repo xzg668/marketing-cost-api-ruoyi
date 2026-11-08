@@ -82,6 +82,14 @@ public class TechnicalDataSubmissionValidationService {
               : Objects.equals(module.getAssigneeUserId(), assigneeUserId))
           && (person == null || person.processingModules().contains(module.getModuleType()))).toList();
       if (own.isEmpty()) add(issues, product, "TASK", "assigneeUserId", null, "PERSON_SCOPE_EMPTY", "此人没有负责的补录模块", "task-status");
+      var priceCheck = byType.get("PRICE");
+      boolean preparingBom = own.stream().anyMatch(module -> Set.of("MANUFACTURING", "PACKAGE", "SOLDER").contains(module.getModuleType())
+          && !TechnicalDataSubmissionState.submitted(module.getModuleStatus()));
+      if (preparingBom && priceCheck != null && ("TECHNICAL_BOM_PRICE_FAILED".equals(priceCheck.getRequirementReasonCode())
+          || "PRICE_BOM_NOT_READY".equals(priceCheck.getRequirementReasonCode()))) {
+        add(issues, product, "PRICE", "sourceAvailability", null, "BOM_PRICE_CHECK_REQUIRED",
+            "计价物料尚未检查完成：" + priceCheck.getRequirementReason(), anchor(product, "PRICE"));
+      }
       boolean frozen = !own.isEmpty() && own.stream().allMatch(module -> Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(module.getModuleStatus()));
       Long versionId = frozen ? own.getFirst().getCurrentVersionId() : product.getCurrentEditVersionId();
       var version = versionId == null ? null : repository.findVersion(versionId).orElse(null);
@@ -125,11 +133,6 @@ public class TechnicalDataSubmissionValidationService {
     if (version == null) return false;
     int before = issues.size();
     int itemCount = codec.supplementItemCount(version, module.getModuleType());
-    if ("PRICE".equals(module.getModuleType()) && "PRICE_SHARED_COMPLETE".equals(module.getLastValidationCode())
-        && "TECH_PRICE_SHARED".equals(module.getReferenceSourceType()) && module.getReferenceSnapshotJson() != null) {
-      var shared = codec.sharedPrices(module.getReferenceSnapshotJson());
-      if (shared != null && !shared.owners().isEmpty() && !shared.requirements().items().isEmpty()) itemCount = Math.max(1, itemCount);
-    }
     // 原关系已由 U9 补齐时，可保存真实复查证据而无新增原料行；仍逐项核验来源，不造空白明细。
     if ("MANUFACTURING".equals(module.getModuleType()) && codec.manufacturing(version) != null
         && codec.manufacturing(version).evidence() != null) itemCount = Math.max(1, itemCount);
@@ -160,6 +163,13 @@ public class TechnicalDataSubmissionValidationService {
           : value.items().stream().flatMap(row -> TechnicalDataPriceRules.validate(row).stream()).toList()
           : prices.validateCurrent(product, version);
       for (String message : messages) add(issues, product, "PRICE", "items", null, "PRICE_INPUT_INVALID", message, anchor(product, "PRICE"));
+      if (frozen && value != null && value.items() != null && value.items().isEmpty()) {
+        var shared = "TECH_PRICE_SHARED".equals(module.getReferenceSourceType())
+            ? codec.sharedPrices(module.getReferenceSnapshotJson()) : null;
+        if (shared == null || shared.owners().isEmpty() || shared.requirements().items().isEmpty())
+          add(issues, product, "PRICE", "items", null, "PRICE_REFERENCE_MISSING",
+              "价格明细或引用资料缺失，请打开价格页核对", anchor(product, "PRICE"));
+      }
     }
     return before == issues.size();
   }
@@ -304,7 +314,8 @@ public class TechnicalDataSubmissionValidationService {
       add(issues, product, type, "lastValidationCode", null,
           "MODULE_VALIDATION_MISSING", type + "模块没有有效服务端校验结果", anchor(product, type));
     }
-    if (!"PROFILE".equals(type) && itemCount <= 0) {
+    // 价格允许全部来自公共价或其他产品；具体缺价料号由价格校验返回，不能按本地行数拦截。
+    if (!Set.of("PROFILE", "PRICE").contains(type) && itemCount <= 0) {
       add(issues, product, type, "items", null,
           "DETAIL_REQUIRED", type + "模块至少需要一条完整明细", anchor(product, type));
     }

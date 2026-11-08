@@ -31,6 +31,11 @@ public class MonthlyRepriceResultDto {
   private String priceVersion;
   private String ruleVersion;
   private Long sourceCostVersionId;
+  private Integer scopeVersion;
+  private String customerIdentitySource;
+  private String customerIdentityValue;
+  private Integer mergedSourceCount;
+  private Long computeGroupId;
   private String calcStatus;
   private String calcMessage;
   private LocalDateTime createdAt;
@@ -63,6 +68,10 @@ public class MonthlyRepriceResultDto {
     dto.setPriceVersion(result.getPriceVersion());
     dto.setRuleVersion(result.getRuleVersion());
     dto.setSourceCostVersionId(result.getSourceCostVersionId());
+    dto.setCustomerIdentitySource(result.getCustomerIdentitySource());
+    dto.setCustomerIdentityValue(result.getCustomerIdentityValue());
+    dto.setMergedSourceCount(result.getMergedSourceCount());
+    dto.setComputeGroupId(result.getComputeGroupId());
     dto.setCalcStatus(result.getCalcStatus());
     dto.setCalcMessage(result.getCalcMessage());
     dto.setCreatedAt(result.getCreatedAt());

@@ -16,8 +16,15 @@ public class MonthlyRepriceWorkflowController {
   @PostMapping("/start") @PreAuthorize("@ss.hasAnyRole('ADMIN','BU_DIRECTOR')")
   public CommonResult<MonthlyRepriceWorkflowService.View> start() {return CommonResult.success(service.start());}
   @PostMapping("/{no}/retry") @PreAuthorize("@ss.hasAnyRole('ADMIN','BU_DIRECTOR')")
-  public CommonResult<MonthlyRepriceWorkflowService.View> retry(@PathVariable String no) {return CommonResult.success(service.retry(no));}
+  public CommonResult<MonthlyRepriceWorkflowService.View> retry(@PathVariable String no,
+      @RequestBody com.sanhua.marketingcost.dto.MonthlyRepriceUncalculated.RetrySelection selection) {
+    return CommonResult.success(service.retry(no,selection));
+  }
   public record Confirmation(long checkedRevision) {}
+  @PostMapping("/{no}/recheck") @PreAuthorize("@ss.hasAnyRole('ADMIN','BU_DIRECTOR')")
+  public CommonResult<MonthlyRepriceWorkflowService.View> recheck(@PathVariable String no) {
+    return CommonResult.success(service.recheck(no));
+  }
   @PostMapping("/{no}/confirm") @PreAuthorize("@ss.hasAnyRole('ADMIN','BU_DIRECTOR')")
   public CommonResult<MonthlyRepriceWorkflowService.View> confirm(@PathVariable String no,@RequestBody Confirmation request) {
     return CommonResult.success(service.confirm(no,request.checkedRevision()));

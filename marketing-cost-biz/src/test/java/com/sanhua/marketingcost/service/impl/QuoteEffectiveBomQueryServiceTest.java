@@ -22,12 +22,17 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomAlternativeSelection;
 import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
+import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuoteBomSupplementDetail;
+import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
 import com.sanhua.marketingcost.enums.QuoteMaterialShape;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeBranchPrunerImpl;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeCandidate;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroup;
@@ -53,6 +58,9 @@ import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeSource;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioResolution;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioShapeResolver;
 import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
+import com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope;
+import com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomService;
+import com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -90,6 +98,9 @@ class QuoteEffectiveBomQueryServiceTest {
   private QuoteEffectiveBomApplicationServiceImpl service;
   private QuoteBomMonthlySnapshot snapshot;
   private com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource drawingPreparation;
+  private QuoteBomSupplementVersionMapper drawingVersions;
+  private QuoteBomSupplementDetailMapper drawingDetails;
+  private MonthlyRepriceBomReadScope repriceBom;
 
   @BeforeEach
   @SuppressWarnings("unchecked")
@@ -161,6 +172,10 @@ class QuoteEffectiveBomQueryServiceTest {
                     invocation.getArgument(0), Map.of(), Map.of(), List.of()));
 
     drawingPreparation = mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource.class);
+    drawingVersions = mock(QuoteBomSupplementVersionMapper.class);
+    drawingDetails = mock(QuoteBomSupplementDetailMapper.class);
+    repriceBom = new MonthlyRepriceBomReadScope(drawingVersions, drawingDetails,
+        new com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher(drawingDetails, rawMapper));
     service =
         new QuoteEffectiveBomApplicationServiceImpl(
             preparationMapper,
@@ -183,13 +198,122 @@ class QuoteEffectiveBomQueryServiceTest {
             contextResolver,
             quoteBomStatusService, new com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions(
                 (ignoredItem, ignoredMonth) -> null, mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)),
-            drawingPreparation, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
+            drawingPreparation, repriceBom, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     snapshot = snapshot(42L);
   }
 
   @AfterEach
   void tearDown() {
     SecurityContextHolder.clearContext();
+  }
+
+  @Test
+  void monthlyRepriceUsesSelectedApprovedDrawingWithoutAnExtraRawHierarchyCopy() {
+    var details = rawRows().stream().map(row -> {
+      var detail = new QuoteBomSupplementDetail();
+      detail.setSupplementVersionId(12L);
+      detail.setLineNo(row.getLevel() + 1);
+      detail.setLevel(row.getLevel());
+      detail.setMaterialCode(row.getMaterialCode());
+      detail.setParentCode(row.getParentCode());
+      detail.setPath(row.getPath());
+      detail.setQtyPerTop(row.getQtyPerParent());
+      detail.setShapeAttr(row.getShapeAttr());
+      return detail;
+    }).toList();
+    var calculation = selectedDrawingCalculation("P", details);
+
+    var result = repriceBom.use(calculation, () -> service.prepareRepriceCandidate(calculation));
+
+    assertThat(result.response().state()).isEqualTo("DRAFT");
+    assertThat(result.response().nodes()).extracting(node -> node.materialCode()).containsExactly("P", "A");
+    assertThat(result.response().sourceBomBatchId()).isEqualTo("SUPPLEMENT_VERSION:12");
+    verify(rawMapper, never()).selectList(any(Wrapper.class));
+    verifyNoInteractions(drawingPreparation, quoteBomStatusService);
+    verify(drawingDetails).selectList(any(Wrapper.class));
+    verify(monthlyDetails).save(eq(snapshot.getId()), any());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void monthlyRepriceReplaysAll42ApprovedRowsAndPreservesOctoberQuantities() throws Exception {
+    var json = new ObjectMapper().findAndRegisterModules();
+    com.fasterxml.jackson.databind.JsonNode fixture;
+    try (var stream = getClass().getResourceAsStream("/reprice/approved-drawing-42-rows.json")) {
+      fixture = json.readTree(stream);
+    }
+    var details = json.convertValue(fixture.required("details"),
+        new com.fasterxml.jackson.core.type.TypeReference<List<QuoteBomSupplementDetail>>() {});
+    var previous = json.convertValue(fixture.required("octoberFrozen"),
+        new com.fasterxml.jackson.core.type.TypeReference<List<BomRawHierarchy>>() {});
+    var calculation = selectedDrawingCalculation("1145100050625", details);
+    var result = repriceBom.use(calculation, () -> {
+      var candidate = service.prepareRepriceCandidate(calculation);
+      // Downstream checks must consume the same details, without a second version/month lookup.
+      var readContext = new com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext(
+          7L, 42L, "OA-QEB-11", "2026-11", "COMMERCIAL", "1145100050625", null, null, null,
+          "210", "COMMERCIAL", LocalDate.of(2026, 11, 1), LocalDateTime.of(2026, 11, 5, 0, 0));
+      assertThat(repriceBom.drawingRows(readContext)).containsExactlyElementsOf(details);
+      return candidate;
+    });
+    assertThat(result.response().state()).isEqualTo("DRAFT");
+    assertThat(result.response().blockIssues()).isEmpty();
+    var captured = ArgumentCaptor.forClass(List.class);
+    verify(monthlyDetails).save(eq(snapshot.getId()), captured.capture());
+    List<BomRawHierarchy> frozen = captured.getValue();
+    assertThat(frozen).hasSize(42);
+    var oldByPath = previous.stream().collect(java.util.stream.Collectors.toMap(
+        BomRawHierarchy::getPath, row -> row));
+    assertThat(frozen).extracting(BomRawHierarchy::getPath)
+        .containsExactlyInAnyOrderElementsOf(oldByPath.keySet());
+    for (var row : frozen) {
+      var old = oldByPath.get(row.getPath());
+      assertThat(row.getMaterialCode()).isEqualTo(old.getMaterialCode());
+      assertThat(row.getParentCode()).isEqualTo(old.getParentCode());
+      assertThat(row.getLevel()).isEqualTo(old.getLevel());
+      assertThat(row.getQtyPerParent()).isEqualByComparingTo(old.getQtyPerParent());
+      assertThat(row.getQtyPerTop()).isEqualByComparingTo(old.getQtyPerTop());
+      assertThat(row.getIsLeaf()).isEqualTo(old.getIsLeaf());
+      assertThat(row.getBuildBatchId()).isEqualTo("SUPPLEMENT_VERSION:12");
+    }
+    verify(drawingDetails).selectList(any(Wrapper.class));
+    verify(drawingVersions).selectById(12L);
+    verifyNoInteractions(rawMapper, drawingPreparation, quoteBomStatusService);
+  }
+
+  private MonthlyRepriceCalculation selectedDrawingCalculation(
+      String productCode, List<QuoteBomSupplementDetail> details) {
+    snapshot.setProductCode(productCode);
+    snapshot.setCostPeriodMonth("2026-11");
+    snapshot.setBomSource("ELECTRONIC_DRAWING_BOM");
+    snapshot.setBomBatchId("SUPPLEMENT_VERSION:12");
+    snapshot.setBusinessUnitType("COMMERCIAL");
+    snapshot.setMaterialOrganizationCode("COMMERCIAL");
+    when(monthlyMapper.selectById(snapshot.getId())).thenReturn(snapshot);
+    var version = new QuoteBomSupplementVersion();
+    version.setId(12L);
+    version.setOaFormItemId(42L);
+    version.setQuoteProductCode(productCode);
+    version.setMaterialOrgCode("COMMERCIAL");
+    version.setPeriodMonth("2026-10");
+    version.setVersionStatus("APPROVED");
+    version.setActiveFlag(1);
+    version.setCompositionFingerprint("confirmed-october-drawing");
+    version.setReuseValidUntil(LocalDate.of(2027, 3, 31));
+    when(drawingVersions.selectById(12L)).thenReturn(version);
+    when(drawingDetails.selectList(any(Wrapper.class))).thenReturn(details);
+    var context = new QuoteBomContext("2026-11", productCode,
+        new ResolvedCustomerKey("CUSTOMER-A", ResolvedCustomerKey.Source.OA_HEADER_CUSTOMER, null),
+        "BOX", new QuoteDataOrganization("210", "COMMERCIAL"));
+    var bom = new QuoteBomStatus();
+    bom.setCostPeriodMonth("2026-11");
+    bom.setBomSource(snapshot.getBomSource());
+    bom.setSyncRecordId(snapshot.getId());
+    bom.setSyncBatchId(snapshot.getBomBatchId());
+    return new MonthlyRepriceCalculation("MRP1130-test", "a".repeat(64),
+        new MonthlyRepriceBomService.Input(form(), item(), context), bom,
+        LocalDateTime.of(2026, 11, 5, 0, 0));
+
   }
 
   @Test

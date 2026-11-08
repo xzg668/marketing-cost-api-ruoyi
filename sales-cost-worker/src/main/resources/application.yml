@@ -43,11 +43,22 @@ logging:
 monthly:
   reprice:
     enabled: ${MONTHLY_REPRICE_ENABLED:false}
+    worker-enabled: ${MONTHLY_REPRICE_WORKER_ENABLED:true}
+    concurrency: ${MONTHLY_REPRICE_CONCURRENCY:1}
+    claim-batch-size: ${MONTHLY_REPRICE_CLAIM_BATCH_SIZE:8}
+    idle-backoff-initial-ms: ${MONTHLY_REPRICE_IDLE_INITIAL_MS:50}
+    poll-interval-ms: ${MONTHLY_REPRICE_IDLE_MAX_MS:1000}
+    check-interval-ms: ${MONTHLY_REPRICE_CHECK_INTERVAL_MS:1000}
+    shutdown-timeout-seconds: ${MONTHLY_REPRICE_SHUTDOWN_SECONDS:120}
+    capacity:
+      max-active: ${MONTHLY_REPRICE_MAX_ACTIVE:4}
+      claims-per-second: ${MONTHLY_REPRICE_CLAIMS_PER_SECOND:100}
+      reserved-connections: ${MONTHLY_REPRICE_RESERVED_CONNECTIONS:32}
 
 cost:
   run:
     # 必须与 API 保持一致；worker 会把实际执行核算时的算法版本固化到成本版本。
-    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:MONTHLY_PRODUCT_COST_V1}
+    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:MONTHLY_PRODUCT_COST_V2}
     worker:
       enabled: ${COST_RUN_WORKER_ENABLED:true}
       id: ${COST_RUN_WORKER_ID:${WORKER_ID:}}

@@ -57,13 +57,20 @@ class HouseholdInquiryControllerTest {
   @Test void listUsesAuthenticatedBusinessUnitAndSerializesExactAmountsWithoutFinancialColumns() throws Exception {
     var auth=login("price:household-inquiry:list");
     var row=new PriceView(12,"001Ab","线圈","S",1,true,"12.123456789012","0.085123456789","2026-10",new PriceContext("件","CNY",com.sanhua.marketingcost.service.pricing.monthly.TaxBasis.EXCLUDED),8,java.time.LocalDateTime.parse("2026-10-23T10:00:00"),List.of(3));
-    when(service.current("COMMERCIAL","001Ab",1,20)).thenReturn(new PricePage(List.of(row),1,1,20));
+    when(service.current("COMMERCIAL","001Ab",null,1,20)).thenReturn(new PricePage(List.of(row),1,1,20));
     var result=mvc.perform(get(BASE).param("materialCode","001Ab").param("businessUnitType","HOUSEHOLD").principal(auth)).andExpect(status().isOk()).andExpect(jsonPath("$.data.rows[0].unitPrice").value("12.123456789012")).andExpect(jsonPath("$.data.rows[0].householdRate").value("0.085123456789")).andReturn();
-    assertThat(result.getResponse().getContentAsString()).doesNotContain("financialReference","referenceJson","fileKey");verify(service).current("COMMERCIAL","001Ab",1,20);
+    assertThat(result.getResponse().getContentAsString()).doesNotContain("financialReference","referenceJson","fileKey");verify(service).current("COMMERCIAL","001Ab",null,1,20);
   }
   @Test void publishRejectsExtraClientPricesOrSelectedRows() throws Exception {
     var auth=login("price:household-inquiry:import");
     mvc.perform(post(BASE+"/import-publish").contentType(MediaType.APPLICATION_JSON).content("{\"previewId\":\"a\",\"publishRequestId\":\"b\",\"previewFingerprint\":\"c\",\"unitPrice\":0}").principal(auth)).andExpect(status().isBadRequest());verifyNoInteractions(service);
+  }
+  @Test void sourceMonthIsPassedToTheListWithinTheAuthenticatedBusinessUnit() throws Exception {
+    var auth=login("price:household-inquiry:list");
+    when(service.current("COMMERCIAL",null,"2026-10",2,50)).thenReturn(new PricePage(List.of(),0,2,50));
+    mvc.perform(get(BASE).param("sourceMonth","2026-10").param("page","2").param("size","50")
+        .param("businessUnitType","HOUSEHOLD").principal(auth)).andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(0));
+    verify(service).current("COMMERCIAL",null,"2026-10",2,50);
   }
   @Test void publishUsesOnlyTheAuthenticatedActorAndReservedRequestIdentity() throws Exception {
     var auth=login("price:household-inquiry:import");var request=new PublishRequest("a","b","c");

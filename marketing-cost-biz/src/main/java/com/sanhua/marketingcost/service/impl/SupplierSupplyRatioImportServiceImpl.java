@@ -107,7 +107,11 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     lock.acquire(bu);
     LocalDateTime now = LocalDateTime.now();
     var changedMaterials = new java.util.LinkedHashSet<String>();
-    for (var group : groups.values()) {
+    for (var materialGroup : groups.entrySet()) {
+      var group = materialGroup.getValue();
+      // 财务按料号提供完整供货集合；未导入的其他料号持续沿用，不按月复制。
+      var previousRelations = mapper.currentMaterialRelations(bu, materialGroup.getKey());
+      var retainedVersions = new java.util.HashSet<Long>();
       for (SupplierSupplyRatioExcelRow row : group.values()) {
         if (row.getSupplyRatio() == null) response.setUnfilledRatioRows(response.getUnfilledRatioRows()+1);
         boolean hasCode = StringUtils.hasText(row.getSupplierCode());
@@ -118,8 +122,10 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
             bu, normalized(row.getMaterialCode()), row.getSupplierName().trim(), true);
         if (current.size() > 1) throw new IllegalStateException("同一物料/供应商存在多个当前版本，请核查既有数据");
         SupplierSupplyRatio previous = current.isEmpty() ? null : current.getFirst();
+        if (previous != null) retainedVersions.add(previous.getId());
         boolean codeAdded = previous != null && hasCode && !StringUtils.hasText(previous.getSupplierCode());
-        if (previous != null && !codeAdded && sameBusinessValues(previous,row)) {
+        if (previous != null && !codeAdded && previous.getEffectiveFrom() == null
+            && previous.getEffectiveTo() == null && sameBusinessValues(previous,row)) {
           response.setUnchangedRows(response.getUnchangedRows()+1);
           continue;
         }
@@ -137,6 +143,16 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
         if (changes.insert(change(previous,next,username,now))!=1) throw new IllegalStateException("供货关系变更日志保存失败");
         response.setInsertedRows(response.getInsertedRows()+1);
         changedMaterials.add(next.getMaterialCode());
+      }
+      for (var previous : previousRelations) {
+        if (retainedVersions.contains(previous.getId())) continue;
+        if (mapper.retireVersion(bu, previous.getId(), username, now) != 1)
+          throw new IllegalStateException("供货关系版本已变化，请重新导入");
+        var removal = replacement(previous, sourceFileName, response.getBatchNo(), username, now);
+        if (changes.insert(removal) != 1) throw new IllegalStateException("供货关系变更日志保存失败");
+        response.setRemovedRelations(response.getRemovedRelations() + 1);
+        response.setDeactivatedRows(response.getDeactivatedRows() + 1);
+        changedMaterials.add(previous.getMaterialCode());
       }
     }
     if (changedMaterials.isEmpty()) response.setBatchNo(null);
@@ -224,6 +240,32 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     entry.setChangedByName(actor); entry.setChangedAt(now); entry.setCreatedAt(now);
     entry.setChangeSource("FINANCE_IMPORT"); entry.setSubmitBatchNo(next.getSourceBatchNo());
     entry.setIdempotencyKey("SUPPLIER_RATIO_VERSION:"+next.getId());
+    return entry;
+  }
+
+  private BusinessChangeLog replacement(SupplierSupplyRatio previous, String file, String batch,
+      String actor, LocalDateTime now) {
+    var entry = new BusinessChangeLog();
+    entry.setBizDomain("SUPPLIER_SUPPLY_RATIO");
+    entry.setBizType("SUPPLIER_RELATION");
+    entry.setBizId(previous.getId());
+    entry.setBizDetailId(previous.getId());
+    entry.setFieldName("SUPPLIER_RELATION");
+    entry.setFieldLabel("供货关系");
+    try {
+      entry.setBeforeValue(json.writeValueAsString(previous));
+      // 本次集合没有这家供应商；不虚构新的0%比例，保留原版本及本次替换文件。
+      entry.setAfterValue(json.writeValueAsString(Map.of("isActive", 0, "importFileName", file)));
+    } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+      throw new IllegalStateException("供货关系变更依据保存失败", ex);
+    }
+    entry.setChangeReason("按料号整组替换，本次未包含该供应商");
+    entry.setChangedByName(actor);
+    entry.setChangedAt(now);
+    entry.setCreatedAt(now);
+    entry.setChangeSource("FINANCE_IMPORT");
+    entry.setSubmitBatchNo(batch);
+    entry.setIdempotencyKey("SUPPLIER_RATIO_REPLACED:" + previous.getId());
     return entry;
   }
 

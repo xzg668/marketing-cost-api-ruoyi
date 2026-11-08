@@ -45,6 +45,7 @@ class CostRunWorkerApplicationTest {
               .contains(
                   BusinessUnitRepriceLockGuardImpl.class,
                   MonthlyRepriceQueryServiceImpl.class,
+                  com.sanhua.marketingcost.service.ingest.QuoteCostResultHistoryServiceImpl.class,
                   QuoteBatchCostRunServiceImpl.class,
                   com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationController.class,
                   com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationHandler.class,

@@ -26,6 +26,7 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
   @Autowired TechnicalDataPriceOwnership ownership;
   @Autowired TechnicalDataVersionContentCodec codec;
   @Autowired TechnicalDataParticipantVersions versions;
+  @Autowired TechnicalDataSubmissionValidationService validation;
   @Autowired TechnicalDataPricePublication publication;
   @Autowired TechnicalDataAdminDirectSave adminDirect;
   @Autowired com.sanhua.marketingcost.service.impl.TechnicalPriceSourceResolverImpl priceCalculator;
@@ -99,7 +100,7 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     var original = service.save(productId, request, WANG);
     var owner = ownership.find(material);
     Long consumer = product(101L, "王工", "2026-09");
-    when(requirements.check(any(), argThat(row -> consumer.equals(row.getId()))))
+    when(requirements.check(any(), argThat(row -> row != null && consumer.equals(row.getId()))))
         .thenReturn(check("SHARED", "shared-source"));
     var consumerProduct = repository.findProduct(consumer).orElseThrow();
 
@@ -125,6 +126,43 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     assertThat(history.owners()).containsExactly(owner);
     assertThat(history.editable()).isFalse();
     verifyNoInteractions(requirements);
+  }
+
+  @Test void returnedSharedPricesCanBeSubmittedAgainWithoutDuplicateDetails() {
+    var request = input("FIXED", 0);
+    request.getItems().getFirst().setUnitPrice(new BigDecimal("23.45"));
+    service.save(productId, request, WANG);
+    Long consumer = product(101L, "王工", "2026-09");
+    when(requirements.check(any(), argThat(row -> row != null && consumer.equals(row.getId()))))
+        .thenReturn(check("SHARED", "shared-source"));
+    var product = repository.findProduct(consumer).orElseThrow();
+    service.prepareSharedReference(product.getTaskId(), WANG);
+    var saved = service.get(consumer, null, WANG);
+    var person = new com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository.Recipient(
+        1L, product.getTaskId(), 1, 101L, "王工", "wang", "FILL", List.of("PRICE"), 1L,
+        "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-SHARED", null);
+    var frozen = versions.freeze(repository.lockProduct(consumer).orElseThrow(), person, saved.expectedVersion(), 101L);
+    versions.restore(repository.lockProduct(consumer).orElseThrow(), person, frozen.getId(), 101L);
+    service.prepareSharedReference(product.getTaskId(), WANG);
+    assertThat(jdbc.queryForObject("SELECT last_validation_code FROM lp_quote_tech_module WHERE product_id=? AND module_type='PRICE'", String.class, consumer))
+        .isEqualTo("REUSED_SUBMITTED");
+    var checked = validation.validate(product.getTaskId(), WANG.userId(), WANG);
+    assertThat(checked.issues()).isEmpty();
+    assertThat(checked.valid()).isTrue();
+    var current = service.get(consumer, null, WANG);
+    assertThat(current.content().items()).isEmpty();
+    versions.freeze(repository.lockProduct(consumer).orElseThrow(), person, current.expectedVersion(), 101L);
+    assertThat(ownership.find(material).productId()).isEqualTo(productId);
+    versions.restore(repository.lockProduct(consumer).orElseThrow(), person, frozen.getId(), 101L);
+    when(requirements.check(any(), argThat(row -> row != null && consumer.equals(row.getId()))))
+        .thenReturn(check("ASSIGNED", "original-price-incomplete"));
+    var missing = validation.validate(product.getTaskId(), WANG.userId(), WANG);
+    assertThat(missing.valid()).isFalse();
+    assertThat(missing.issues()).anySatisfy(issue -> {
+      assertThat(issue.code()).isEqualTo("PRICE_INPUT_INVALID");
+      assertThat(issue.message()).contains(material, "原资料尚未补齐");
+    });
+    assertThat(missing.issues()).noneMatch(issue -> "DETAIL_REQUIRED".equals(issue.code()));
   }
 
   @Test void manualFormulaRemainsTextAndDoesNotCarryOldFixedOrReference() {

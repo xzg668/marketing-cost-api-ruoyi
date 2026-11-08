@@ -54,7 +54,7 @@ public class TechnicalDataOaRecipientRepository {
     var rows = jdbc.query("SELECT * FROM lp_quote_tech_oa_recipient WHERE task_id=? AND assignee_user_id=? AND active_flag=1 FOR UPDATE",
         this::recipient, taskId, userId);
     if (rows.size() != 1 || !"OPEN".equals(rows.getFirst().todoStatus())
-        || !rows.getFirst().processingModules().contains("MANUFACTURING")) throw conflict("本人制造件待办已变化，请刷新后重试");
+        || rows.getFirst().processingModules().stream().noneMatch(java.util.Set.of("MANUFACTURING", "PACKAGE", "SOLDER", "PRICE")::contains)) throw conflict("本人补录待办已变化，请刷新后重试");
     var person = rows.getFirst();
     var scope = new ArrayList<>(person.modules());
     var revision = person.revisionModules() == null ? null : new ArrayList<>(person.revisionModules());

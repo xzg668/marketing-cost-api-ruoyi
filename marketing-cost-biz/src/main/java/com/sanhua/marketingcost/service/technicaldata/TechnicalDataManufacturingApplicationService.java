@@ -56,6 +56,8 @@ public class TechnicalDataManufacturingApplicationService {
   private final TransactionTemplate transaction;
   private final TechnicalDataMaterialPriceQuery prices;
   private final TechnicalDataManufacturingPrices missingPrices;
+  private final TechnicalDataManufacturingReuseQuery componentReuse;
+  private final TechnicalDataBomPriceCheck bomPrices;
 
   public TechnicalDataManufacturingApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataVersionContentCodec codec,
@@ -65,7 +67,9 @@ public class TechnicalDataManufacturingApplicationService {
       ElectronicDrawingHybridBomService hybridBom, ElectronicDrawingWorkflowOrchestrator workflow,
       PlatformTransactionManager transactionManager, TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy,
       ElectronicDrawingManufacturingRevision revisions, TechnicalDataUnchangedModuleReuse reuse,
-      TechnicalDataManufacturingPrices missingPrices) {
+      TechnicalDataManufacturingPrices missingPrices, TechnicalDataManufacturingReuseQuery componentReuse, TechnicalDataBomPriceCheck bomPrices) {
+    this.bomPrices = bomPrices;
+    this.componentReuse = componentReuse;
     this.missingPrices = missingPrices;
     this.reuse = reuse;
     this.revisions = revisions;
@@ -105,7 +109,9 @@ public class TechnicalDataManufacturingApplicationService {
     return new TechnicalDataManufacturingResponse(productId, scope.product().getRowVersion(), selected,
         !historical && actor.canEditModule(scope.task(), scope.module()), historical, source, saved, issues, inputs,
         composed, bomMessage,
-        historical ? List.of() : prices.check(context, applicableRaw(saved, source)));
+        historical ? List.of() : prices.check(context, applicableRaw(saved, source)),
+        !historical && actor.canEditModule(scope.task(), scope.module())
+            ? componentReuse.find(scope.task(), scope.product(), source, saved, actor) : List.of());
   }
 
   /** 报价查看入口：未分派也能查看实际制造件行；不创建任务或技术草稿。 */
@@ -121,7 +127,7 @@ public class TechnicalDataManufacturingApplicationService {
     // 已分派后沿用原版本查看策略：报价员仅看已提交内容，不暴露技术员工作草稿。
     if (product.isPresent()) return read(product.get().getId(), null, actor);
     return new TechnicalDataManufacturingResponse(null, 0, null, false, false, sources.inspect(context),
-        null, List.of(), List.of(), false, null, List.of());
+        null, List.of(), List.of(), false, null, List.of(), List.of());
   }
 
   private Manufacturing applicableRaw(Manufacturing saved, Assessment source) {
@@ -147,6 +153,7 @@ public class TechnicalDataManufacturingApplicationService {
       try {
         workflow.resumeAfterMaterialSelection(context.workflowId(), context.businessUnitType(),
             context.applicableOrgCode(), context.accountingMonth());
+        bomPrices.check(productId, actor);
       } catch (RuntimeException exception) {
         // 草稿已提交，后续组树失败不得谎报“保存失败”或恢复已删掉的旧关系。
         log.warn("manufacturing saved; BOM check pending: productId={} itemId={} month={}",
@@ -171,12 +178,36 @@ public class TechnicalDataManufacturingApplicationService {
         || !Objects.equals(assessment.fingerprint(), request.getSourceFingerprint())) {
       throw conflict("图库料号或下级关系已变化，请刷新后核实；已有原材料资料保留");
     }
+    var previous = scope.product().getCurrentEditVersionId() == null ? null
+        : codec.manufacturing(repository.findVersion(scope.product().getCurrentEditVersionId()).orElseThrow());
+    var references = request.getItems().stream().anyMatch(row -> row != null && row.getReuseReference() != null)
+        ? componentReuse.find(scope.task(), scope.product(), assessment, previous, actor) : List.<TechnicalDataManufacturingResponse.ReusedItem>of();
+    Long assessedSourceId = assessment.sourceVersionId();
     var lines = new ArrayList<RawMaterial>();
     for (var input : request.getItems()) {
       if (input == null || !input.getUnknownFields().isEmpty()) throw invalid("原材料输入不能修改图库净重等来源字段");
       var parent = assessment.nodes().stream().filter(row -> Objects.equals(row.sourceNodeId(), input.getParentSourceNodeId()))
           .findFirst().orElseThrow(() -> invalid("原材料必须绑定本次图库的制造件节点"));
       if (parent.state() != State.MISSING_RAW) throw invalid("该节点已有下级关系、待财务确认或查询异常，不能补原材料");
+      String sourceReference = null;
+      if (input.getReuseReference() != null) {
+        var reference = references.stream().filter(row -> Objects.equals(row.parentSourceNodeId(), parent.sourceNodeId())
+            && Objects.equals(row.sourceReference(), input.getReuseReference())).findFirst()
+            .orElseThrow(() -> conflict("引用的制造件资料已变化，请刷新后重新保存"));
+        if (!Objects.equals(input.getRawMaterialNo(), reference.rawMaterialNo())
+            || !sameNumber(input.getGrossWeightKg(), reference.grossWeightKg())
+            || !sameNumber(input.getNetLengthMm(), reference.netLengthMm())) {
+          throw invalid("引用的原料、毛重和净长应与已保存的制造件资料一致");
+        }
+        sourceReference = reference.sourceReference();
+      } else if (previous != null) {
+        sourceReference = previous.items().stream().filter(row -> Objects.equals(row.parentSourceNodeId(), parent.sourceNodeId().toString())
+            && Objects.equals(row.sourceVersionId(), assessedSourceId)
+            && Objects.equals(row.parentMaterialNo(), parent.parentMaterialNo())
+            && Objects.equals(row.rawMaterialNo(), input.getRawMaterialNo())
+            && sameNumber(row.grossWeightKg(), input.getGrossWeightKg()) && sameNumber(row.netLengthMm(), input.getNetLengthMm()))
+            .map(RawMaterial::sourceReference).filter(Objects::nonNull).findFirst().orElse(null);
+      }
       var raw = material(context, input.getRawMaterialNo());
       var mappings = scraps.listMappings(raw.getMaterialCode(), context.businessUnitType()).stream()
           .map(row -> new ManufacturingScrap(row.getScrapCode(), row.getScrapName(), row.getScrapUnit())).toList();
@@ -188,7 +219,7 @@ public class TechnicalDataManufacturingApplicationService {
       BigDecimal netG = TechnicalDataManufacturingUnits.sourceWeightG(parent.sourceNetWeight(), parent.sourceNetWeightUnit());
       lines.add(new RawMaterial("RAW:" + parent.sourceNodeId(), parent.sourceNodeId().toString(), assessment.sourceVersionId(),
           parent.parentMaterialNo(), raw.getMaterialCode(), raw.getDrawingNo(), netG.movePointLeft(3),
-          TechnicalDataManufacturingUnits.purchasingQuantity(input.getGrossWeightKg(), raw.getUnit()), raw.getUnit(), null,
+          TechnicalDataManufacturingUnits.purchasingQuantity(input.getGrossWeightKg(), raw.getUnit()), raw.getUnit(), sourceReference,
           input.getGrossWeightKg(), input.getNetLengthMm(), evidence));
     }
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE).truncatedTo(ChronoUnit.SECONDS);
@@ -314,6 +345,9 @@ public class TechnicalDataManufacturingApplicationService {
   }
 
   public record MaterialOption(String materialNo, String name, String drawingNo, String specification, String unit) {}
+  private static boolean sameNumber(BigDecimal left, BigDecimal right) {
+    return left != null && right != null && left.compareTo(right) == 0;
+  }
   private record Scope(QuoteTechTask task, QuoteTechProduct product, QuoteTechModule module) {}
   private static TechnicalDataTaskException invalid(String message) { return new TechnicalDataTaskException(TechnicalDataTaskErrorCode.INVALID_REQUEST, message); }
   private static TechnicalDataTaskException forbidden(String message) { return new TechnicalDataTaskException(TechnicalDataTaskErrorCode.FORBIDDEN, message); }

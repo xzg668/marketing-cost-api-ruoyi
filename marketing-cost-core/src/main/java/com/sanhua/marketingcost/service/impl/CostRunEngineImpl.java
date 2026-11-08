@@ -30,13 +30,23 @@ public class CostRunEngineImpl implements CostRunEngine {
 
   @Override
   public CostRunObjectResult run(CostRunContext context) {
+    resolveTechnical(context);
+    return costRunObjectCalcService.calculate(context);
+  }
+
+  @Override
+  public com.sanhua.marketingcost.service.costing.ResolvedCostRun resolve(CostRunContext context) {
+    resolveTechnical(context);
+    return costRunObjectCalcService.resolve(context);
+  }
+
+  private void resolveTechnical(CostRunContext context) {
     validate(context);
     context.setEffectiveTechnicalData(
         context.getOaFormItemId() == null || !StringUtils.hasText(context.getPricingMonth())
             ? null
             : effectiveTechnicalDataQueryService.resolve(
                 context.getOaFormItemId(), context.getPricingMonth().trim()));
-    return costRunObjectCalcService.calculate(context);
   }
 
   private void validate(CostRunContext context) {

@@ -29,7 +29,10 @@ class MonthlyMaterialPriceServiceIntegrationTest {
           .withDatabaseName("mpp_module_test")
           .withUsername("root")
           .withPassword("mpp-module-test-only")
-          .withConfigurationOverride("monthly-pricing/mysql");
+          .withConfigurationOverride("monthly-pricing/mysql")
+          .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","monthly-price-tests"))
+          .withLabel("sales-cost.run",UUID.randomUUID().toString())
+          .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   static JdbcTemplate jdbc;
   static MonthlyMaterialPriceService module;
   static MonthlyPriceStorage storage;
@@ -94,6 +97,11 @@ class MonthlyMaterialPriceServiceIntegrationTest {
     MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/V360__finance_correction_monthly_price.sql"),"/tmp/finance-correction.sql");
     var financePatch=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot mpp_module_test < /tmp/finance-correction.sql");
     assertThat(financePatch.getExitCode()).withFailMessage(financePatch.getStderr()).isZero();
+    for(String migration:List.of("V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")) {
+      MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/household.sql");
+      var patch=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot mpp_module_test < /tmp/household.sql");
+      assertThat(patch.getExitCode()).withFailMessage(patch.getStderr()).isZero();
+    }
     var config = new org.apache.ibatis.session.Configuration();
     config.setMapUnderscoreToCamelCase(true);
     config.addMapper(MonthlyPriceStorageMapper.class);
@@ -123,10 +131,17 @@ class MonthlyMaterialPriceServiceIntegrationTest {
                     request, new Candidate(new Selection(null, shared(), normal("10")), null));
               return new Candidates(candidates, Map.of());
             });
+    var householdFinance=org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader.class);
+    org.mockito.Mockito.when(householdFinance.readDefault(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString()))
+        .thenReturn(HouseholdMetalCalculationTest.finance("2026-10","90","22"));
+    jdbc.execute("CREATE TABLE lp_factor_identity(id BIGINT PRIMARY KEY,business_unit_type VARCHAR(32))");
+    jdbc.execute("CREATE TABLE lp_factor_upload_batch(id BIGINT PRIMARY KEY,business_unit_type VARCHAR(32),price_org_code VARCHAR(8),price_month VARCHAR(7),import_type VARCHAR(32),status VARCHAR(32),published_at DATETIME,publication_revision INT)");
+    jdbc.update("INSERT INTO lp_factor_identity VALUES(1,'COMMERCIAL')");
+    jdbc.update("INSERT INTO lp_factor_upload_batch VALUES(1,'COMMERCIAL','210','2026-10','FINANCE_BASE','PUBLISHED',NOW(),1)");
     householdSource =
         new HouseholdMonthlyPriceSource(
             new HouseholdInquiryStorage(sql.getMapper(HouseholdInquiryStorageMapper.class), codec),
-            codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class));
+            codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class), householdFinance);
     inquiries =
         new com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryService(
             sql.getMapper(
@@ -142,7 +157,7 @@ class MonthlyMaterialPriceServiceIntegrationTest {
 
   @AfterAll
   static void stop() {
-    MYSQL.stop();
+    if (!Boolean.getBoolean("mpp.mysql.retain")) MYSQL.stop();
   }
 
   static Context context() {
@@ -338,6 +353,119 @@ class MonthlyMaterialPriceServiceIntegrationTest {
     }
   }
 
+  @Test void batchRangeLocksKeepConcurrentFirstUseUniqueForEveryRequestedFamily() throws Exception {
+    var requests=new ArrayList<MonthlyPriceRequest>();
+    for(int i=0;i<20;i++) requests.add(request("OPT022-concurrent-"+UUID.randomUUID(),"210"));
+    long before=count("lp_material_monthly_price");
+    var ready=new java.util.concurrent.CountDownLatch(4);
+    var release=new java.util.concurrent.CountDownLatch(1);
+    try(var workers=java.util.concurrent.Executors.newFixedThreadPool(4)) {
+      var results=new ArrayList<java.util.concurrent.Future<AdoptionResult>>();
+      for(int index=0;index<4;index++) {
+        var ordered=new ArrayList<>(requests);
+        if(index%2==1) java.util.Collections.reverse(ordered);
+        results.add(workers.submit(() -> {
+          var c=context();var first=module.resolveCandidates(c,new LinkedHashSet<>(ordered));
+          ready.countDown();
+          if(!release.await(5,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("test release timeout");
+          var attempt=new AtomicInteger();
+          return new MonthlyAdoptionExecutor(module).execute(c,budget -> {
+            var inputs=attempt.getAndIncrement()==0 ? first : module.resolveCandidates(c,new LinkedHashSet<>(ordered));
+            var selections=new LinkedHashMap<MonthlyPriceRequest,Selection>();
+            var uses=new ArrayList<Use>();
+            for(var request:ordered) {
+              selections.put(request,inputs.values().get(request).selection());
+              uses.add(new Use("root/"+request.family().materialCode(),request,BigDecimal.ONE));
+            }
+            return new MonthlyAdoptionPlan(selections,uses,Set.of());
+          });
+        }));
+      }
+      assertThat(ready.await(5,java.util.concurrent.TimeUnit.SECONDS)).isTrue();release.countDown();
+      Map<MonthlyPriceRequest,Selection> expected=null;
+      for(var future:results) {
+        var actual=future.get(20,java.util.concurrent.TimeUnit.SECONDS).plan().selections();
+        assertThat(actual).containsOnlyKeys(requests.toArray(MonthlyPriceRequest[]::new));
+        if(expected==null) expected=actual;else assertThat(actual).isEqualTo(expected);
+      }
+      assertThat(count("lp_material_monthly_price")).isEqualTo(before+20);
+    } finally {release.countDown();}
+  }
+
+  @Test void aWinnerCommittedAfterTheAdoptionSnapshotTriggersAFullReplan() throws Exception {
+    var request=request("OPT052-late-winner-"+UUID.randomUUID(),"210");
+    long before=count("lp_material_monthly_price");
+    var first=new java.util.concurrent.atomic.AtomicBoolean(true);
+    var winner=new java.util.concurrent.atomic.AtomicReference<Selection>();
+    var winnerRow=new java.util.concurrent.atomic.AtomicReference<Map<String,Object>>();
+    var plans=new AtomicInteger();
+    try(var pool=java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      var racingStorage=org.mockito.Mockito.spy(storage);
+      org.mockito.Mockito.doAnswer(invocation->{
+        invocation.callRealMethod();
+        if(first.compareAndSet(true,false)) {
+          // Finance validation can establish a consistent snapshot before waiting for price locks.
+          assertThat(storage.readFamilies(List.of(request.family()))).isEmpty();
+          winner.set(pool.submit(()->module.adopt(context(),
+              plan(request,new Selection(null,shared(),normal("20"))))).get(10,java.util.concurrent.TimeUnit.SECONDS)
+              .plan().selections().get(request));
+          winnerRow.set(pool.submit(()->jdbc.queryForMap("SELECT * FROM lp_material_monthly_price WHERE id=?",
+              winner.get().monthlyPriceId())).get(10,java.util.concurrent.TimeUnit.SECONDS));
+        }
+        return null;
+      }).when(racingStorage).lockAndCheckFinance(org.mockito.ArgumentMatchers.any());
+      var operation=new MonthlyMaterialPriceService(racingStorage,new DataSourceTransactionManager(jdbc.getDataSource()),
+          codec,(context,requests,dependencies)->module.resolveCandidates(context,requests));
+      var result=new MonthlyAdoptionExecutor(operation).execute(context(),budget->{
+        plans.incrementAndGet();
+        return plan(request,module.resolveCandidates(context(),Set.of(request)).values().get(request).selection());
+      });
+      assertThat(plans.get()).as("discard the old ten-unit candidate and rebuild from the committed twenty-unit winner").isEqualTo(2);
+      assertThat(result.plan().selections().get(request)).isEqualTo(winner.get());
+      assertThat(result.plan().selections().get(request).fact().price()).isEqualByComparingTo("20");
+      assertThat(count("lp_material_monthly_price")).isEqualTo(before+1);
+      assertThat(jdbc.queryForMap("SELECT * FROM lp_material_monthly_price WHERE id=?",winner.get().monthlyPriceId()))
+          .usingRecursiveComparison().isEqualTo(winnerRow.get());
+    }
+  }
+
+  @Test void familyLocksAreChunkedAndRepeatedRequestsDoNotIncreaseSql() {
+    var keys=new ArrayList<MonthlyPriceFamilyKey>();
+    for(int i=0;i<257;i++)keys.add(request("OPT022-lock-"+UUID.randomUUID(),"210").family());
+    keys.addAll(new ArrayList<>(keys));
+    var tx=new org.springframework.transaction.support.TransactionTemplate(
+        new DataSourceTransactionManager(jdbc.getDataSource()));
+    tx.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+    preparedStatements.set(0);
+    tx.executeWithoutResult(status -> storage.lockFamilies(keys));
+    assertThat(preparedStatements.get()).isEqualTo(3);
+  }
+
+  @Test void reusedHundredPricesKeepAllSavedFactsAndMeasureActualAdoptionSql() {
+    var saved=new LinkedHashMap<MonthlyPriceRequest,Selection>();
+    var uses=new ArrayList<Use>();
+    for(int batch=0;batch<4;batch++) {
+      var candidates=new LinkedHashMap<MonthlyPriceRequest,Selection>();
+      var batchUses=new ArrayList<Use>();
+      for(int i=0;i<25;i++) {
+        var request=request("OPT022-reuse-"+UUID.randomUUID(),"210");
+        candidates.put(request,new Selection(null,shared(),normal("10")));
+        batchUses.add(new Use("root/"+(batch*25+i),request,BigDecimal.ONE));
+      }
+      var first=module.adopt(context(),new MonthlyAdoptionPlan(candidates,batchUses,Set.of()));
+      saved.putAll(first.plan().selections());uses.addAll(batchUses);
+    }
+    var original=new MonthlyAdoptionPlan(saved,uses,Set.of());
+    var before=jdbc.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id");
+    preparedStatements.set(0);
+    var replay=module.adopt(context(),original);
+    int queries=preparedStatements.get();
+    assertThat(replay.plan()).isEqualTo(original);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id")).isEqualTo(before);
+    assertThat(queries).isPositive().isLessThanOrEqualTo(8);
+    System.out.println("REPRICE_ADOPTION_REUSE_SQL materials=100 statements="+queries);
+  }
+
   @Test
   void restoringManyDependencyFactsUsesBatchReadsAndNoPerCandidateFamilyQueries() {
     var selections = new LinkedHashMap<MonthlyPriceRequest, Selection>();
@@ -472,7 +600,7 @@ class MonthlyMaterialPriceServiceIntegrationTest {
   }
 
   @Test
-  void actualSeventeenRowHouseholdSourceAdoptsExactPHAndLaterSourceChangesDoNotReplaceIt()
+  void actualSeventeenRowHouseholdSourceKeepsOldFactsAndNewCostingUsesUpdatedInquiry()
       throws Exception {
     var bytes =
         getClass().getResourceAsStream("/household-inquiry/real-20261023.xls").readAllBytes();
@@ -546,9 +674,10 @@ class MonthlyMaterialPriceServiceIntegrationTest {
     preparedStatements.set(0);
     var reused =
         operation.resolveCandidates(context(), Set.of(other)).values().get(other).selection();
-    assertThat(reused.monthlyPriceId())
-        .isEqualTo(adopted.plan().selections().get(request("208200507", "210")).monthlyPriceId());
-    assertThat(reused.fact().price()).isEqualByComparingTo("20.9853");
+    assertThat(reused.monthlyPriceId()).isNull();
+    assertThat(reused.fact().price()).isEqualByComparingTo("21.123456789012");
+    var oldId=adopted.plan().selections().get(request("208200507","210")).monthlyPriceId();
+    assertThat(storage.readByIds("COMMERCIAL",Set.of(oldId)).getFirst().unitPrice()).isEqualByComparingTo("20.9853");
     assertThat(count("lp_material_monthly_price")).isEqualTo(before + 17);
   }
 

@@ -119,7 +119,7 @@ class MonthlyRepriceQueryServiceImplTest {
     assertThat(wrapperCaptor.getValue().getCustomSqlSegment())
         .contains("business_unit_type", "status", "confirmed_at ASC", "id DESC");
     assertThat(((AbstractWrapper<?, ?, ?>) wrapperCaptor.getValue()).getParamNameValuePairs().values())
-        .contains("COMMERCIAL", "__NO_VISIBLE_STATUS__");
+        .contains("COMMERCIAL", "WAIT_CONFIRM", "CONFIRMED");
   }
 
   @Test
@@ -138,7 +138,7 @@ class MonthlyRepriceQueryServiceImplTest {
   void normalUserCanViewConfirmedResults() {
     authenticate("COMMERCIAL", "ingest:quote:list", "ROLE_BU_STAFF");
     when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("CONFIRMED"));
-    when(resultMapper.selectPage(any(Page.class), any(Wrapper.class))).thenAnswer(invocation -> {
+    when(resultMapper.pagePublished(any(Page.class), any(Wrapper.class))).thenAnswer(invocation -> {
       Page<MonthlyRepriceResult> page = invocation.getArgument(0);
       MonthlyRepriceResult row = new MonthlyRepriceResult();
       row.setRepriceNo("MRP-001");
@@ -192,7 +192,7 @@ class MonthlyRepriceQueryServiceImplTest {
     ArgumentCaptor<Wrapper<MonthlyRepriceAuditLog>> captor = ArgumentCaptor.forClass(Wrapper.class);
     org.mockito.Mockito.verify(auditLogMapper).selectPage(any(Page.class), captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("SELECT reprice_no FROM lp_monthly_reprice_batch WHERE status = 'CONFIRMED'")
+        .contains("SELECT reprice_no FROM lp_monthly_reprice_batch WHERE (contract_version=1 AND confirmed_at IS NOT NULL)")
         .contains("business_unit_type");
   }
 
@@ -267,6 +267,67 @@ class MonthlyRepriceQueryServiceImplTest {
     batch.setBusinessUnitType("COMMERCIAL");
     batch.setStatus(status);
     return batch;
+  }
+
+  @Test void historicalResultsDoNotInventCustomerSources() {
+    authenticate("COMMERCIAL", "ROLE_BU_DIRECTOR");
+    when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("CONFIRMED"));
+    var result = new MonthlyRepriceResult(); result.setCalcObjectKey("old");
+    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result);
+    assertThat(service.pageSources("MRP-001", 11L, 1, 20).getTotal()).isZero();
+    org.mockito.Mockito.verify(resultMapper, org.mockito.Mockito.never()).countSources(
+        org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong());
+    org.mockito.Mockito.verifyNoInteractions(savedCosts, partItemMapper, costItemMapper);
+  }
+
+  @Test void sourcePagesAreBoundedAndKeepExactSavedIdentity() {
+    authenticate("COMMERCIAL", "ROLE_BU_DIRECTOR");
+    var batch = batch("CONFIRMED"); batch.setScopeVersion(1);
+    when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch);
+    var result = scopedResult();
+    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result);
+    when(resultMapper.countSources(1001L, 11L)).thenReturn(2L);
+    when(resultMapper.pageSources(1001L, 11L, null, 429496729200L, 200)).thenReturn(List.of());
+    assertThat(service.pageSources("MRP-001", 11L, Integer.MAX_VALUE, Integer.MAX_VALUE).getTotal()).isEqualTo(2);
+    org.mockito.Mockito.verify(resultMapper).pageSources(1001L, 11L, null, 429496729200L, 200);
+    result.setReuseBatchId(1002L);
+    assertThatThrownBy(() -> service.pageSources("MRP-001", 11L, 1, 20))
+        .hasMessageContaining("固定客户身份");
+  }
+
+  @Test void sourceReadUsesExistingUnitAndPublicationPermissions() {
+    authenticate("HOUSEHOLD", "ROLE_BU_DIRECTOR");
+    when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("CONFIRMED"));
+    assertThatThrownBy(() -> service.pageSources("MRP-001", 11L, 1, 20)).isInstanceOf(AccessDeniedException.class);
+    authenticate("COMMERCIAL", "ingest:quote:list", "ROLE_BU_STAFF");
+    when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("WAIT_CONFIRM"));
+    assertThatThrownBy(() -> service.pageSources("MRP-001", 11L, 1, 20)).isInstanceOf(AccessDeniedException.class);
+    org.mockito.Mockito.verifyNoInteractions(resultMapper, savedCosts);
+  }
+
+  @Test void unknownOrMixedFormatsNeverFallBackToHistoricalDetails() {
+    authenticate("COMMERCIAL", "ROLE_BU_DIRECTOR");
+    var batch = batch("CONFIRMED"); batch.setScopeVersion(2);
+    when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch);
+    assertThatThrownBy(() -> service.listPartItems("MRP-001", 11L)).hasMessageContaining("不支持");
+    batch.setScopeVersion(null);
+    var result = scopedResult();
+    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result);
+    assertThatThrownBy(() -> service.listCostItems("MRP-001", 11L)).hasMessageContaining("历史结果混入");
+    result.setContractVersion(2);
+    assertThatThrownBy(() -> service.listCostItems("MRP-001", 11L)).hasMessageContaining("不支持");
+    result.setContractVersion(1); result.setCustomerIdentitySource(null); batch.setScopeVersion(1);
+    assertThatThrownBy(() -> service.listCostItems("MRP-001", 11L)).hasMessageContaining("固定客户身份");
+    org.mockito.Mockito.verifyNoInteractions(partItemMapper, costItemMapper, savedCosts);
+  }
+
+  private MonthlyRepriceResult scopedResult() {
+    var result = new MonthlyRepriceResult();
+    result.setId(11L); result.setContractVersion(1); result.setCalcObjectKey("customer-object");
+    result.setRepriceNo("MRP-001"); result.setPricingMonth("2026-05"); result.setBusinessUnitType("COMMERCIAL");
+    result.setReuseBatchId(1001L); result.setCustomerIdentitySource("OA_HEADER_CUSTOMER");
+    result.setCustomerIdentityValue("001"); result.setMergedSourceCount(2);
+    return result;
   }
 
   private void authenticate(String businessUnitType, String... authorities) {

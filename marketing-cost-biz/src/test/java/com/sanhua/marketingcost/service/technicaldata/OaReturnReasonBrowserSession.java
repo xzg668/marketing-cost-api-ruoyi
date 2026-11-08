@@ -46,6 +46,14 @@ class OaReturnReasonBrowserSession extends TechnicalDataNativeChainIntegrationTe
     Path state = Path.of(System.getProperty("return.reason.browser.state"));
     assertThat(Files.exists(state)).isFalse();
     var fixture = submittedFixture(1, true);
+    String srBusinessType = System.getProperty("return.reason.browser.sr-business-type");
+    String expectedRejectNode = "00034567890123456789";
+    if (srBusinessType != null) {
+      expectedRejectNode = System.getProperty("return.reason.browser.reject-node", "1334220389403738114");
+      jdbc.update("UPDATE oa_form SET process_code='FI-SR-005' WHERE id=?",fixture.formId());
+      jdbc.update("UPDATE lp_oa_quote_document SET reject_to_node_id=? WHERE oa_form_id=?",expectedRejectNode,fixture.formId());
+      jdbc.update("INSERT INTO lp_oa_form_header_extra_field(oa_form_id,business_unit_type,field_code,field_name,field_value,value_type,source_field_path) VALUES(?,'COMMERCIAL','ywlx','业务类型',?,'TEXT','mainData.ywlx')",fixture.formId(),srBusinessType);
+    }
     String username = jdbc.queryForObject("SELECT user_name FROM sys_user WHERE user_id=1", String.class);
     var admin = users.getById(1L); admin.setUserName(username); admin.setPassword("unused");
     admin.setBusinessUnitType("COMMERCIAL");
@@ -161,11 +169,11 @@ class OaReturnReasonBrowserSession extends TechnicalDataNativeChainIntegrationTe
     var rejections=org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.node.ObjectNode.class);
     verify(oa,times(2)).reject(rejections.capture());
     for(var rejection:rejections.getAllValues()) {
-      assertThat(rejection.path("RejectToNodeid").asText()).isEqualTo("00034567890123456789");
+      assertThat(rejection.path("RejectToNodeid").asText()).isEqualTo(expectedRejectNode);
       assertThat(rejection.has("rejectNodeid")).isFalse();
     }
     var savedRejection=jdbc.queryForObject("SELECT reject_request_json FROM lp_oa_technical_batch WHERE id=?",String.class,pending.batchId());
-    assertThat(json.readTree(savedRejection).path("rejectNodeid").asText()).isEqualTo("00034567890123456789");
+    assertThat(json.readTree(savedRejection).path("rejectNodeid").asText()).isEqualTo(expectedRejectNode);
     var requests=org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.node.ObjectNode.class);
     verify(oa,times(2)).submit(requests.capture());
     assertThat(requests.getAllValues().get(0).path("remark").asText()).contains("请调整净损失率");

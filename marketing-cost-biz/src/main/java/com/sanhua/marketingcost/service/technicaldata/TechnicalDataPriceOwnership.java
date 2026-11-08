@@ -18,12 +18,12 @@ public class TechnicalDataPriceOwnership {
   public TechnicalDataPriceOwner find(String material) {
     var rows = jdbc.query("""
         SELECT c.material_code,c.owner_module_id,m.product_id,p.task_id,m.assignee_name,m.module_status,
-          t.task_status,m.current_version_id,c.organization_code,c.business_unit_type,c.price_unit,c.currency
+          t.task_status,m.current_version_id,c.organization_code,c.business_unit_type,c.price_unit,c.currency,p.material_no
         FROM lp_quote_tech_price_claim c JOIN lp_quote_tech_module m ON m.id=c.owner_module_id
         JOIN lp_quote_tech_product p ON p.id=m.product_id JOIN lp_quote_tech_task t ON t.id=p.task_id
         WHERE c.material_code=?
         """, (r,n) -> new TechnicalDataPriceOwner(r.getString(1),r.getLong(2),r.getLong(3),r.getLong(4),r.getString(5),
-            r.getString(6),r.getString(7),r.getObject(8,Long.class),r.getString(9),r.getString(10),r.getString(11),r.getString(12)), material);
+            r.getString(6),r.getString(7),r.getObject(8,Long.class),r.getString(9),r.getString(10),r.getString(11),r.getString(12),r.getString(13)), material);
     return rows.isEmpty() ? null : rows.getFirst();
   }
 

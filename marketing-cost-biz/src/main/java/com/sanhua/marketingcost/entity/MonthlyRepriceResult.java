@@ -45,7 +45,16 @@ public class MonthlyRepriceResult {
   private Long sourceCostVersionId;
   /** Successful version produced by this batch, separate from the first quotation source. */
   private Long costRunVersionId;
+  /** Public readers keep these exact saved versions while current costing is repaired. */
+  private Long publishedCostVersionId;
+  private Long publishedSourceCostVersionId;
   private Integer contractVersion;
+  /** Null for historical per-OA results; populated only by customer scope registration. */
+  private Long reuseBatchId;
+  private String customerIdentitySource;
+  private String customerIdentityValue;
+  private Integer mergedSourceCount;
+  private Long computeGroupId;
   private String calcStatus;
   private String calcMessage;
 

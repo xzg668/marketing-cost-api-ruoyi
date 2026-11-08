@@ -35,22 +35,6 @@ public class ElectronicDrawingCostingFallbackService {
   }
 
   public AttemptResult attempt(OaForm form, OaFormItem item, String periodMonth) {
-    return attempt(form, item, periodMonth, false);
-  }
-
-  /** 已发布 BOM 仍可能有原材料修订；仅接续已组好的本单来源，不重新取图库。 */
-  public AttemptResult resumeComposed(OaForm form, OaFormItem item, String periodMonth) {
-    return attempt(form, item, periodMonth, true);
-  }
-
-  private AttemptResult attempt(
-      OaForm form, OaFormItem item, String periodMonth, boolean composedOnly) {
-    if (!composedOnly
-        && form != null
-        && item != null
-        && preparation.prepareSharedDrawing(item.getId(), periodMonth)) {
-      return new AttemptResult(true, false, ElectronicDrawingWorkflowStage.COMPOSED, "沿用原产品已提交图库");
-    }
     if (form == null || item == null) {
       return AttemptResult.notAttempted();
     }
@@ -67,7 +51,6 @@ public class ElectronicDrawingCostingFallbackService {
               context.costPeriodMonth(),
               businessUnit,
               context.organization().priceOrgCode());
-      if (composedOnly && !StringUtils.hasText(drawingNo)) return AttemptResult.notAttempted();
       if (!StringUtils.hasText(drawingNo)) {
         var work =
             contexts.load(
@@ -76,6 +59,14 @@ public class ElectronicDrawingCostingFallbackService {
                 context.organization().priceOrgCode(),
                 context.costPeriodMonth());
         var task = verifications.importedForContinuation(work);
+        if (task.isEmpty() && work.published()) {
+          var current = verifications.current(work);
+          // 已完成的上次核算重新取最新图库；待确认/处理中继续原任务，避免反复要求确认。
+          if (current.isPresent() && "RECEIVED".equals(current.get().getTaskState())
+              && "COMPLETE".equals(current.get().getConsumptionState())) {
+            task = verifications.restart(work, null, current.get().getId());
+          }
+        }
         if (task.isEmpty()) task = verifications.start(work, null);
         if (task.isEmpty()) return new AttemptResult(true, true, "U9_BOM_AVAILABLE", "U9 BOM 已可用");
         var saved = task.orElseThrow();

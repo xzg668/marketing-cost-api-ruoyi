@@ -88,6 +88,9 @@ public abstract class BomMapperTestBase {
   protected static final MySQLContainer<?> MYSQL =
       new MySQLContainer<>(MYSQL_IMAGE)
           .withConfigurationOverride("monthly-pricing/mysql")
+          .withLabel("sales-cost.task", System.getProperty("mpp.mysql.task", "bom-tests"))
+          .withLabel("sales-cost.run", java.util.UUID.randomUUID().toString())
+          .withReuse(Boolean.getBoolean("mpp.mysql.retain"))
           .withDatabaseName("marketing_cost")
           .withUsername("root")
           .withPassword("root123")
@@ -290,6 +293,9 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V344__monthly_material_price_single_table.sql", "V344");
       runScriptViaMysqlCli("/db/V354__invoice_price_import.sql", "V354");
       runScriptViaMysqlCli("/db/V360__finance_correction_monthly_price.sql", "V360");
+      runScriptViaMysqlCli("/db/V364__household_inquiry_header_schema.sql", "V364");
+      runScriptViaMysqlCli("/db/V365__household_monthly_source_revision.sql", "V365");
+      runScriptViaMysqlCli("/db/V366__household_model_specification_match.sql", "V366");
       runScriptViaMysqlCli("/db/V356__inquiry_price_sources.sql", "V356");
       runScriptViaMysqlCli("/db/V359__monthly_price_folder_import.sql", "V359");
       // One-time initialization of this fresh disposable database, including monthly reverse reads.
@@ -297,6 +303,8 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/monthly-reprice/mrp06-contract-base.sql", "MRP06-contract-base");
       runScriptViaMysqlCli("/db/V348__monthly_reprice_1130_contract.sql", "V348");
       runScriptViaMysqlCli("/db/V350__monthly_reprice_costing_scope.sql", "V350");
+      runScriptViaMysqlCli("/db/V361__monthly_reprice_reuse_contract.sql", "V361");
+      runScriptViaMysqlCli("/db/V363__monthly_reprice_partial_publication.sql", "V363");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

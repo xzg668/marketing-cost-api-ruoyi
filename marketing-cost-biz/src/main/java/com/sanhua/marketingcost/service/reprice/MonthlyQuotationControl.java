@@ -105,7 +105,7 @@ public class MonthlyQuotationControl {
     try (var statement = connection.prepareStatement("""
         SELECT EXISTS(SELECT 1 FROM lp_monthly_reprice_batch
           WHERE business_unit_type=? AND
-            ((contract_version=1 AND status<>'CONFIRMED') OR
+            ((contract_version=1 AND confirmed_at IS NULL) OR
              (contract_version IS NULL AND status IN ('CREATED','PREPARING','RUNNING','WAIT_CONFIRM'))))
         """)) {
       statement.setString(1, unit);

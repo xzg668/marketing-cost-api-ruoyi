@@ -32,12 +32,11 @@ final class MonthlyPreparationFinanceProjection {
         && source.getAmount() != null && source.getAmount().signum() == 0) return result;
     if (!"READY".equals(source.getStatus()) || source.getQuantity() == null)
       throw new IllegalArgumentException("财务投影只接受已就绪且有实际用量的OA准备");
-    amount(source.getAmount(), source.getUnitPrice() == null ? null
-        : source.getUnitPrice().multiply(source.getQuantity()), "保存OA金额");
     var inputs = evidence.read(source);
     if (inputs == null || inputs.uses().isEmpty()) throw new IllegalArgumentException("财务投影缺少已采用月价与实际用量");
     var uses = new HashMap<MonthlyPriceRequest, BigDecimal>();
     BigDecimal unitPrice;
+    BigDecimal customerUnitPrice = source.getUnitPrice();
     if (MonthlyPreparationPrice.KIND.equals(source.getResultRefType())) {
       var captured = codec.decode(source.getInputSnapshotJson(), MonthlyPreparationPrice.class);
       if (!Objects.equals(source.getMonthlyPriceId(), captured.selection().monthlyPriceId())
@@ -47,6 +46,9 @@ final class MonthlyPreparationFinanceProjection {
       amount(source.getQuantity(), captured.quantity(), "保存OA实际用量");
       unitPrice = base(source, inputs, captured, source.getMaterialCode(), source.getUnitPrice(),
           source.getQuantity(), uses, false);
+      // Amounts were calculated before DECIMAL(20,8) rounded the saved unit price.
+      // Validate against the original captured price, preserving the calculation's precision.
+      customerUnitPrice = captured.customerPrice().multiply(captured.unitPriceMultiplier());
     } else if ("MAKE_PART_PRICE".equals(source.getResultRefType())) {
       var make = new MakePartCalculationEvidence(json);
       var rows = make.rows(source);
@@ -97,6 +99,8 @@ final class MonthlyPreparationFinanceProjection {
       unitPrice = pack.parentPrice(total, snapshot);
       result.setInputSnapshotJson(snapshot.toString());
     } else throw new IllegalArgumentException("财务投影不接受缺少月价依据的历史准备类型");
+    amount(source.getAmount(), customerUnitPrice == null ? null
+        : customerUnitPrice.multiply(source.getQuantity()), "保存OA金额");
     validateUses(inputs, uses);
     result.setUnitPrice(unitPrice); result.setAmount(unitPrice.multiply(source.getQuantity()));
     // Re-run the same saved-evidence validators on the projected numbers.
@@ -115,9 +119,7 @@ final class MonthlyPreparationFinanceProjection {
         || !selected.applicability().matches(request)
         || value.financialPrice().compareTo(selected.fact().price()) != 0
         || value.customerPrice().signum() < 0
-        || (ordinary && selected.fact().type() != MonthlyAdoptionPlan.PricingType.NORMAL)
-        || (selected.fact().type() == MonthlyAdoptionPlan.PricingType.HOUSEHOLD_INQUIRY
-            && value.financialPrice().compareTo(value.customerPrice()) != 0))
+        || (ordinary && selected.fact().type() != MonthlyAdoptionPlan.PricingType.NORMAL))
       throw new IllegalArgumentException("保存基础价格身份或P0与月价事实不一致");
     amount(p1, value.customerPrice().multiply(value.unitPriceMultiplier()), "保存基础P1");
     if (physicalQuantity.signum() != 0) {

@@ -32,7 +32,7 @@ class MonthlyQuotationPricesIntegrationTest {
     var mapper = new SqlSessionTemplate(factory.getObject()).getMapper(HouseholdInquiryStorageMapper.class);
     var codec = new MonthlyPriceDocumentCodec(new ObjectMapper());
     reader = new MonthlyQuotationPrices(MonthlyFixedPriceSourceIntegrationTest.operation,
-        new HouseholdMonthlyPriceSource(new HouseholdInquiryStorage(mapper, codec), codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class)));
+        new HouseholdMonthlyPriceSource(new HouseholdInquiryStorage(mapper, codec), codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader.class)));
   }
 
   @AfterAll
@@ -93,4 +93,101 @@ class MonthlyQuotationPricesIntegrationTest {
     assertThat(repeated.values().get(item).candidate().selection())
         .isEqualTo(adopted.plan().selections().get(bound.request()));
   }
+
+  @Test void manyConsumersReuseOneBoundedSavedLookupWithIdenticalResultsAndNoWrites() {
+    var context=MonthlyFixedPriceSourceIntegrationTest.context();
+    var items=new java.util.ArrayList<MonthlyQuotationPrices.Item>();
+    var selected=new java.util.LinkedHashMap<MonthlyPriceRequest,MonthlyAdoptionPlan.Selection>();
+    var uses=new java.util.ArrayList<Use>();
+    for(int i=0;i<10;i++) {
+      String code=MonthlyFixedPriceSourceIntegrationTest.code();
+      MonthlyFixedPriceSourceIntegrationTest.price(code,"210","S1","11.3","2026-10-01","2027-01-01");
+      var item=new MonthlyQuotationPrices.Item(code,"210","件",null,TaxBasis.EXCLUDED,null,
+          NonCuConditions.empty(),BigDecimal.ONE,MonthlyQuotationPrices.Purpose.MATERIAL);
+      items.add(item);
+      var bound=reader.read(context,List.of(item)).values().get(item);
+      selected.put(bound.request(),bound.candidate().selection());
+      uses.add(new Use("root/"+i,bound.request(),BigDecimal.ONE));
+    }
+    MonthlyFixedPriceSourceIntegrationTest.operation.adopt(context,new MonthlyAdoptionPlan(selected,uses,Set.of()));
+    var demands=new java.util.ArrayList<MonthlyQuotationPrices.Demand>();
+    for(long id=100;id<132;id++) demands.add(new MonthlyQuotationPrices.Demand(
+        new MonthlyMaterialPrices.Context(context.businessUnitType(),"OA-"+id,id,"TOP-"+id,
+            context.month(),context.priceAsOfTime(),context.actor(),context.consumerOrg()),items));
+    var db=MonthlyFixedPriceSourceIntegrationTest.jdbc;
+    var before=db.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id");
+    int initial=MonthlyFixedPriceSourceIntegrationTest.prepared.get();
+    var individual=demands.stream().map(demand -> reader.read(demand.context(),demand.items())).toList();
+    int serialSql=MonthlyFixedPriceSourceIntegrationTest.prepared.get()-initial;
+    initial=MonthlyFixedPriceSourceIntegrationTest.prepared.get();
+    var prepared=reader.prepareBatch(demands);
+    int batchSql=MonthlyFixedPriceSourceIntegrationTest.prepared.get()-initial;
+    initial=MonthlyFixedPriceSourceIntegrationTest.prepared.get();
+    var together=new java.util.ArrayList<MonthlyQuotationPrices.Batch>();
+    for(int i=0;i<demands.size();i++) {
+      var demand=demands.get(i);
+      together.add(reader.usePrepared(prepared.get(i), () -> reader.read(demand.context(),demand.items())));
+    }
+    int consumeSql=MonthlyFixedPriceSourceIntegrationTest.prepared.get()-initial;
+    assertThat(consumeSql).isZero();
+    assertThat(together).isEqualTo(individual);
+    assertThat(together).hasSize(32).allSatisfy(batch -> {
+      assertThat(batch.problems()).isEmpty();assertThat(batch.values()).hasSize(10);
+      assertThat(batch.candidates().values()).allSatisfy(value -> assertThat(value.selection().monthlyPriceId()).isNotNull());
+    });
+    assertThat(batchSql).isPositive().isLessThan(serialSql/8);
+    System.out.println("REPRICE_INITIAL_PRICE_SQL serial="+serialSql+" preparation="+batchSql+" consumption="+consumeSql+" consumers=32");
+    assertThat(db.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id")).isEqualTo(before);
+    System.out.println("REPRICE_PRICE_READ_SQL serial="+serialSql+" batch="+batchSql+" consumers=32 materials=10");
+  }
+
+  @Test void mixedConsumersDoNotShareUnadoptedPackagingSupplierFallback() {
+    String code=MonthlyFixedPriceSourceIntegrationTest.code();
+    MonthlyFixedPriceSourceIntegrationTest.price(code,"210","P1","3","2026-10-01","2099-01-01");
+    MonthlyFixedPriceSourceIntegrationTest.price(code,"210","P2","5","2026-10-01","2099-01-01");
+    var ordinary=new MonthlyQuotationPrices.Item(code,"210","件",null,TaxBasis.EXCLUDED,null,
+        NonCuConditions.empty(),BigDecimal.ONE,MonthlyQuotationPrices.Purpose.MATERIAL);
+    var pack=new MonthlyQuotationPrices.Item(code,"210","件",null,TaxBasis.EXCLUDED,null,
+        NonCuConditions.empty(),BigDecimal.ONE,MonthlyQuotationPrices.Purpose.PACKAGE);
+    var context=MonthlyFixedPriceSourceIntegrationTest.context();
+    var other=new MonthlyMaterialPrices.Context(context.businessUnitType(),"OTHER-OA",99L,"TOP",
+        context.month(),context.priceAsOfTime(),context.actor(),context.consumerOrg());
+    int before=MonthlyFixedPriceSourceIntegrationTest.jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price",Integer.class);
+    var result=reader.readBatch(List.of(new MonthlyQuotationPrices.Demand(context,List.of(pack)),
+        new MonthlyQuotationPrices.Demand(other,List.of(ordinary))));
+    assertThat(result.get(0).values().get(pack).candidate().selection().fact().price()).isEqualByComparingTo("5");
+    assertThat(result.get(1).values()).isEmpty();
+    assertThat(result.get(1).problems().get(ordinary).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertThat(MonthlyFixedPriceSourceIntegrationTest.jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price",Integer.class)).isEqualTo(before);
+    assertThat(context.supplierReviews().packagingHighestFallback()).isFalse();
+    assertThat(other.supplierReviews().packagingHighestFallback()).isFalse();
+  }
+  @Test void unadoptedPrefetchReadsFreshAtConsumptionAfterAnotherConsumerAdopts() {
+    String code=MonthlyFixedPriceSourceIntegrationTest.code();
+    MonthlyFixedPriceSourceIntegrationTest.price(code,"210","S1","2","2026-10-01","2027-01-01");
+    var c=MonthlyFixedPriceSourceIntegrationTest.context();
+    var item=new MonthlyQuotationPrices.Item(code,"210","件",null,TaxBasis.EXCLUDED,null,
+        NonCuConditions.empty(),BigDecimal.ONE,MonthlyQuotationPrices.Purpose.MATERIAL);
+    var first=reader.prepareBatch(List.of(new MonthlyQuotationPrices.Demand(c,List.of(item)))).getFirst();
+    assertThat(first.batch().values()).isEmpty();
+    assertThat(first.batch().problems().get(item).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+    MonthlyFixedPriceSourceIntegrationTest.jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=3 WHERE material_code=?",code);
+    var winner=reader.read(c,List.of(item)).values().get(item);
+    var module=MonthlyFixedPriceSourceIntegrationTest.operation;
+    var adopted=module.adopt(c,new MonthlyAdoptionPlan(Map.of(winner.request(),winner.candidate().selection()),
+        List.of(new Use("root/part",winner.request(),BigDecimal.ONE)),Set.of()));
+    var attempts=new java.util.concurrent.atomic.AtomicInteger();
+    var actual=reader.usePrepared(first, () -> new MonthlyAdoptionExecutor(module).execute(c,budget -> {
+      attempts.incrementAndGet();
+      var found=reader.read(c,List.of(item)).values().get(item);
+      return new MonthlyAdoptionPlan(Map.of(found.request(),found.candidate().selection()),
+          List.of(new Use("root/part",found.request(),BigDecimal.ONE)),Set.of());
+    }));
+    assertThat(attempts.get()).isEqualTo(1);
+    assertThat(actual.plan()).isEqualTo(adopted.plan());
+    assertThat(actual.plan().selections().values()).allSatisfy(value -> assertThat(value.fact().price()).isEqualByComparingTo("3"));
+    assertThat(MonthlyFixedPriceSourceIntegrationTest.jdbc.queryForObject(
+        "SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?",Integer.class,code)).isEqualTo(1);
+  }
+
 }

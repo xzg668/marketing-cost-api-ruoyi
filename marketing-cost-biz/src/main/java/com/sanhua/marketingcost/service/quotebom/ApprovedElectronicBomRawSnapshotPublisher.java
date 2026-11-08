@@ -162,14 +162,25 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
         Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
             .eq(QuoteBomSupplementDetail::getSupplementVersionId, product.supplementVersionId())
             .orderByAsc(QuoteBomSupplementDetail::getLineNo));
-    if (details == null || details.isEmpty()) throw new IllegalStateException("电子图库草稿没有已组树明细");
+    return hierarchy(product, batchId, details, "DRAFT");
+  }
+
+  /** 已校验的调价来源直接使用已组树明细，不要求在公共原始层再存一份副本。 */
+  public List<BomRawHierarchy> approvedRows(
+      PublicationContext product, List<QuoteBomSupplementDetail> details) {
+    return hierarchy(product, BATCH_PREFIX + product.supplementVersionId(), details, "APPROVED");
+  }
+
+  private List<BomRawHierarchy> hierarchy(PublicationContext product, String batchId,
+      List<QuoteBomSupplementDetail> details, String status) {
+    if (details == null || details.isEmpty()) throw new IllegalStateException("电子图库版本没有已组树明细");
     Set<String> parents = structuralParentPaths(details);
     Map<String, QuoteBomSupplementDetail> detailsByPath = details.stream().collect(Collectors.toMap(
         QuoteBomSupplementDetail::getPath, Function.identity()));
     return details.stream().map(detail -> {
       var row = toRaw(detail, product, product.productCode(), product.priceOrgCode(),
           product.businessUnitType(), batchId, parents, detailsByPath, YearMonth.parse(product.accountingMonth()), null);
-      row.setBomStatus("DRAFT");
+      row.setBomStatus(status);
       return row;
     }).toList();
   }

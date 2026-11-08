@@ -33,7 +33,10 @@ class MonthlyBomPricePreparationIntegrationTest {
   static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse(
       System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
       .withDatabaseName("mpp06_scope_test").withUsername("root").withPassword("mpp06-test-only")
-      .withConfigurationOverride("monthly-pricing/mysql");
+      .withConfigurationOverride("monthly-pricing/mysql")
+          .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","monthly-price-tests"))
+          .withLabel("sales-cost.run",UUID.randomUUID().toString())
+          .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   static JdbcTemplate jdbc;
   static DataSourceTransactionManager transactions;
   static MonthlyPriceDocumentCodec codec;
@@ -63,7 +66,7 @@ class MonthlyBomPricePreparationIntegrationTest {
     assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for (String file : List.of("V342__monthly_material_price_storage.sql", "V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")) {
+    for (String file : List.of("V342__monthly_material_price_storage.sql", "V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+file),"/tmp/patch.sql");
       var applied = MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp06_scope_test < /tmp/patch.sql");
       assertThat(applied.getExitCode()).withFailMessage(applied.getStderr()).isZero();
@@ -77,14 +80,14 @@ class MonthlyBomPricePreparationIntegrationTest {
     mapper = sql.getMapper(MonthlyPriceStorageMapper.class); links = sql.getMapper(MonthlyPriceLinkMapper.class);
     storage = new MonthlyPriceStorage(mapper,codec,links); transactions = new DataSourceTransactionManager(ds);
     var sourceStorage = new HouseholdInquiryStorage(sql.getMapper(HouseholdInquiryStorageMapper.class),codec);
-    household = new HouseholdMonthlyPriceSource(sourceStorage,codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class));
+    household = new HouseholdMonthlyPriceSource(sourceStorage,codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader.class));
     inquiries = new HouseholdInquiryService(sql.getMapper(com.sanhua.marketingcost.mapper.household.HouseholdInquiryQueryMapper.class),
         sourceStorage,new HouseholdInquiryWorkbookParser(),new HouseholdInquiryFiles(java.nio.file.Files.createTempDirectory("mpp06-household-").toString()),
         codec,transactions,new ObjectMapper());
     engine = new BomSettlementRowBuildEngine(new BomSettlementRuleMatcher(new BomSettlementRuleConditionEvaluator(new ObjectMapper())),
         new BomByproductCostRuleMatcher(new BomByproductCostRuleConditionEvaluator(new ObjectMapper())));
   }
-  @AfterAll static void stop() { MYSQL.stop(); }
+  @AfterAll static void stop() { if (!Boolean.getBoolean("mpp.mysql.retain")) MYSQL.stop(); }
 
   static Context context() { return new Context("COMMERCIAL","MPP06",1L,"TOP",YearMonth.of(2026,10),LocalDateTime.of(2026,10,23,0,0),"test","210"); }
   static MonthlyPriceRequest request(String code) { return request(code,"210"); }
@@ -106,7 +109,7 @@ class MonthlyBomPricePreparationIntegrationTest {
       var sheet = book.getSheet("10月线圈询价");
       for (int row=sheet.getLastRowNum();row>2;row--) if (sheet.getRow(row)!=null) sheet.removeRow(sheet.getRow(row));
       sheet.getRow(2).getCell(0).setCellValue(material); sheet.getRow(2).getCell(4).setCellValue(price);
-      book.write(bytes);
+      sheet.getRow(2).getCell(5).setCellValue(0);sheet.getRow(2).getCell(6).setCellValue(0);book.write(bytes);
       var preview = inquiries.preview("COMMERCIAL","test",bytes.toByteArray(),"controlled-single-row.xls","2026-10");
       inquiries.publish("COMMERCIAL","test",new PublishRequest(preview.previewId(),preview.publishRequestId(),preview.previewFingerprint()));
     }
@@ -273,9 +276,10 @@ class MonthlyBomPricePreparationIntegrationTest {
     assertThat(materialCount("MISSING")).isZero();assertReferences(prepared.adoption().plan());
     long adopted=prepared.adoption().plan().selections().get(request(a)).monthlyPriceId();
     publish(a,"30"); observed.clear();var reused=app.prepare(context(),bom,inputs,callback);
-    assertThat(reused.adoption().plan().selections().get(request(a)).monthlyPriceId()).isEqualTo(adopted);
-    assertThat(reused.adoption().plan().selections().get(request(a)).fact().price()).isEqualByComparingTo("20.9853");
-    assertThat(observed).isEmpty();
+    assertThat(reused.adoption().plan().selections().get(request(a)).monthlyPriceId()).isNotEqualTo(adopted);
+    assertThat(reused.adoption().plan().selections().get(request(a)).fact().price()).isEqualByComparingTo("30");
+    assertThat(storage.readByIds("COMMERCIAL",Set.of(adopted)).getFirst().unitPrice()).isEqualByComparingTo("20.9853");
+    assertThat(observed).contains(request(a));
   }
 
   @Test void explicitUnitConversionUsesCurrentCumulativeQuantityAndKeepsPriceIdentity() throws Exception {

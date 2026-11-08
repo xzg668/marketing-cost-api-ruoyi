@@ -8,7 +8,7 @@ import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.reprice.MonthlyRepriceContract.*;
 import java.time.YearMonth;
 import com.sanhua.marketingcost.service.costing.MonthlyCostVersionService;
-import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec;
+import com.sanhua.marketingcost.service.costing.MonthlyCostSnapshotDocuments;
 import com.sanhua.marketingcost.config.MonthlyRepriceProperties;
 import java.util.function.Supplier;
 import java.util.*;
@@ -19,27 +19,33 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Transactional contract boundary. No controller or worker calls this until the subsequent stages.
+ * Transactional scope, task and check transitions. Publication has its own boundary.
  * Scope discovery and costing remain separate; supplied sources are verified against saved versions.
  */
 @Service
 public class MonthlyRepriceContractService {
   private final MonthlyRepriceContractMapper mapper;
+  private final MonthlyRepriceScopeRegistration scopes;
+  private final com.sanhua.marketingcost.mapper.MonthlyRepricePublicationMapper publications;
   private final TransactionTemplate transaction;
   private final ObjectMapper json;
-  private final MonthlyPriceDocumentCodec codec;
+  private final MonthlyCostSnapshotDocuments documents;
   private final MonthlyRepriceProperties properties;
   private final com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices;
   private final com.sanhua.marketingcost.mapper.MonthlyPriceImportMapper priceFolders;
 
   public MonthlyRepriceContractService(MonthlyRepriceContractMapper mapper,
-      PlatformTransactionManager manager, ObjectMapper json, MonthlyPriceDocumentCodec codec,
+      PlatformTransactionManager manager, ObjectMapper json, MonthlyCostSnapshotDocuments documents,
       MonthlyRepriceProperties properties,
       com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService inquiryPrices,
-      com.sanhua.marketingcost.mapper.MonthlyPriceImportMapper priceFolders) {
+      com.sanhua.marketingcost.mapper.MonthlyPriceImportMapper priceFolders,
+      MonthlyRepriceScopeRegistration scopes,
+      com.sanhua.marketingcost.mapper.MonthlyRepricePublicationMapper publications) {
     this.mapper = mapper;
+    this.scopes = scopes;
+    this.publications = publications;
     this.json = json;
-    this.codec = codec;
+    this.documents = documents;
     this.properties = properties;
     this.inquiryPrices = inquiryPrices;
     this.priceFolders = priceFolders;
@@ -92,78 +98,62 @@ public class MonthlyRepriceContractService {
       var inputs = discover.get();
       if (inputs.isEmpty()) throw new IllegalArgumentException("上线以来没有可调价的成功报价");
       inquiryPrices.refreshInTransaction(unit, month.toString(), "MONTHLY_REPRICE", actor);
-      var targets=new java.util.ArrayList<MonthlyRepriceContractMapper.Target>();
-      Set<String> keys = new HashSet<>();
-      for (var source : inputs) {
-        var identity=new ObjectIdentity(source.getBusinessUnitType(),source.getOaNo(),source.getOaFormItemId());
-        if (!unit.equals(identity.businessUnitType()) || !keys.add(identity.key()))
-          throw new IllegalArgumentException("调价对象跨业务单元或重复");
-        targets.add(new MonthlyRepriceContractMapper.Target(identity.key(),source));
-      }
-      mapper.queue(no, unit, month.toString(), actor, targets.size());
-      for(int start=0;start<targets.size();start+=200) {
-        var chunk=targets.subList(start,Math.min(start+200,targets.size()));
-        mapper.tasksBatch(no,month.toString(),chunk);
-        mapper.objectsBatch(no,month.toString(),chunk);
-      }
-      mapper.total(no, targets.size());
+      mapper.queue(no, unit, month.toString(), actor, 0);
+      scopes.register(batch,inputs);
+      syncQueue(no);
       return mapper.lock(no);
     });
   }
 
-  /** Used by the later entry-point guard; failure and review never release this control. */
+  /** Only a first successful confirmation releases quotation admission. */
   public boolean blocksQuotation(String unit) {
     MonthlyRepriceContract.unit(unit);
     return mapper.blocked(unit) > 0;
   }
 
-  public int begin(String no, long taskId) {
-    return transaction.execute(tx -> {
-      var batch = required(no);
-      State state = state(batch);
-      if (state != State.QUEUED && state != State.RUNNING)
-        throw new IllegalStateException("当前批次不能领取任务");
-      var task = task(no, taskId);
-      if (mapper.begin(taskId, task.getExecutionNo()) != 1)
-        throw new IllegalStateException("任务已被领取或结束");
-      if (state == State.QUEUED) state.requireTransition(State.RUNNING);
-      mapper.state(no, State.RUNNING.name());
-      syncQueue(no);
-      return task.getExecutionNo();
-    });
-  }
-
-  public void fail(String no, long taskId, int execution, String message) {
+  public void fail(String no, long taskId, int execution, String worker, String message) {
     if (message == null || message.isBlank() || message.length() > 1000)
       throw new IllegalArgumentException("失败原因必填且最多1000字符");
     transaction.executeWithoutResult(tx -> {
       var batch = required(no);
-      if (state(batch) != State.RUNNING && state(batch) != State.FAILED)
+      if (!canReceiveTask(batch))
         throw new IllegalStateException("当前批次不能写入任务失败");
       task(no, taskId);
-      if (mapper.fail(taskId, execution, message) != 1)
+      if (mapper.fail(taskId, execution, worker, message) != 1)
         throw new IllegalStateException("任务执行轮次已失效");
-      mapper.state(no, State.FAILED.name());
+      progress(no,State.FAILED,0,1);
       syncQueue(no);
     });
   }
 
-  /** Failed tasks retry in place; successful tasks/versions and the monthly identity are retained. */
-  public MonthlyRepriceBatch retry(String no) {
+  /** Explicitly selected objects only; concurrent workers on other customers may keep running. */
+  public MonthlyRepriceBatch retry(String no,com.sanhua.marketingcost.dto.MonthlyRepriceUncalculated.RetrySelection selection) {
+    Objects.requireNonNull(selection);
     return transaction.execute(tx -> {
-      var batch = required(no); requireOperator(batch.getBusinessUnitType());
-      requireFolderComplete(batch.getBusinessUnitType(), batch.getPricingMonth());
-      if (state(batch) != State.FAILED) throw new IllegalStateException("仅失败批次可重试");
-      var tasks = mapper.tasks(no);
-      if (tasks.stream().anyMatch(t -> "RUNNING".equals(t.getStatus())))
-        throw new IllegalStateException("等待已领取任务结束后重试");
-      inquiryPrices.refreshInTransaction(batch.getBusinessUnitType(), batch.getPricingMonth(), "MONTHLY_REPRICE_RETRY", requireOperator(batch.getBusinessUnitType()));
-      mapper.retry(no);
-      State next = tasks.stream().allMatch(t -> "SUCCESS".equals(t.getStatus())) ? State.CHECKING : State.QUEUED;
-      state(batch).requireTransition(next);
-      mapper.state(no, next.name());
-      syncQueue(no);
-      return mapper.lock(no);
+      var batch=required(no);String actor=requireOperator(batch.getBusinessUnitType());
+      requireFolderComplete(batch.getBusinessUnitType(),batch.getPricingMonth());
+      var tasks=selection.taskIds().isEmpty()?List.<CostRunTask>of():mapper.selectedTasks(no,selection.taskIds());
+      if(tasks.size()!=selection.taskIds().size())throw new IllegalArgumentException("所选客户对象不属于该调价批次或对象资料不完整");
+      publications.pinLegacyResults(no);publications.pinLegacyRevision(no);
+      var changed=scopes.repairMissingCustomers(batch,selection.sourceIds(),actor);
+      var failed=tasks.stream().filter(t->"FAILED".equals(t.getStatus())).map(CostRunTask::getId).toList();
+      int retried=failed.isEmpty()?0:mapper.retry(no,failed);
+      if(changed.resolved()==0 && retried==0)return mapper.lock(no);
+      inquiryPrices.refreshInTransaction(batch.getBusinessUnitType(),batch.getPricingMonth(),"MONTHLY_REPRICE_RETRY",actor);
+      var current=mapper.lock(no);
+      int success=current.getSuccessCount()+changed.successDelta(), failures=current.getFailedCount()+changed.failedDelta()-retried;
+      State next=failures>0?State.FAILED:current.getTotalCount()>success?State.RUNNING:
+          current.getTotalCount()>0?State.CHECKING:State.FAILED;
+      progress(no,next,changed.successDelta(),changed.failedDelta()-retried);
+      syncQueue(no);return mapper.lock(no);
+    });
+  }
+
+  public MonthlyRepriceBatch recheck(String no) {
+    return transaction.execute(tx->{
+      var batch=required(no);requireOperator(batch.getBusinessUnitType());
+      if(state(batch)!=State.FAILED && state(batch)!=State.RUNNING)throw new IllegalStateException("仅检查失败的批次可重新检查");
+      progress(no,State.CHECKING,0,0);syncQueue(no);return mapper.lock(no);
     });
   }
 
@@ -173,28 +163,31 @@ public class MonthlyRepriceContractService {
   }
 
   /** Result and task point to the same complete, batch-owned version in one transaction. */
-  public void complete(String no, long taskId, int execution, long versionId) {
+  public void complete(String no, long taskId, int execution, String worker, long versionId) {
     transaction.executeWithoutResult(tx -> {
       var batch = required(no);
       var task = task(no, taskId);
       if (task.getExecutionNo() != execution) throw new IllegalStateException("任务执行轮次已失效");
       if ("SUCCESS".equals(task.getStatus()) && Objects.equals(task.getCostRunVersionId(), versionId)) return;
-      if (!"RUNNING".equals(task.getStatus()) || (state(batch) != State.RUNNING && state(batch) != State.FAILED))
+      if (!"RUNNING".equals(task.getStatus()) || (!canReceiveTask(batch)))
         throw new IllegalStateException("任务或批次不能关联结果");
+      if (!mapper.ownsLiveTask(no,taskId,execution,worker))
+        throw new IllegalStateException("调价任务租约或持有者已失效");
       var version = validateVersion(batch, task, versionId);
       if (mapper.link(no, task.getCalcObjectKey(), version) != 1
-          || mapper.succeed(taskId, execution, version) != 1)
+          || mapper.succeed(taskId, execution, worker, version) != 1)
         throw new IllegalStateException("结果关联冲突");
-      var tasks = mapper.tasks(no);
-      State next = tasks.stream().anyMatch(t -> "FAILED".equals(t.getStatus())) ? State.FAILED
-          : tasks.stream().allMatch(t -> "SUCCESS".equals(t.getStatus())) ? State.CHECKING : State.RUNNING;
-      mapper.state(no, next.name());
+      State next = batch.getFailedCount()>0 ? State.FAILED
+          : batch.getSuccessCount()+1==batch.getTotalCount() ? State.CHECKING : State.RUNNING;
+      progress(no,next,1,0);
       syncQueue(no);
     });
   }
 
-  /** Later business checks supply the findings; revision/completeness are enforced here as well. */
-  public MonthlyRepriceBatch recordCheck(String no, long expectedRevision, boolean passed, Map<String, Object> findings) {
+  /** Publish the checker report in a short revision-fenced transaction; no BOM reads under this lock. */
+  public MonthlyRepriceBatch recordCheck(MonthlyRepriceCheckService.Report report) {
+    String no=report.repriceNo();long expectedRevision=report.resultRevision();boolean passed=report.passed();
+    var findings=report.evidence();
     if (findings == null || findings.isEmpty()) throw new IllegalArgumentException("检查依据不能为空");
     final String evidence;
     try { evidence = json.writeValueAsString(findings); }
@@ -203,27 +196,11 @@ public class MonthlyRepriceContractService {
       var batch = required(no);
       if (state(batch) != State.CHECKING || batch.getResultRevision() != expectedRevision)
         throw new IllegalStateException("检查针对的结果已变化");
-      if (passed) validateSet(batch);
+      if (passed && (report.objects()!=batch.getTotalCount() || report.checkedSuccess()!=batch.getSuccessCount()))
+        throw new IllegalStateException("检查对象与批次进度不一致");
       State next = passed ? State.WAIT_CONFIRM : State.FAILED;
-      state(batch).requireTransition(next);
       mapper.check(no, next.name(), passed ? "PASSED" : "FAILED", evidence);
       syncQueue(no);
-      return mapper.lock(no);
-    });
-  }
-
-  public MonthlyRepriceBatch confirm(String no, long checkedRevision) {
-    return transaction.execute(tx -> {
-      var batch = required(no);
-      String actor = requireOperator(batch.getBusinessUnitType());
-      if (!Objects.equals(batch.getCheckedRevision(), checkedRevision)
-          || !Objects.equals(batch.getResultRevision(), checkedRevision))
-        throw new IllegalStateException("必须确认当前检查通过的结果版本");
-      if (state(batch) == State.CONFIRMED) return batch;
-      state(batch).requireTransition(State.CONFIRMED);
-      if (!"PASSED".equals(batch.getCheckStatus())) throw new IllegalStateException("检查未通过");
-      validateSet(batch);
-      if (mapper.confirm(no, checkedRevision, actor) != 1) throw new IllegalStateException("确认冲突");
       return mapper.lock(no);
     });
   }
@@ -236,52 +213,23 @@ public class MonthlyRepriceContractService {
         || !task.getOaNo().equals(v.getOaNo()) || !task.getOaFormItemId().equals(v.getOaFormItemId())
         || !task.getProductCode().equals(v.getProductCode()) || mapper.completeVersion(id) != 1)
       throw new IllegalStateException("成本版本不完整、归属错误或尚未成功");
-    var snapshot = codec.decode(mapper.snapshot(id), MonthlyCostVersionService.Snapshot.class);
+    var snapshot = documents.read(batch.getBusinessUnitType(), mapper.snapshot(id));
     MonthlyCostVersionService.validateSavedSnapshot(v, snapshot);
     return v;
   }
 
-  private void validateSet(MonthlyRepriceBatch batch) {
-    var tasks = mapper.tasks(batch.getRepriceNo());
-    var results = mapper.results(batch.getRepriceNo());
-    if (tasks.isEmpty() || tasks.size() != batch.getTotalCount() || results.size() != tasks.size())
-      throw new IllegalStateException("任务/结果集合不完整");
-    for (var task : tasks) {
-      if (!"SUCCESS".equals(task.getStatus()) || task.getCostRunVersionId() == null)
-        throw new IllegalStateException("尚有未成功任务");
-      var result = results.stream().filter(r -> task.getCalcObjectKey().equals(r.getCalcObjectKey())).findFirst().orElseThrow();
-      var version = validateVersion(batch, task, task.getCostRunVersionId());
-      if (!Objects.equals(result.getCostRunVersionId(), version.getId()) || !"SUCCESS".equals(result.getCalcStatus())
-          || !Objects.equals(result.getOaFormItemId(), task.getOaFormItemId())
-          || !Objects.equals(result.getOaNo(), task.getOaNo())
-          || !Objects.equals(result.getBusinessUnitType(), batch.getBusinessUnitType())
-          || !Objects.equals(result.getPricingMonth(), batch.getPricingMonth())
-          || !Objects.equals(result.getProductCode(), task.getProductCode())
-          || !Objects.equals(result.getSourceCostVersionId(), sourceVersion(task))
-          || result.getTotalCost().compareTo(version.getTotalCost()) != 0)
-        throw new IllegalStateException("任务、结果与保存版本不一致");
-    }
-  }
-
-  private long sourceVersion(CostRunTask task) {
-    try {
-      var source = json.readTree(task.getRequestSnapshotJson()).get("sourceCostVersionId");
-      if (source == null || !source.isIntegralNumber() || !source.canConvertToLong() || source.longValue() <= 0)
-        throw new IllegalStateException("任务缺少首次报价版本依据");
-      return source.longValue();
-    } catch (JsonProcessingException ex) {
-      throw new IllegalStateException("任务保存报价依据不可读取", ex);
-    }
-  }
-
   private void syncQueue(String no) {
     var batch = mapper.lock(no);
-    var tasks = mapper.tasks(no);
-    int success = (int) tasks.stream().filter(t -> "SUCCESS".equals(t.getStatus())).count();
-    int failed = (int) tasks.stream().filter(t -> "FAILED".equals(t.getStatus())).count();
+    int success=batch.getSuccessCount(),failed=batch.getFailedCount(),total=batch.getTotalCount();
     String status = "FAILED".equals(batch.getStatus()) ? "FAILED"
-        : success == tasks.size() ? "SUCCESS" : "QUEUED".equals(batch.getStatus()) ? "PENDING" : "RUNNING";
-    mapper.queueState(no, status, success, failed, tasks.isEmpty() ? 0 : success * 100 / tasks.size());
+        : success == total ? "SUCCESS" : "QUEUED".equals(batch.getStatus()) ? "PENDING" : "RUNNING";
+    mapper.queueState(no,status,success,failed,total==0 ? 0 : (int)(success*100L/total));
+  }
+
+  /** Caller holds the batch lock and has changed exactly the fenced task rows in this transaction. */
+  private void progress(String no,State status,int successDelta,int failedDelta) {
+    if(mapper.progress(no,status.name(),successDelta,failedDelta)!=1)
+      throw new IllegalStateException("调价进度与任务变更不一致");
   }
 
   private MonthlyRepriceBatch required(String no) {
@@ -291,8 +239,13 @@ public class MonthlyRepriceContractService {
   }
 
   private CostRunTask task(String no, long id) {
-    return mapper.tasks(no).stream().filter(t -> t.getId() == id).findFirst()
-        .orElseThrow(() -> new IllegalArgumentException("任务不属于该调价批次"));
+    var task=mapper.readTask(no,id);
+    if(task==null)throw new IllegalArgumentException("任务不属于该调价批次");
+    return task;
+  }
+
+  private static boolean canReceiveTask(MonthlyRepriceBatch batch) {
+    return state(batch)!=State.QUEUED;
   }
 
   private static State state(MonthlyRepriceBatch batch) { return State.valueOf(batch.getStatus()); }

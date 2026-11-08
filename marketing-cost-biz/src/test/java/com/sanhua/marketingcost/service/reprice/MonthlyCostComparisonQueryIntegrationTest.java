@@ -1,7 +1,7 @@
 package com.sanhua.marketingcost.service.reprice;
 
 import static org.assertj.core.api.Assertions.*;
-import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.service.reprice.MonthlyCostComparisonScope.Selected;
 import com.sanhua.marketingcost.mapper.MonthlyCostComparisonMapper;
 import com.sanhua.marketingcost.mapper.MonthlyCostComparisonMapper.Scope;
 import java.util.*;
@@ -18,20 +18,20 @@ import org.testcontainers.utility.DockerImageName;
 @Tag("integration")
 class MonthlyCostComparisonQueryIntegrationTest {
   static final MySQLContainer<?> MYSQL=new MySQLContainer<>(DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
-      .withConfigurationOverride("monthly-pricing/mysql").withDatabaseName("comparison_query").withUsername("root").withPassword("query-only-test");
+      .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","monthly-reprice-reuse-20261105-r02")).withReuse(Boolean.getBoolean("mpp.mysql.retain")).withConfigurationOverride("monthly-pricing/mysql").withDatabaseName("comparison_legacy_query").withUsername("root").withPassword("query-only-test");
   static JdbcTemplate jdbc;static MonthlyCostComparisonMapper mapper;
   @BeforeAll static void setup() throws Exception {
     MYSQL.start();var ds=new DriverManagerDataSource(MYSQL.getJdbcUrl(),MYSQL.getUsername(),MYSQL.getPassword());jdbc=new JdbcTemplate(ds);
     assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
-    jdbc.execute("CREATE TABLE oa_form(id BIGINT PRIMARY KEY,oa_no VARCHAR(64),business_unit_type VARCHAR(32))");
+    jdbc.execute("CREATE TABLE oa_form(id BIGINT PRIMARY KEY,oa_no VARCHAR(64),business_unit_type VARCHAR(32),customer VARCHAR(255))");
     jdbc.execute("CREATE TABLE oa_form_item(id BIGINT PRIMARY KEY,oa_form_id BIGINT,business_unit_type VARCHAR(32))");
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");jdbc.execute("CREATE TABLE lp_material_monthly_price(id BIGINT PRIMARY KEY)");
-    new ResourceDatabasePopulator(new ClassPathResource("monthly-reprice/pre-v348-schema.sql"),new ClassPathResource("db/V348__monthly_reprice_1130_contract.sql")).execute(ds);
+    new ResourceDatabasePopulator(new ClassPathResource("monthly-reprice/pre-v348-schema.sql"),new ClassPathResource("db/V348__monthly_reprice_1130_contract.sql"),new ClassPathResource("db/V361__monthly_reprice_reuse_contract.sql"),new ClassPathResource("db/V363__monthly_reprice_partial_publication.sql")).execute(ds);
     var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);config.addMapper(MonthlyCostComparisonMapper.class);
     var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setConfiguration(config);factory.setDataSource(ds);
     mapper=new SqlSessionTemplate(factory.getObject()).getMapper(MonthlyCostComparisonMapper.class);
   }
-  @AfterAll static void stop(){MYSQL.stop();}
+  @AfterAll static void stop(){if(!Boolean.getBoolean("mpp.mysql.retain"))MYSQL.stop();}
   @BeforeEach void clear(){
     for(var table:List.of("lp_cost_run_part_item","lp_cost_run_cost_item","lp_quote_cost_run_version","lp_monthly_reprice_batch","oa_form_item","oa_form")) jdbc.update("DELETE FROM "+table);
   }
@@ -58,38 +58,42 @@ class MonthlyCostComparisonQueryIntegrationTest {
     var failed=version("COMMERCIAL","OA",1,"2025-12","FAILED","2025-12-31 23:59:59",null,true);
     var partial=version("COMMERCIAL","OA",1,"2025-12","SUCCESS","2025-12-31 23:59:59",null,false);
     var next=version("COMMERCIAL","OA",1,"2026-03","CONFIRMED","2026-03-15",null,true);
-    assertThat(mapper.pageVersions(scope("COMMERCIAL",true,1,20))).extracting(QuoteCostRunVersion::getId).containsExactly(tied,next);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",true,1,20))).extracting(Selected::versionId).containsExactly(tied,next);
     assertThat(mapper.coverage(scope("COMMERCIAL",true,1,20))).extracting(MonthlyCostComparisonMapper.Coverage::objects).containsExactly(1L,1L);
   }
-  @Test void eachOriginalOaAndProductLineRemainsIndependentAndPagesDoNotSplitTwoMonths(){
+  @Test void missingSavedCustomerIdentityKeepsEachMonthIndependentInsteadOfGuessingFromCurrentOa(){
     for(long item:List.of(1L,2L,3L)){
       version("COMMERCIAL",item==3?"OA-2":"OA-1",item,"2025-12","SUCCESS","2025-12-31",null,true);
       version("COMMERCIAL",item==3?"OA-2":"OA-1",item,"2026-03","SUCCESS","2026-03-31",null,true);
     }
-    assertThat(mapper.countObjects(scope("COMMERCIAL",true,1,1))).isEqualTo(3);
-    for(int page=1;page<=3;page++){
-      var v=mapper.pageVersions(scope("COMMERCIAL",true,page,1));assertThat(v).hasSize(2);
-      assertThat(v).extracting(QuoteCostRunVersion::getOaFormItemId).containsOnly((long)page);
+    jdbc.update("UPDATE oa_form SET customer='CURRENT-CUSTOMER' ");
+    assertThat(mapper.countObjects(scope("COMMERCIAL",true,1,1))).isEqualTo(6);
+    var identities=new HashSet<MonthlyCostComparisonScope.Identity>();
+    for(int page=1;page<=6;page++){
+      var v=mapper.pageSelections(scope("COMMERCIAL",true,page,1));assertThat(v).singleElement().satisfies(selected->{
+        assertThat(selected.identity().matched()).isFalse();assertThat(selected.reason()).contains("未保存可靠客户身份");
+        assertThat(identities.add(selected.identity())).isTrue();
+      });
     }
-    assertThat(mapper.pageVersions(scope("COMMERCIAL",true,4,1))).isEmpty();
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",true,7,1))).isEmpty();
   }
   @Test void unconfirmedRepricingIsRestrictedToReviewScopeAndCannotHideConfirmedSavedMonth(){
     var original=version("COMMERCIAL","OA",1,"2025-12","SUCCESS","2025-12-15",null,true);
     owner("MRP-TEST","COMMERCIAL","2025-12","WAIT_CONFIRM");
     var repriced=version("COMMERCIAL","OA",1,"2025-12","SUCCESS","2025-12-31","MRP-TEST",true);
-    assertThat(mapper.pageVersions(scope("COMMERCIAL",false,1,20))).extracting(QuoteCostRunVersion::getId).containsExactly(original);
-    assertThat(mapper.pageVersions(scope("COMMERCIAL",true,1,20))).extracting(QuoteCostRunVersion::getId).containsExactly(repriced);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",false,1,20))).extracting(Selected::versionId).containsExactly(original);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",true,1,20))).extracting(Selected::versionId).containsExactly(repriced);
     jdbc.update("UPDATE lp_monthly_reprice_batch SET status='CONFIRMED' WHERE reprice_no='MRP-TEST'");
-    assertThat(mapper.pageVersions(scope("COMMERCIAL",false,1,20))).extracting(QuoteCostRunVersion::getId).containsExactly(repriced);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",false,1,20))).extracting(Selected::versionId).containsExactly(repriced);
   }
   @Test void scopesAndFiltersAreExactAndQueryHasNoWriteSideEffects(){
     var commercial=version("COMMERCIAL","000OA",1,"2025-12","SUCCESS","2025-12-31",null,true);
     version("HOUSEHOLD","000OA",2,"2025-12","SUCCESS","2025-12-31",null,true);
     var checks=jdbc.queryForList("SELECT id,total_cost,status,reprice_no FROM lp_quote_cost_run_version ORDER BY id");
     var selected=new Scope("COMMERCIAL","2025-12","2026-03","000OA",1L,"00001",true,0,20);
-    assertThat(mapper.pageVersions(selected)).extracting(QuoteCostRunVersion::getId).containsExactly(commercial);
+    assertThat(mapper.pageSelections(selected)).extracting(Selected::versionId).containsExactly(commercial);
     assertThat(mapper.countObjects(scope("HOUSEHOLD",true,1,20))).isEqualTo(1);
-    assertThat(mapper.pageVersions(new Scope("COMMERCIAL","2025-12","2026-03","000OA",2L,null,true,0,20))).isEmpty();
+    assertThat(mapper.pageSelections(new Scope("COMMERCIAL","2025-12","2026-03","000OA",2L,null,true,0,20))).isEmpty();
     assertThat(jdbc.queryForList("SELECT id,total_cost,status,reprice_no FROM lp_quote_cost_run_version ORDER BY id")).isEqualTo(checks);
   }
   @Test void orphanedAndCrossUnitProductBindingsAreExcludedInsteadOfRelabelled(){

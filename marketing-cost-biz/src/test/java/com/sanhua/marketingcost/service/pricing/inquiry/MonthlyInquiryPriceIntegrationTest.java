@@ -40,7 +40,7 @@ class MonthlyInquiryPriceIntegrationTest {
         List.of(
             "V342__monthly_material_price_storage.sql",
             "V344__monthly_material_price_single_table.sql",
-            "V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")) {
+            "V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")) {
       db.mysql.copyFileToContainer(
           MountableFile.forClasspathResource("db/" + script), "/tmp/inquiry-monthly.sql");
       var result =
@@ -289,7 +289,7 @@ class MonthlyInquiryPriceIntegrationTest {
     var selected = selected(request);
     assertThat(selected.fact().evidence().json()).contains("CU_90000", "financeMonth");
     var stored = new Selection(999L, selected.applicability(), selected.fact());
-    assertThat(new MonthlyCopperExposure(codec).read(Map.of(request, stored)))
+    assertThat(new MonthlyMetalExposure(codec).read(Map.of(request, stored)))
         .containsEntry(999L, true);
     var projection = new MonthlyPriceScenarios(codec, null, null, null, null, null, null, null);
     var first = projection.calculate(Map.of(request, stored), new BigDecimal("100000")).get(999L);

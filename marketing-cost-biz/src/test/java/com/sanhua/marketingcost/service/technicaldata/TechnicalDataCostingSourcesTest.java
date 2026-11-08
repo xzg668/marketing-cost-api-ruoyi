@@ -166,6 +166,16 @@ class TechnicalDataCostingSourcesTest {
         .isInstanceOf(EffectiveTechnicalDataException.class).hasMessageContaining("尚未全部提交");
   }
 
+  @Test void displayingSavedBomOnlyChecksTheMaterialModulesItWillMerge() {
+    fact("MANUFACTURING", TechnicalDataAvailability.ERROR);
+    assertThat(service.preparationSources(10L, "2026-09", java.util.Set.of("PACKAGE", "SOLDER"))).isEmpty();
+    assertThatThrownBy(() -> service.preparationSources(10L, "2026-09"))
+        .isInstanceOf(EffectiveTechnicalDataException.class).hasMessageContaining("公共来源异常");
+    fact("PACKAGE", TechnicalDataAvailability.ERROR);
+    assertThatThrownBy(() -> service.preparationSources(10L, "2026-09", java.util.Set.of("PACKAGE", "SOLDER")))
+        .isInstanceOf(EffectiveTechnicalDataException.class).hasMessageContaining("公共来源异常");
+  }
+
   private void assertBlocked(String code) {
     var selected = service.select(10L,"2026-09");
     assertThat(selected.sources()).isEmpty();

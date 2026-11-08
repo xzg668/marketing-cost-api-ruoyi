@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
+import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.util.List;
@@ -35,6 +36,7 @@ class QuoteFinalSubmissionReadinessIntegrationTest extends OriginalPricingIntegr
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager transactions;
   @SpyBean ProductCostingContextResolver contexts;
+  @SpyBean ProductCostingSuccessLookup successes;
 
   @AfterEach void clearIdentity() { SecurityContextHolder.clearContext(); }
 
@@ -48,6 +50,8 @@ class QuoteFinalSubmissionReadinessIntegrationTest extends OriginalPricingIntegr
     var auth = new UsernamePasswordAuthenticationToken("finance", "unused", List.of());
     auth.setDetails(Map.of("businessUnitType", "COMMERCIAL"));
     SecurityContextHolder.getContext().setAuthentication(auth);
+    doReturn(true).when(successes).hasCurrentVersion(any());
+    doReturn(Map.of()).when(contexts).resolveRevisions(anyList());
     doAnswer(call -> new TransactionTemplate(transactions).execute(tx -> {
       throw new EffectiveTechnicalDataException("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", itemId,
           month, List.of("PACKAGE"), "原包装资料尚未完成财务确认");

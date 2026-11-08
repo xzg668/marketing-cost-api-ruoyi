@@ -103,6 +103,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private final QuoteBomContextResolver contextResolver;
   private final QuoteBomStatusService quoteBomStatusService;
   private final ElectronicDrawingPreparationSource drawingPreparation;
+  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom;
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions technicalContributions;
 
   public QuoteEffectiveBomApplicationServiceImpl(
@@ -125,6 +126,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
       QuoteBomStatusService quoteBomStatusService,
       com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions technicalContributions,
       ElectronicDrawingPreparationSource drawingPreparation,
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
       QuotePricingPeriod pricingPeriods) {
     this.pricingPeriods = pricingPeriods;
     this.preparationMapper = preparationMapper;
@@ -146,6 +148,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     this.quoteBomStatusService = quoteBomStatusService;
     this.technicalContributions = technicalContributions;
     this.drawingPreparation = drawingPreparation;
+    this.repriceBom = repriceBom;
   }
 
   @Override
@@ -197,8 +200,20 @@ public class QuoteEffectiveBomApplicationServiceImpl
   @RetryOnConcurrency
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public QuoteEffectiveBomCostingCandidate prepareCostingCandidate(String oaNo, Long oaFormItemId) {
-    QueryContext context = requireContext(oaNo, oaFormItemId);
-    QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
+    return prepareCandidate(requireContext(oaNo, oaFormItemId), false);
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public QuoteEffectiveBomCostingCandidate prepareTechnicalCandidate(String oaNo, Long oaFormItemId, String month) {
+    return prepareCandidate(requireContext(oaNo, oaFormItemId, YearMonth.parse(month).toString()), true);
+  }
+
+  private QuoteEffectiveBomCostingCandidate prepareCandidate(QueryContext context, boolean technical) {
+    // 已组好的技术草稿直接进入现有计价筛选，不再发起 U9 取图。
+    QuoteBomMonthlySnapshot snapshot = technical ? drawingPreparation.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
+        context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod()) : null;
+    if (snapshot == null) snapshot = findOrPrepareMonthlySnapshot(context);
     DraftEvaluation evaluation = evaluateDraft(context, snapshot);
     if (readyForCosting(evaluation)
         && evaluation.response().alternativeSelections().stream()
@@ -413,6 +428,10 @@ public class QuoteEffectiveBomApplicationServiceImpl
   }
 
   private QueryContext requireContext(String oaNo, Long oaFormItemId) {
+    return requireContext(oaNo, oaFormItemId, null);
+  }
+
+  private QueryContext requireContext(String oaNo, Long oaFormItemId, String technicalMonth) {
     String normalizedOaNo = required(oaNo, "oaNo");
     if (oaFormItemId == null || oaFormItemId <= 0) {
       throw new IllegalArgumentException("oaFormItemId不能为空");
@@ -461,7 +480,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     try {
       bomContext =
           contextResolver.resolveWithExistingCostPeriod(
-              form, item, pricingPeriods.currentMonth(form.getBusinessUnitType()));
+              form, item, technicalMonth == null ? pricingPeriods.currentMonth(form.getBusinessUnitType()) : technicalMonth);
     } catch (QuoteIngestException exception) {
       throw failure("EFFECTIVE_BOM_SCOPE_INVALID", exception.getMessage());
     }
@@ -539,6 +558,9 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private QuoteBomMonthlySnapshot findOrPrepareMonthlySnapshot(QueryContext context) {
     QuoteBomMonthlySnapshot snapshot = findMonthlySnapshot(context);
     if (snapshot != null && !"U9".equals(snapshot.getBomSource())) {
+      var blocked = drawingPreparation.currentBlockReason(context.oaFormItemId(), context.costPeriodMonth(),
+          context.businessUnit(), context.organization().priceOrgCode());
+      if (blocked != null) throw failure("DRAWING_VERIFICATION_REQUIRED", blocked);
       // 同一报价原材料已修订时，先检查当前组树；旧已发布快照只保留历史用途。
       var revised = drawingPreparation.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
           context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
@@ -579,6 +601,13 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   private RawSnapshot loadRawSnapshot(QueryContext context, QuoteBomMonthlySnapshot snapshot) {
     List<BomRawHierarchy> frozenRows = monthlyDetails.load(snapshot.getId());
+    if (frozenRows.isEmpty()) {
+      var selectedDrawing = repriceBom.drawingHierarchy(snapshot);
+      if (selectedDrawing != null) {
+        monthlyDetails.save(snapshot.getId(), selectedDrawing);
+        frozenRows = selectedDrawing;
+      }
+    }
     if (!frozenRows.isEmpty()) {
       return new RawSnapshot(
           technicalContributions.merge(context.oaFormItemId(), context.costPeriodMonth(), frozenRows),

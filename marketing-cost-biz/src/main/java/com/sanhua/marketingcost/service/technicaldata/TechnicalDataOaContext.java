@@ -96,6 +96,25 @@ public class TechnicalDataOaContext {
     return employee.trim();
   }
 
+  /** FI-SR-005 按原单业务类型退回；已接收但未传节点的历史需求同样适用。 */
+  public String rejectionNode(Document document) {
+    if (!"FI-SR-005".equals(document.processCode())) return document.rejectToNodeId();
+    var types = jdbc.queryForList(
+        """
+        SELECT e.field_value FROM lp_oa_form_header_extra_field e
+        JOIN oa_form f ON f.id=e.oa_form_id AND f.business_unit_type=e.business_unit_type
+        WHERE e.oa_form_id=? AND e.field_code='ywlx'
+        """, String.class, document.formId());
+    if (types.size() != 1 || types.getFirst() == null || types.getFirst().isBlank()) {
+      throw invalid("FI-SR-005 缺少原报价需求单的业务类型，不能确定退回节点");
+    }
+    return switch (types.getFirst().trim()) {
+      case "批量品", "衍生品" -> "1289678984441668287";
+      case "新品" -> "1334220389403738114";
+      default -> throw invalid("FI-SR-005 业务类型须为新品、衍生品或批量品，不能确定退回节点");
+    };
+  }
+
   public String technicianEmployeeNo(long userId) {
     var identity = directory.findActiveBySystemUserId(userId);
     if (identity == null) throw invalid("所选技术员未关联有效 OA 人员工号：" + userId);

@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
+import com.sanhua.marketingcost.service.costing.ProductCostingContext;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
 import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
@@ -162,11 +163,29 @@ public class QuoteFinalSubmissionService {
     List<CostLine> result = new ArrayList<>();
     var returned = repository.returnedBaseline(form.getId());
     Set<Long> returnedVersions = returnedVersions(returned);
+    Map<Long, ProductCostingContext> candidates = new LinkedHashMap<>();
+    Map<Long, String> unavailable = new HashMap<>();
+    for (var item : products) {
+      try {
+        var context = contexts.resolve(new ProductCostingRequest(form.getOaNo(), item.getId(), period, operator, false));
+        // 没有成本版本时无需扫描价格和费用表；资料缺口由核算检查页展示。
+        if (!successes.hasCurrentVersion(context)) throw invalid("尚无与当前资料一致的核算结果，请先核算");
+        candidates.put(item.getId(), context);
+      } catch (IllegalArgumentException | IllegalStateException | QuoteIngestException failure) {
+        unavailable.put(item.getId(), failure.getMessage());
+      }
+    }
+    var revisions = currentRevisions(new ArrayList<>(candidates.values()));
     for (var item : products) {
       String product = item.getMaterialNo() == null ? item.getSunlModel() : item.getMaterialNo();
       String shipping = item.getShippingFee() == null ? null : item.getShippingFee().toPlainString();
       try {
-        var context = contexts.resolveRevision(contexts.resolve(new ProductCostingRequest(form.getOaNo(), item.getId(), period, operator, false)));
+        if (unavailable.containsKey(item.getId())) throw invalid(unavailable.get(item.getId()));
+        var candidate = candidates.get(item.getId());
+        // 整单共用一次公共资料校验，产品各自的 BOM、价格、补录修订仍分别检查。
+        // 批量读取省略缺资料产品；仅对这些产品单独读取，保留明确的缺项原因。
+        var context = revisions.containsKey(item.getId())
+            ? candidate.withRevision(revisions.get(item.getId())) : contexts.resolveRevision(candidate);
         var match = successes.find(context);
         if (match.isEmpty()) throw invalid("尚无与当前资料一致的核算结果，请先核算");
         var version = match.get().version();
@@ -183,6 +202,16 @@ public class QuoteFinalSubmissionService {
       }
     }
     return List.copyOf(result);
+  }
+  private Map<Long, String> currentRevisions(List<ProductCostingContext> candidates) {
+    if (candidates.isEmpty()) return Map.of();
+    try {
+      return contexts.resolveRevisions(candidates);
+    } catch (IllegalArgumentException | IllegalStateException | EffectiveTechnicalDataException
+        | QuoteIngestException failure) {
+      // 一个产品的业务资料异常不能遮掉其他产品的有效金额；回到逐品读取定位。
+      return Map.of();
+    }
   }
   private Set<Long> returnedVersions(QuoteFinalSubmissionRepository.Submission prior) {
     Set<Long> ids = new HashSet<>();

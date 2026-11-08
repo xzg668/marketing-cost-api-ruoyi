@@ -12,21 +12,7 @@ public final class MonthlyRepriceContract {
   private MonthlyRepriceContract() {}
 
   public enum State {
-    QUEUED, RUNNING, CHECKING, WAIT_CONFIRM, FAILED, CONFIRMED;
-
-    public boolean blocksQuotation() { return this != CONFIRMED; }
-
-    public void requireTransition(State next) {
-      boolean allowed = switch (this) {
-        case QUEUED -> next == RUNNING || next == FAILED;
-        case RUNNING -> next == CHECKING || next == FAILED;
-        case CHECKING -> next == WAIT_CONFIRM || next == FAILED;
-        case WAIT_CONFIRM -> next == CONFIRMED || next == FAILED;
-        case FAILED -> next == QUEUED || next == CHECKING;
-        case CONFIRMED -> false;
-      };
-      if (!allowed) throw new IllegalStateException("非法调价状态转换：" + this + " -> " + next);
-    }
+    QUEUED, RUNNING, CHECKING, WAIT_CONFIRM, FAILED, CONFIRMED
   }
 
   public record ObjectIdentity(String businessUnitType, String oaNo, long oaFormItemId) {
@@ -72,7 +58,7 @@ public final class MonthlyRepriceContract {
       throw new IllegalArgumentException(label + "必填且不可含首尾空白");
   }
 
-  private static String hash(List<String> parts) {
+  static String hash(List<String> parts) {
     try {
       var digest = MessageDigest.getInstance("SHA-256");
       for (String part : parts) {

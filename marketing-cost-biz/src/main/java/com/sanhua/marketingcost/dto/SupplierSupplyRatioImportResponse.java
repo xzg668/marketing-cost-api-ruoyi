@@ -10,6 +10,7 @@ public class SupplierSupplyRatioImportResponse {
   private int insertedRows;
   private int newRelations;
   private int changedRelations;
+  private int removedRelations;
   private int unchangedRows;
   private int deactivatedRows;
   private int duplicateRows;

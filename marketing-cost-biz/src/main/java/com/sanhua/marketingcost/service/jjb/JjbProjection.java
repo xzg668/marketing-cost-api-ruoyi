@@ -85,6 +85,7 @@ public class JjbProjection {
             .monthlyPriceIds(List.of(line.monthlyPriceId())).paths(line.paths())
             .householdRate(decimal(line.householdRate())).salesRate(decimal(line.salesRate()))
             .coefficient(decimal(calc.ordinaryInputs().coefficient()))
+            .householdCalculation(householdCalculation(snapshot,line))
             .remark("P÷(1+H)×(1+H+S)×Q；本行金额未乘产品属性系数").build());
       }
       rows.add(Row.builder().key("HOUSEHOLD_SUBTOTAL").section("HOUSEHOLD").kind("SUBTOTAL")
@@ -205,6 +206,31 @@ public class JjbProjection {
   }
   private static String number(JsonNode node,String field) {
     String value=text(node,field);return value==null?null:money(new BigDecimal(value));
+  }
+
+  private Map<String,String> householdCalculation(com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.Snapshot snapshot,
+      MonthlyProductCost.HouseholdLine line) {
+    var pair=snapshot.priceScenarios().stream().filter(value->value.monthlyPriceId()==line.monthlyPriceId()).findFirst().orElse(null);
+    if(pair==null)return Map.of();
+    var evidence=tree(pair.customerEvidenceJson());var calculation=evidence.path("householdCalculation");
+    if(!calculation.isObject())return Map.of();
+    var values=new LinkedHashMap<String,String>();
+    calculation.fields().forEachRemaining(entry->{
+      var value=entry.getValue();
+      if(!value.isNull())values.put(entry.getKey(),value.isNumber()?decimal(value.decimalValue()):value.asText());
+    });
+    values.put("inquirySourceMonth",evidence.path("inquirySourceMonth").asText());
+    values.put("pricingMonth",snapshot.pricingMonth());
+    if(evidence.path("householdMatch").isObject()) {
+      values.put("matchKind","型号/规格");values.put("matchedSpecification",evidence.path("householdMatch").path("matchedValue").asText());
+    } else values.put("matchKind","料号");
+    for(String field:List.of("formula","value"))if(!evidence.path("originalW").path(field).isMissingNode() && !evidence.path("originalW").path(field).isNull())
+      values.put(field.equals("formula")?"originalWFormula":"originalWValue",evidence.path("originalW").path(field).asText());
+    values.put("householdRate",decimal(line.householdRate()));values.put("salesRate",decimal(line.salesRate()));
+    values.put("quantity",decimal(line.quantity()));values.put("financialAmount",decimal(line.amount()));
+    values.put("customerAmount",decimal(line.effectiveCustomerAmount()));
+    values.put("difference",decimal(line.effectiveCustomerAmount().subtract(line.amount())));
+    return Map.copyOf(values);
   }
 
   private List<MonthlyPrice> monthly(MonthlyProductCost.Result calc) {

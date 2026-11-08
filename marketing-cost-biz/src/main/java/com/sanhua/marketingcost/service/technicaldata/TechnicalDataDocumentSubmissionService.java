@@ -65,6 +65,7 @@ public class TechnicalDataDocumentSubmissionService {
   private final OaTechnicalBatchDelivery delivery;
   private final OaMessageCodec codec;
   private final TransactionTemplate transaction;
+  private final com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationService notifications;
 
   public TechnicalDataDocumentSubmissionService(
     JdbcTemplate jdbc,
@@ -87,9 +88,11 @@ public class TechnicalDataDocumentSubmissionService {
     OaTechnicalBatchDelivery delivery,
     OaMessageCodec codec,
     PlatformTransactionManager manager,
-    TechnicalDataPriceApplicationService sharedPrices
+    TechnicalDataPriceApplicationService sharedPrices,
+    com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationService notifications
   ) {
     this.jdbc = jdbc;
+    this.notifications = notifications;
     this.sharedPrices = sharedPrices;
     this.tasks = tasks;
     this.submissions = submissions;
@@ -233,7 +236,11 @@ public class TechnicalDataDocumentSubmissionService {
     ) throw new IllegalArgumentException("请提供提交编号和页面资料版本");
     String id = Objects.requireNonNull(transaction.execute(status -> prepare(formId, request, actor)));
     delivery.send(id);
-    return Objects.requireNonNull(transaction.execute(status -> complete(id)));
+    transaction.executeWithoutResult(status -> complete(id));
+    var completed = batches.find(id, false);
+    notifications.completeSubmissionNotifications(id, "SUCCESS".equals(completed.status()),
+        Set.of("REJECTED", "NOT_SENT").contains(completed.status()));
+    return result(batches.find(id, false));
   }
 
   private String prepare(long formId, Request request, TechnicalDataActor actor) {
@@ -279,8 +286,7 @@ public class TechnicalDataDocumentSubmissionService {
     String employee = context.technicianEmployeeNo(actor.userId());
     String batchId = UUID.randomUUID().toString();
     batches.insert(batchId, "I03", formId, actor.userId(), request.idempotencyKey(), request.fingerprint());
-    List<String> lines = new ArrayList<>();
-    List<String> briefLines = new ArrayList<>();
+    var submittedProducts = new ArrayList<TechnicalDataSubmissionRemark.SubmittedProduct>();
     for (var task : selected) {
       var person = own(task.getId(), actor.userId());
       var product = products.lockActiveProducts(task.getId()).getFirst();
@@ -292,8 +298,7 @@ public class TechnicalDataDocumentSubmissionService {
         person,
         actor
       );
-      lines.add(remarks.generate(product.getMaterialNo(), snapshot));
-      briefLines.add(remarks.generateBrief(product.getMaterialNo(), snapshot));
+      submittedProducts.add(new TechnicalDataSubmissionRemark.SubmittedProduct(product.getMaterialNo(), snapshot));
       long message = context.linkMessage(
         document,
         batchId,
@@ -308,16 +313,12 @@ public class TechnicalDataDocumentSubmissionService {
       new OaTechnicalSubmissionClient.Request(
         document.requestId(),
         employee,
-        fitsOaRemark(String.join("\n", lines)) ? String.join("\n", lines) : String.join("\n", briefLines),
+        remarks.generateDocument(submittedProducts),
         context.workbenchUrl(formId)
       )
     );
     batches.prepared(batchId, body);
     return batchId;
-  }
-
-  private static boolean fitsOaRemark(String remark) {
-    return remark.codePointCount(0, remark.length()) <= 200;
   }
 
   private Result complete(String id) {
@@ -410,7 +411,14 @@ public class TechnicalDataDocumentSubmissionService {
   }
 
   private Result result(OaTechnicalBatchRepository.Batch batch) {
-    return new Result(batch.id(), batch.status(), batch.result(), batch.requestKey());
+    boolean returned = "SUCCESS".equals(batch.status()) && Boolean.TRUE.equals(jdbc.queryForObject("""
+        SELECT EXISTS(SELECT 1 FROM lp_quote_tech_submission s
+          JOIN lp_oa_integration_message m ON m.id=s.outbound_message_id
+          LEFT JOIN lp_quote_tech_oa_recipient r ON r.id=s.recipient_id AND r.latest_submission_id=s.id
+          WHERE m.technical_batch_id=? AND (s.submission_status='RETURNED'
+            OR r.todo_status='OPEN' AND r.return_message_id IS NOT NULL))
+        """, Boolean.class, batch.id()));
+    return new Result(batch.id(), returned ? "RETURNED" : batch.status(), batch.result(), batch.requestKey());
   }
 
   private void requireReader(long formId, TechnicalDataActor actor) {

@@ -6,18 +6,6 @@ import java.time.YearMonth;
 import org.junit.jupiter.api.Test;
 
 class MonthlyRepriceContractTest {
-  @Test void everyLegalAndIllegalStateTransitionIsExplicit() {
-    var allowed = java.util.Set.of("QUEUED:RUNNING","QUEUED:FAILED","RUNNING:CHECKING","RUNNING:FAILED",
-        "CHECKING:WAIT_CONFIRM","CHECKING:FAILED","WAIT_CONFIRM:CONFIRMED","WAIT_CONFIRM:FAILED",
-        "FAILED:QUEUED","FAILED:CHECKING");
-    for (var from : State.values()) for (var to : State.values()) {
-      if (allowed.contains(from+":"+to)) assertThatCode(() -> from.requireTransition(to)).doesNotThrowAnyException();
-      else assertThatThrownBy(() -> from.requireTransition(to)).isInstanceOf(IllegalStateException.class);
-    }
-  }
-  @Test void onlyDirectorConfirmationReleasesTheStateContract() {
-    for (var state : State.values()) assertThat(state.blocksQuotation()).isEqualTo(state != State.CONFIRMED);
-  }
   @Test void sameMaterialDifferentActualProductRowOrParentPathRemainsDistinct() {
     var first = new ObjectIdentity("COMMERCIAL","OA1",1);
     var second = new ObjectIdentity("COMMERCIAL","OA1",2);

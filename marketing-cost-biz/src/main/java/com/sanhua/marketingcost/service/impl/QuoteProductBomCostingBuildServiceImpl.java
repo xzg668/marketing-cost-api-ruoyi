@@ -173,7 +173,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     var lines = effectiveLines(record, nodes, input.bom().getSyncRecordId());
     var plan = applyRules(record, input.priceAsOfTime().toLocalDate(), context.costPeriodMonth(), lines, build,
         nodes.stream().filter(n -> n.getMaterialUnit() != null && !n.getMaterialUnit().isBlank())
-            .collect(java.util.stream.Collectors.toMap(QuoteEffectiveBomNode::getNodePath, QuoteEffectiveBomNode::getMaterialUnit)));
+            .collect(java.util.stream.Collectors.toMap(QuoteEffectiveBomNode::getNodePath, QuoteEffectiveBomNode::getMaterialUnit)), input.priceAsOfTime());
     plan.rows().rows().forEach(row -> row.setCalculationScope(input.repriceNo()));
     return plan;
   }
@@ -211,7 +211,8 @@ public class QuoteProductBomCostingBuildServiceImpl
             lines,
             buildBatchId,
             nodes.stream().filter(node -> node.getMaterialUnit() != null && !node.getMaterialUnit().isBlank())
-                .collect(java.util.stream.Collectors.toMap(QuoteEffectiveBomNode::getNodePath, QuoteEffectiveBomNode::getMaterialUnit)));
+                .collect(java.util.stream.Collectors.toMap(QuoteEffectiveBomNode::getNodePath, QuoteEffectiveBomNode::getMaterialUnit)),
+            YearMonth.parse(periodMonth).atDay(1).atStartOfDay());
   }
 
   private List<PreparedLine> effectiveLines(
@@ -406,7 +407,7 @@ public class QuoteProductBomCostingBuildServiceImpl
       String periodMonth,
       List<PreparedLine> inputLines,
       String requiredBuildBatchId,
-      Map<String, String> frozenUnits) {
+      Map<String, String> frozenUnits, LocalDateTime priceAsOfTime) {
     List<PreparedLine> lines =
         inputLines.stream()
             .filter(line -> trimToNull(line.materialCode()) != null)
@@ -432,7 +433,7 @@ public class QuoteProductBomCostingBuildServiceImpl
           childrenByParentPath.getOrDefault(line.path(), List.of()).isEmpty()));
     }
     var pricing = monthlyPricing.select(record.getOaNo(), record.getOaFormItemId(), settlementScope, periodMonth,
-        organization.priceOrgCode(), quoteDate.atStartOfDay(), nodes, frozenUnits);
+        organization.priceOrgCode(), priceAsOfTime, nodes, frozenUnits);
     var originalNodes = List.copyOf(nodes);
     nodes = new ArrayList<>(pricing.visible());
     BomByproductSettlementReadResult byproductRead =

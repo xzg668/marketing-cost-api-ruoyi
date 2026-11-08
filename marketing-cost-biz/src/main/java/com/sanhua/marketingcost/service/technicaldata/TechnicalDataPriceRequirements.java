@@ -43,14 +43,33 @@ public class TechnicalDataPriceRequirements {
   }
 
   public TechnicalDataPriceRequirementsResponse check(QuoteTechTask task, QuoteTechProduct product) {
+    var failed = tasks.findModules(product.getId()).stream().filter(module ->
+        "PRICE".equals(module.getModuleType()) && "TECHNICAL_BOM_PRICE_FAILED".equals(module.getRequirementReasonCode())).findFirst();
+    if (failed.isPresent()) return new TechnicalDataPriceRequirementsResponse(List.of(),
+        List.of(failed.get().getRequirementReason()), Objects.toString(failed.get().getSourceReference(), "FAILED"));
     var demands = new TreeMap<String, Set<String>>();
     List<String> issues = new ArrayList<>();
     // 制造件保存产生的补价先处理已知原料/废料，不以整棵 BOM 完成为前置条件。
     // 核算发现的普通 PRICE 需求仍按正式计价 BOM 检查。
     boolean manufacturingPrices = tasks.findModules(product.getId()).stream().anyMatch(module ->
         "PRICE".equals(module.getModuleType()) && TechnicalDataManufacturingPrices.ownsRequirement(module));
-    addModules(product, demands, manufacturingPrices ? Set.of("MANUFACTURING") : Set.of("MANUFACTURING", "SOLDER", "PACKAGE"));
+    boolean composed = tasks.findModules(product.getId()).stream().anyMatch(module ->
+        "PRICE".equals(module.getModuleType()) && isComposedCheck(module));
+    if (!composed) addModules(product, demands, manufacturingPrices ? Set.of("MANUFACTURING") : Set.of("MANUFACTURING", "SOLDER", "PACKAGE"));
     if (!manufacturingPrices) addBom(task, product, demands, issues);
+    var revisions = ownedRevisions(task, product);
+    revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
+    return resolve(task, product, demands, issues, revisions.keySet());
+  }
+
+  static boolean isComposedCheck(QuoteTechModule module) {
+    return Objects.toString(module.getRequirementReasonCode(), "").startsWith("TECHNICAL_BOM_PRICE_");
+  }
+
+  public TechnicalDataPriceRequirementsResponse checkComposedBom(QuoteTechTask task, QuoteTechProduct product) {
+    var demands = new TreeMap<String, Set<String>>();
+    var issues = new ArrayList<String>();
+    addBom(task, product, demands, issues);
     var revisions = ownedRevisions(task, product);
     revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
     return resolve(task, product, demands, issues, revisions.keySet());
@@ -192,6 +211,7 @@ public class TechnicalDataPriceRequirements {
               List.of(code, task.getApplicableOrgCode(), task.getBusinessUnitType(), unit, "CNY"));
       String status, message;
       BigDecimal price = null;
+      boolean waiting = false;
       try {
         var resolved =
             prices.calculateMaterialUnitPrice(
@@ -209,6 +229,7 @@ public class TechnicalDataPriceRequirements {
                         : MakePartMaterialPriceResolveService.Purpose.MATERIAL);
         if (resolved == null) throw new IllegalStateException("取价未返回结果");
         price = resolved.getUnitPrice();
+        waiting = "WAITING".equals(resolved.getFailureReason());
         if ("OK".equals(resolved.getStatus()) && price != null && price.signum() > 0) {
           status = "AVAILABLE";
         } else if (price == null && "MISSING_PRICE".equals(resolved.getStatus())) {
@@ -230,9 +251,9 @@ public class TechnicalDataPriceRequirements {
         status = "REVISION";
         message = "修改原补录来源；已采用的月价保持不变";
       }
-      if ("MISSING".equals(status)) {
+      if ("MISSING".equals(status) || waiting) {
         var owner = ownership.find(code);
-        if (owner != null && !Objects.equals(owner.productId(), product.getId())
+        if (owner != null
             && !"CANCELLED".equals(owner.taskStatus())
             && Objects.equals(owner.organizationCode(), task.getApplicableOrgCode())
             && Objects.equals(owner.businessUnit(), task.getBusinessUnitType())
@@ -244,10 +265,24 @@ public class TechnicalDataPriceRequirements {
               .filter(row -> code.equals(row.materialNo()) && task.getApplicableOrgCode().equals(row.organizationCode())
                   && unit.equals(row.unit()) && "CNY".equals(row.currency()))
               .findFirst().orElse(null);
-          boolean complete = entry != null && TechnicalDataPriceRules.validate(entry).isEmpty();
-          status = complete ? "SHARED" : "ASSIGNED";
-          message = (complete ? "已有资料" : "原任务办理中") + "（原任务 " + owner.taskId() + "），无需重复补录";
-          sharedEvidence.add(List.of(owner, entry == null ? "" : entry));
+          if (!Objects.equals(owner.productId(), product.getId())) {
+            boolean complete = entry != null && TechnicalDataPriceRules.validate(entry).isEmpty();
+            status = complete ? "SHARED" : "ASSIGNED";
+            message = (complete ? "已引用原产品 " : "请在原产品 ")
+                + Objects.toString(owner.productMaterialNo(), "任务 " + owner.taskId())
+                + (complete ? " 填好的价格，本产品无需重复补录" : " 补齐价格，本产品无需重复填写");
+            sharedEvidence.add(List.of(owner, entry == null ? "" : entry));
+          } else if (waiting && entry != null && "DRAFT".equals(original.getVersionStatus())
+              && tasks.findModules(product.getId()).stream().anyMatch(module ->
+                  Objects.equals(module.getId(), owner.moduleId()) && "PRICE".equals(module.getModuleType())
+                      && Objects.equals(module.getCurrentVersionId(), owner.versionId())
+                      && "TECHNICAL_BOM_PRICE_FAILED".equals(module.getRequirementReasonCode())
+                      && Set.of("PENDING", "EDITING", "READY", "RETURNED").contains(Objects.toString(module.getModuleStatus(), "")))) {
+            // 检查异常会临时撤下 required 标记；重试时恢复本人的可编辑草稿需求，不能把草稿当作已生效价格。
+            status = "MISSING";
+            price = null;
+            message = "继续使用已保存的补录资料，提交后生效";
+          }
         }
       }
       result.add(new TechnicalDataPriceRequirement(key, code, master.getMaterialName(), master.getMaterialModel(), task.getApplicableOrgCode(),
@@ -274,17 +309,24 @@ public class TechnicalDataPriceRequirements {
     request.setPeriodMonth(product.getAccountingMonth()); request.setBusinessUnitType(task.getBusinessUnitType());
     request.setScenarioType(QuotePriceScenarioType.OA_LOCKED);
     try {
-      var prepared = preparation.calculate(request);
+      var prepared = preparation.calculateForTechnical(request);
       if (prepared == null || prepared.getSummary() == null || "FAILED".equals(prepared.getSummary().getStatus())) {
         issues.add("BOM 价格检查失败，请核对后重新检查"); return;
       }
+      if (prepared.getItems().isEmpty() && prepared.getGaps().isEmpty()) {
+        issues.add("尚未生成实际计价物料，不能判定价格已齐全"); return;
+      }
       for (var gap : technicalGaps(prepared)) {
-        if (!"MISSING_PRICE".equals(gap.getGapType())
+        // 制造件汇总把基础料件的待审批价格包装为来源异常；按该基础料件重新核对已填资料。
+        // resolve 仍区分 WAITING、真实来源错误和冲突，不把草稿用于正式成本计算。
+        boolean manufacturingPrice = "PRICE_SOURCE_ERROR".equals(gap.getGapType())
+            && Set.of("RAW_PRICE_ERROR", "SCRAP_PRICE_ERROR").contains(Objects.toString(gap.getReasonCode(), ""));
+        if ((!"MISSING_PRICE".equals(gap.getGapType()) && !manufacturingPrice)
             || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT")) {
           issues.add(Objects.toString(gap.getMessage(), "尚有结构或价格来源问题"));
         } else {
           add(demands, gap.getGapMaterialCode(),
-              "MISSING_SCRAP_PRICE".equals(gap.getReasonCode()) ? "SCRAP" : "BOM");
+              Set.of("MISSING_SCRAP_PRICE", "SCRAP_PRICE_ERROR").contains(Objects.toString(gap.getReasonCode(), "")) ? "SCRAP" : "BOM");
         }
       }
     } catch (RuntimeException exception) {

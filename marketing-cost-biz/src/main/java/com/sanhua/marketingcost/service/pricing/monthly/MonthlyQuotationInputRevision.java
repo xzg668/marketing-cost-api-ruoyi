@@ -171,8 +171,7 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
   }
 
   private static NonCuConditions conditions(OaForm form, String org) {
-    if (!"220".equals(org) || form.getSus304Price() == null && form.getSus316lPrice() == null
-        && !Boolean.TRUE.equals(form.getBoardTender())) return NonCuConditions.empty();
-    return new NonCuConditions(new BoardTerms(form.getSus304Price(), form.getSus316lPrice(), Boolean.TRUE.equals(form.getBoardTender())));
+    if (!"220".equals(org) || !Boolean.TRUE.equals(form.getBoardTender())) return NonCuConditions.empty();
+    return new NonCuConditions(new BoardTerms(null, null, true));
   }
 }

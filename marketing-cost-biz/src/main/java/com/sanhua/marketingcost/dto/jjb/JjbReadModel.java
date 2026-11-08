@@ -38,8 +38,9 @@ public record JjbReadModel(Identity identity, Header header, List<Row> rows,
       String shape, String priceSource, String remark, String rate, String baseAmount,
       String feeState, List<Source> sources, List<Long> partItemIds, List<Long> costItemIds,
       List<Long> monthlyPriceIds, List<String> paths, String householdRate,
-      String salesRate, String coefficient) {
+      String salesRate, String coefficient, Map<String,String> householdCalculation) {
     public Row {
+      householdCalculation=householdCalculation==null?Map.of():Map.copyOf(householdCalculation);
       sources = sources == null ? List.of() : List.copyOf(sources);
       partItemIds = partItemIds == null ? List.of() : List.copyOf(partItemIds);
       costItemIds = costItemIds == null ? List.of() : List.copyOf(costItemIds);

@@ -7,6 +7,8 @@ import lombok.Setter;
 @Getter
 @Setter
 public class PricePrepareGenerateResult {
+  /** Actionable input gaps survive an enclosing repricing transaction rollback. */
+  public record Issue(String materialCode,String materialName,String reasonCode,String message) {}
   private String prepareNo;
   private String oaNo;
   private Long oaFormItemId;
@@ -25,4 +27,5 @@ public class PricePrepareGenerateResult {
   private LocalDateTime priceAsOfTime;
   private String priceAsOfSource;
   private String message;
+  private java.util.List<Issue> issues = java.util.List.of();
 }

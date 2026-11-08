@@ -239,7 +239,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
   @Transactional
   public List<EffectiveTechnicalDataInput.MaterialLine> preparationMaterials(Long itemId, String month) {
     requireScope(itemId, month);
-    return materialItems(costingSources.preparationSources(itemId, month));
+    return materialItems(costingSources.preparationSources(itemId, month, java.util.Set.of("PACKAGE", "SOLDER")));
   }
 
   private List<EffectiveTechnicalDataInput.MaterialLine> materialItems(Map<String, TechnicalDataCostingSources.Source> sources) {

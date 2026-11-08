@@ -3,11 +3,12 @@ package com.sanhua.marketingcost.service.pricing.monthly;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.*;
+import com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices;
 
 /** One attempt's captured sources and uses; adoption is performed by the quotation orchestrator. */
 public final class MonthlyQuotationSession implements QuotationPriceSession {
   private final MonthlyMaterialPrices.Context context;
-  private final BigDecimal customerCopper;
+  private final CustomerMaterialPrices customerPrices;
   private final MonthlyQuotationPrices prices;
   private final MonthlyPriceScenarios scenarios;
   private final MonthlyPriceStorage storage;
@@ -28,13 +29,29 @@ public final class MonthlyQuotationSession implements QuotationPriceSession {
   public MonthlyQuotationSession(MonthlyMaterialPrices.Context context, BigDecimal customerCopper,
       MonthlyQuotationPrices prices, MonthlyPriceScenarios scenarios, MonthlyPriceStorage storage,
       MonthlyPriceDocumentCodec codec, BoardTerms boardTerms) {
+    this(context, customerCopper, null, prices, scenarios, storage, codec, boardTerms);
+  }
+
+  public MonthlyQuotationSession(MonthlyMaterialPrices.Context context, BigDecimal customerCopper,
+      BigDecimal customerZinc, MonthlyQuotationPrices prices, MonthlyPriceScenarios scenarios,
+      MonthlyPriceStorage storage, MonthlyPriceDocumentCodec codec, BoardTerms boardTerms) {
+    this(context, new CustomerMaterialPrices(customerCopper, customerZinc, null, null,
+        boardTerms == null ? null : boardTerms.sus304PricePerTon(),
+        boardTerms == null ? null : boardTerms.sus316lPricePerTon()),
+        prices, scenarios, storage, codec, boardTerms != null && boardTerms.finalTender());
+  }
+
+  public MonthlyQuotationSession(MonthlyMaterialPrices.Context context, CustomerMaterialPrices customerPrices,
+      MonthlyQuotationPrices prices, MonthlyPriceScenarios scenarios, MonthlyPriceStorage storage,
+      MonthlyPriceDocumentCodec codec, boolean finalTender) {
     this.context = Objects.requireNonNull(context);
-    this.customerCopper = customerCopper;
+    this.customerPrices = Objects.requireNonNull(customerPrices);
     this.prices = Objects.requireNonNull(prices);
     this.scenarios = Objects.requireNonNull(scenarios);
     this.storage = Objects.requireNonNull(storage);
     this.codec = Objects.requireNonNull(codec);
-    this.boardTerms = boardTerms;
+    // Customer metal values belong to P1, never to the shared monthly P0 identity.
+    this.boardTerms = finalTender ? new BoardTerms(null, null, true) : null;
   }
 
   @Override public MonthlyMaterialPrices.Context context() { return context; }
@@ -60,9 +77,7 @@ public final class MonthlyQuotationSession implements QuotationPriceSession {
     var missing = new LinkedHashMap<Input, MonthlyQuotationPrices.Item>();
     var issues = new LinkedHashMap<Input, MonthlyMaterialPrices.Problem>();
     for (var input : inputs) if (!values.containsKey(input)) {
-      var item = new MonthlyQuotationPrices.Item(input.materialCode(), input.organization(),
-          input.unit(), input.specification(), input.taxBasis(), input.supplier(), input.conditions(),
-          input.basisQuantity(), MonthlyQuotationPrices.Purpose.valueOf(input.purpose().name()));
+      var item = MonthlyQuotationPrices.item(input);
       var matches = MonthlyQuotationPrices.requests(context, item).stream()
           .map(this::captured).filter(Objects::nonNull).toList();
       if (matches.size() == 1) {
@@ -88,7 +103,7 @@ public final class MonthlyQuotationSession implements QuotationPriceSession {
       }
       captured.forEach((request, selected) -> dates.put(request, selected.monthlyPriceId() == null
           ? context.priceAsOfTime().toLocalDate() : Objects.requireNonNull(savedDates.get(selected.monthlyPriceId()))));
-      var paired = scenarios.preview(captured, customerCopper, dates);
+      var paired = scenarios.previewMaterials(captured, customerPrices, dates);
       captured.forEach((request, selected) -> {
         var pair = paired.get(request);
         remember(new Value(request, selected, pair.financialPrice(), pair.customerPrice()));

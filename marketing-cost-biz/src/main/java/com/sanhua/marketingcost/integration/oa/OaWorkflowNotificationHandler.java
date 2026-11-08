@@ -212,6 +212,7 @@ public class OaWorkflowNotificationHandler {
   private boolean technical(OaMessageRepository.Message message, OaWorkflowNotification event,
       OaWorkflowNotificationRepository.Document document, OaWorkflowNotificationRepository.Flow flow, Scope scope) {
     if (scope.submissionIds().isEmpty()) return enterTechnical(flow, scope);
+    if (!scope.localReturn() && deferUntilSubmissionReceipt(message, scope)) return false;
     boolean changed = false;
     boolean waitingForReturnReceipt = false;
     var operator = new TechnicalDataActor(0L, "OA状态通知", Set.of());
@@ -246,15 +247,33 @@ public class OaWorkflowNotificationHandler {
       changed = true;
     }
     if (waitingForReturnReceipt) return false;
-    for (long submissionId : scope.submissionIds()) {
-      var batchIds = jdbc.queryForList("""
-          SELECT m.technical_batch_id FROM lp_quote_tech_submission s JOIN lp_oa_integration_message m ON m.id=s.outbound_message_id
-          WHERE s.id=? AND m.technical_batch_id IS NOT NULL
-          """, String.class, submissionId);
-      for (String batchId : batchIds) batches.confirmSubmissionNotification(batchId, message.id());
-    }
     // I05 已恢复精确范围时，通知只同步流程状态，不能再恢复整个人员的板块。
     return changed || scope.localReturn() && !"TECHNICAL".equals(flow.state());
+  }
+
+  /** 节点通知不是 I03 提交回执；先保存通知，实际提交成功后才应用退回。 */
+  private boolean deferUntilSubmissionReceipt(OaMessageRepository.Message message, Scope scope) {
+    for (long submissionId : scope.submissionIds()) {
+      var ids = jdbc.queryForList("""
+          SELECT b.id FROM lp_quote_tech_submission s
+          JOIN lp_oa_integration_message m ON m.id=s.outbound_message_id
+          JOIN lp_oa_technical_batch b ON b.id=m.technical_batch_id
+          WHERE s.id=? AND b.operation='I03'
+          """, String.class, submissionId);
+      for (String id : ids) {
+        var batch = batches.find(id, true);
+        if ("SUCCESS".equals(batch.status())) continue;
+        boolean failed = Set.of("REJECTED", "NOT_SENT").contains(batch.status());
+        jdbc.update("""
+            UPDATE lp_oa_integration_message SET technical_batch_id=?,status=?,error_stage='DELIVERY',
+              error_code=?,error_message=? WHERE id=? AND direction='INBOUND'
+            """, id, failed ? "REJECTED" : "WAITING_HANDLER",
+            failed ? "OA_SUBMISSION_FAILED" : "OA_SUBMISSION_PENDING",
+            failed ? "提交未成功，节点通知不作为退回依据" : "通知已接收，等待提交接口实际回执", message.id());
+        return true;
+      }
+    }
+    return false;
   }
 
   private boolean enterTechnical(OaWorkflowNotificationRepository.Flow flow, Scope scope) {

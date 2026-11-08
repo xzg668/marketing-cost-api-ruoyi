@@ -199,12 +199,7 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
             .eq(ProductPropertyRule::getBusinessUnitType, businessUnitType)
             .eq(ProductPropertyRule::getPropertyYear, propertyYear)
             .eq(ProductPropertyRule::getProductAttr, productAttr));
-    if (rule == null) return null;
-    var rate = rule.getUpliftRate();
-    if (rate == null || rate.signum() < 0 || rate.compareTo(java.math.BigDecimal.ONE) > 0) {
-      throw new IllegalArgumentException("产品属性上浮规则异常：" + productAttr + "／" + propertyYear);
-    }
-    return java.math.BigDecimal.ONE.add(rate);
+    return com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients.from(rule, productAttr, propertyYear);
   }
 
   private String trimToNull(String value) {

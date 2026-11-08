@@ -52,9 +52,11 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
     var value = read.values().get(input);
     if (value == null) {
       var problem = read.problems().get(input);
-      return MakePartMaterialPriceResolveResult.miss(code,
+      var missing = MakePartMaterialPriceResolveResult.miss(code,
           problem.reason() == MonthlyAdoptionRetryPolicy.Failure.MISSING ? "MISSING_PRICE" : "ERROR",
           problem.message(), MonthlyPreparationPrice.KIND);
+      missing.setFailureReason(problem.reason().name());
+      return missing;
     }
     var result = MakePartMaterialPriceResolveResult.ok(code, value.selection().fact().type().name(),
         scenario.scenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE

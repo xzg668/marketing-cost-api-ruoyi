@@ -103,7 +103,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     }
     QuoteCostRunVersion version = versionMapper.selectById(costRunVersionId);
     validateVersion(version, costRunVersionId);
-    if (com.sanhua.marketingcost.service.costing.MonthlyProductCost.ALGORITHM_VERSION.equals(version.getAlgorithmVersion())) {
+    if (com.sanhua.marketingcost.service.costing.MonthlyProductCost.isMonthlyVersion(version.getAlgorithmVersion())) {
       return Objects.requireNonNull(monthlyCosting, "月价成本必须使用保存的差异依据")
           .difference(Objects.requireNonNull(monthlyVersions).read(version.getBusinessUnitType(), costRunVersionId));
     }

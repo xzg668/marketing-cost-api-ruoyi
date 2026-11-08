@@ -20,6 +20,8 @@ public interface QuoteEffectiveBomApplicationService {
   QuoteEffectiveBomCostingCandidate prepareRepriceCandidate(
       com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation calculation);
 
+  QuoteEffectiveBomCostingCandidate prepareTechnicalCandidate(String oaNo, Long oaFormItemId, String month);
+
   QuoteEffectiveBomCostingCandidate prepareCostingCandidate(
       String oaNo, Long oaFormItemId);
 }

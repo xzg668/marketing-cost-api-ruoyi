@@ -190,6 +190,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     // Missing department rates used to be stored as zero. Keep those versions as
     // history, but require a new calculation under the mandatory-fee/OA fallback rule.
     append(canonical, "departmentFeePolicy", "U9_OR_OA_REQUIRED_V1");
+    append(canonical, "materialDifferencePolicy",
+        com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);
     var monthly = monthlyInputs.read(form, item, pricingMonth);
     append(canonical, "monthlyPrices", monthly.evidence());

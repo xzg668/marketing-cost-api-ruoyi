@@ -112,8 +112,6 @@ class QuoteCostingWorkbenchServiceImplTest {
     when(workspaceService.find(anyLong(), anyString())).thenReturn(Optional.empty());
     quoteBomStatusService = mock(QuoteBomStatusService.class);
     electronicDrawingFallbackService = mock(ElectronicDrawingCostingFallbackService.class);
-    when(electronicDrawingFallbackService.resumeComposed(any(), any(), anyString()))
-        .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(false, false, null, null));
     when(electronicDrawingFallbackService.attempt(any(), any(), anyString()))
         .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(
             false, false, null, null));
@@ -489,7 +487,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     when(quoteBomStatusService.checkItemForCostRun(anyString(), anyLong(), anyString())).thenReturn(electronicStatus);
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(electronicDrawingFallbackService.resumeComposed(any(), any(), eq(SAMPLE_PERIOD_MONTH)))
+    when(electronicDrawingFallbackService.attempt(any(), any(), eq(SAMPLE_PERIOD_MONTH)))
         .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(
             true, false, ElectronicDrawingWorkflowStage.COMPOSED, "新原料待补价"));
     when(effectiveBomCostingService.prepareCurrent("OA-001", 10L))
@@ -502,7 +500,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getSnapshotGenerated()).isTrue();
     assertThat(response.getBuildBatchId()).isEqualTo("revised-drawing-build");
     verify(bomPreparationService, never()).prepareByOaFormItem(anyLong(), any(LocalDate.class));
-    verify(electronicDrawingFallbackService, never()).attempt(any(), any(), anyString());
+    verify(electronicDrawingFallbackService).attempt(any(), any(), anyString());
   }
 
   @Test

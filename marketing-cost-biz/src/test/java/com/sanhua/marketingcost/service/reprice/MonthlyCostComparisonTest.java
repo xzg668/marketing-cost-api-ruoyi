@@ -19,9 +19,41 @@ class MonthlyCostComparisonTest {
         LocalDateTime.of(2026,3,1,12,0),new BigDecimal("75.600"),Map.of(Metric.MATERIAL,new BigDecimal(amount)),
         "标准品",new BigDecimal("0.01"),"CMS",null);
   }
-  static Panel panel(ObjectIdentity id,YearMonth month,Line... lines){return new Panel(id,month,month.getYear()*100L+month.getMonthValue(),List.of(lines));}
+  static SelectedPanel selected(Panel p){return selected(p,"Customer-"+p.object().oaFormItemId());}
+  static SelectedPanel selected(Panel p,String customer){
+    String product=p.product()!=null?p.product().parent().code():p.lines().getFirst().parent().code();
+    return new SelectedPanel(new MonthlyCostComparisonScope.Selected(p.object().businessUnitType(),product,"OA_HEADER_CUSTOMER",customer,null,
+        p.month().toString(),p.object().oaNo(),p.object().oaFormItemId(),p.versionId(),null,null,null,p.versionId(),1,"SUCCESS",null),p);
+  }
+  static SelectedPanel panel(ObjectIdentity id,YearMonth month,Line... lines){return selected(new Panel(id,month,month.getYear()*100L+month.getMonthValue(),List.of(lines)));}
   static Result compare(List<Metric> metrics,Line[] a,Line[] b){return MonthlyCostComparison.compare(A,B,metrics,
       List.of(panel(OA,A,a)),List.of(panel(OA,B,b)));}
+  static Line unmatched(String id,String code,String amount) {
+    var known=line(OA,"root/"+code,code,amount);
+    return new Line(new Key(OA,List.of(),"",code,id),known.parent(),known.name(),known.unit(),known.completedAt(),
+        known.financeCuPrice(),known.amounts(),known.productProperty(),known.lossRate(),known.wageSource(),known.unapproved());
+  }
+  @Test void missingHistoricalPathsDoNotInventComponentAdditionsOrDiscardSavedAmounts() {
+    var before=unmatched("LEGACY:1:2","X","10");var after=line(OA,"root/X","X","12");
+    var pm=new ProductMonth(1,PARENT,before.completedAt(),before.financeCuPrice(),Map.of(Metric.MATERIAL,new BigDecimal("10")),null,null,null,null);
+    var pn=new ProductMonth(2,PARENT,after.completedAt(),after.financeCuPrice(),Map.of(Metric.MATERIAL,new BigDecimal("12")),null,null,null,null);
+    var result=MonthlyCostComparison.compare(A,B,List.of(Metric.MATERIAL),
+        List.of(selected(new Panel(OA,A,1,List.of(before),pm))),List.of(selected(new Panel(OA,B,2,List.of(after),pn))));
+    assertThat(result.rows()).hasSize(2).allSatisfy(row->{
+      assertThat(row.change().name()).isEqualTo("PATH_UNMATCHED");
+      assertThat(row.differences().get(Metric.MATERIAL).amount()).isEqualTo("-");
+      assertThat(row.differences().get(Metric.MATERIAL).explanation()).contains("路径");
+    });
+    assertThat(result.products().getFirst().differences().get(Metric.MATERIAL).amount()).isEqualTo("2.000000");
+  }
+  @Test void repeatedLegacyMaterialsWithNoPathsKeepEachOriginalRow() {
+    var result=compare(List.of(Metric.MATERIAL),new Line[]{unmatched("LEGACY:1:2","X","10"),unmatched("LEGACY:1:3","X","20")},
+        new Line[]{line(OA,"root/X","X","31")});
+    assertThat(result.rows()).hasSize(3);
+    assertThat(result.rows().stream().filter(row->row.baseline()!=null).map(row->row.baseline().amounts().get(Metric.MATERIAL)))
+        .containsExactlyInAnyOrder(new BigDecimal("10"),new BigDecimal("20"));
+    assertThat(result.rows()).noneMatch(row->row.change()==Change.ADDED || row.change()==Change.REMOVED);
+  }
   @Test void nonAdjacentCrossYearMonthsHaveCompleteUnionWithoutSyntheticZero(){
     var result=compare(List.of(Metric.MATERIAL),new Line[]{line(OA,"/root/A","000A","100"),line(OA,"/root/B","000B","50")},
         new Line[]{line(OA,"/root/A","000A","120"),line(OA,"/root/C","000C","80")});
@@ -67,9 +99,9 @@ class MonthlyCostComparisonTest {
     assertThat(result.warnings()).hasSize(2);
   }
   @ParameterizedTest @ValueSource(booleans={false,true}) void missingEntireSelectedMonthFailsClearly(boolean missingBaseline){
-    var p=panel(OA,A,line(OA,"/root/X","X","5"));var q=panel(OA,B,p.lines().getFirst());
+    var p=panel(OA,A,line(OA,"/root/X","X","5"));var q=panel(OA,B,p.panel().lines().getFirst());
     assertThatThrownBy(()->MonthlyCostComparison.compare(A,B,List.of(),missingBaseline?List.of():List.of(p),missingBaseline?List.of(q):List.of()))
-        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("没有成功核算结果");
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("没有已保存的核算对象");
   }
   @Test void sameMonthAndDuplicateIdentitiesDoNotProduceMisleadingComparison(){
     var row=line(OA,"/root/X","X","5");var p=panel(OA,A,row);
@@ -101,7 +133,7 @@ class MonthlyCostComparisonTest {
     var pm=new ProductMonth(1,PARENT,b.completedAt(),b.financeCuPrice(),oldCosts,"标准品",b.lossRate(),"CMS",null);
     var pn=new ProductMonth(2,PARENT,b.completedAt().plusMonths(3),b.financeCuPrice(),newCosts,"标准品",b.lossRate(),"CMS",null);
     var r=MonthlyCostComparison.compare(A,B,List.of(Metric.MATERIAL,Metric.DIRECT_LABOR,Metric.MANUFACTURE_COST),
-        List.of(new Panel(OA,A,1,List.of(b,c),pm)),List.of(new Panel(OA,B,2,List.of(newerB,newerC),pn)));
+        List.of(selected(new Panel(OA,A,1,List.of(b,c),pm))),List.of(selected(new Panel(OA,B,2,List.of(newerB,newerC),pn))));
     assertThat(r.rows().getFirst().differences().get(Metric.MATERIAL).amount()).isEqualTo("2.000000");
     assertThat(r.rows().get(1).differences().get(Metric.MATERIAL).amount()).isEqualTo("0.000000");
     assertThat(r.rows()).allSatisfy(row->{
@@ -118,6 +150,28 @@ class MonthlyCostComparisonTest {
     var row=line(OA,"root/B","B","10");
     var r=MonthlyCostComparison.comparePage(A,B,List.of(Metric.MATERIAL),List.of(),List.of(panel(OA,B,row)),Set.of(A,B));
     assertThat(r.rows().getFirst().change()).isEqualTo(Change.MONTH_MISSING);
+  }
+
+  @Test void customerIdentityPairsDifferentOasWithoutChangingEitherSavedOwners() {
+    var other=new ObjectIdentity("COMMERCIAL","OA-NEW",99);
+    var a=selected(new Panel(OA,A,1,List.of(line(OA,"root/X","X","10"))),"A");
+    var b=selected(new Panel(other,B,2,List.of(line(other,"root/X","X","12"))),"A");
+    var result=MonthlyCostComparison.compare(A,B,List.of(Metric.MATERIAL),List.of(a),List.of(b));
+    assertThat(result.products()).hasSize(1);assertThat(result.rows()).hasSize(1);
+    var row=result.rows().getFirst();assertThat(row.change()).isEqualTo(Change.CHANGED);
+    assertThat(row.baseline().key().object()).isEqualTo(OA);assertThat(row.comparison().key().object()).isEqualTo(other);
+    assertThat(row.objectKey()).isEqualTo(result.products().getFirst().objectKey());
+    assertThat(row.differences().get(Metric.MATERIAL).amount()).isEqualTo("2.000000");
+  }
+  @Test void twoUncalculatedMonthsHaveOneCustomerRowAndNoInventedAmounts() {
+    var a=new MonthlyCostComparisonScope.Selected("COMMERCIAL","00001","OA_HEADER_CUSTOMER","A",null,A.toString(),"OA-OLD",1,null,"MR-A",1L,null,10,2,"FAILED","missing price");
+    var b=new MonthlyCostComparisonScope.Selected("COMMERCIAL","00001","OA_HEADER_CUSTOMER","A",null,B.toString(),"OA-NEW",2,null,"MR-B",2L,null,11,3,"PENDING",null);
+    var result=MonthlyCostComparison.compare(A,B,List.of(Metric.MATERIAL),List.of(new SelectedPanel(a,null)),List.of(new SelectedPanel(b,null)));
+    assertThat(result.rows()).isEmpty();assertThat(result.products()).singleElement().satisfies(p->{
+      assertThat(p.baseline()).isNull();assertThat(p.comparison()).isNull();assertThat(p.change()).isEqualTo(Change.MONTH_MISSING);
+      assertThat(p.baselineState().reason()).isEqualTo("missing price");assertThat(p.comparisonState().status()).isEqualTo("PENDING");
+      assertThat(p.differences().get(Metric.MATERIAL).amount()).isEqualTo("-");
+    });
   }
 
 }

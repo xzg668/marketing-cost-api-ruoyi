@@ -213,7 +213,12 @@ class HttpDrawingVerificationClientTest {
     });
   }
 
-  private HttpDrawingVerificationClient client() { return new HttpDrawingVerificationClient(properties, new DrawingVerificationCodec(json), json); }
+  private HttpDrawingVerificationClient client() {
+    var guard = org.mockito.Mockito.mock(DrawingVerificationCallGuard.class);
+    org.mockito.Mockito.doAnswer(call -> ((java.util.function.Supplier<?>) call.getArgument(1)).get())
+        .when(guard).execute(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    return new HttpDrawingVerificationClient(properties, new DrawingVerificationCodec(json), json, guard);
+  }
   private DrawingVerificationClient.Query query() { return new DrawingVerificationClient.Query("YCQB05L89", "local-request-001", 41L, "OA-001", 81L, "2026-10"); }
   private JsonNode last() throws Exception { return json.readTree(events.list.getLast().getFormattedMessage()); }
   private String messages() { return events.list.stream().map(ILoggingEvent::getFormattedMessage).reduce("", (a, b) -> a + b); }

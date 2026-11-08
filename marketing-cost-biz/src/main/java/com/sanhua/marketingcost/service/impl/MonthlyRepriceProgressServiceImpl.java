@@ -17,8 +17,6 @@ public class MonthlyRepriceProgressServiceImpl implements MonthlyRepriceProgress
 
   private static final String STATUS_PENDING = "PENDING";
   private static final String STATUS_RUNNING = "RUNNING";
-  private static final String STATUS_SUCCESS = "SUCCESS";
-  private static final String STATUS_FAILED = "FAILED";
   private static final String STATUS_RETRYABLE = "RETRYABLE";
 
   private final MonthlyRepriceBatchMapper batchMapper;
@@ -34,8 +32,6 @@ public class MonthlyRepriceProgressServiceImpl implements MonthlyRepriceProgress
     this.resultMapper = resultMapper;
   }
 
-
-
   @Override
   public MonthlyRepriceProgressSnapshot getProgress(String repriceNo) {
     String normalizedRepriceNo = required("repriceNo", repriceNo);
@@ -44,8 +40,6 @@ public class MonthlyRepriceProgressServiceImpl implements MonthlyRepriceProgress
     int resultCount = safeLong(resultMapper.countByRepriceNo(normalizedRepriceNo));
     return snapshot(batch, counts, resultCount);
   }
-
-
 
   private MonthlyRepriceBatch findBatch(String repriceNo) {
     MonthlyRepriceBatch batch = batchMapper.selectOne(
@@ -60,11 +54,9 @@ public class MonthlyRepriceProgressServiceImpl implements MonthlyRepriceProgress
   private TaskCounts loadTaskCounts(String repriceNo) {
     int pending = 0;
     int running = 0;
-    int success = 0;
-    int failed = 0;
     List<CostRunTaskStatusCount> rows = taskMapper.selectMonthlyRepriceStatusCounts(repriceNo);
     if (rows == null) {
-      return new TaskCounts(0, 0, 0, 0);
+      return new TaskCounts(0, 0);
     }
     for (CostRunTaskStatusCount row : rows) {
       if (row == null) {
@@ -76,30 +68,16 @@ public class MonthlyRepriceProgressServiceImpl implements MonthlyRepriceProgress
         pending += count;
       } else if (STATUS_RUNNING.equals(status)) {
         running += count;
-      } else if (STATUS_SUCCESS.equals(status)) {
-        success += count;
-      } else if (STATUS_FAILED.equals(status)) {
-        failed += count;
       }
     }
-    return new TaskCounts(pending, running, success, failed);
+    return new TaskCounts(pending, running);
   }
-
-
-
-
-
-
 
   private MonthlyRepriceProgressSnapshot snapshot(
       MonthlyRepriceBatch batch, TaskCounts counts, int resultCount) {
     return MonthlyRepriceProgressSnapshot.of(
         batch, counts.pendingCount(), counts.runningCount(), resultCount);
   }
-
-
-
-
 
   private String required(String field, String value) {
     String normalized = normalize(value);
@@ -118,13 +96,10 @@ public class MonthlyRepriceProgressServiceImpl implements MonthlyRepriceProgress
         .trim();
   }
 
-
-
   private int safeLong(long value) {
     return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
   }
 
-  private record TaskCounts(
-      int pendingCount, int runningCount, int successCount, int failedCount) {
+  private record TaskCounts(int pendingCount, int runningCount) {
   }
 }

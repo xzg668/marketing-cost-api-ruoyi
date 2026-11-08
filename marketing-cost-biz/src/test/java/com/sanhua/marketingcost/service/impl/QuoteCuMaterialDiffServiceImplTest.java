@@ -80,6 +80,23 @@ class QuoteCuMaterialDiffServiceImplTest {
             objectMapper);
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"MONTHLY_PRODUCT_COST_V1","MONTHLY_PRODUCT_COST_V2"})
+  void currentAndHistoricalMonthlyVersionsUseOnlyTheirSavedDifference(String algorithm) {
+    var version=version();version.setAlgorithmVersion(algorithm);
+    when(versionMapper.selectById(VERSION_ID)).thenReturn(version);
+    var versions=Mockito.mock(com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.class);
+    var monthly=Mockito.mock(com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting.class,Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE));
+    var stored=new com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.Stored(version,null,List.of(),List.of());
+    when(versions.read(version.getBusinessUnitType(),VERSION_ID)).thenReturn(stored);
+    var expected=new com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffResult(VERSION_ID,version.getCostRunNo(),BigDecimal.ZERO,0,0,0,List.of());
+    when(monthly.difference(stored)).thenReturn(expected);
+    var reader=new QuoteCuMaterialDiffServiceImpl(versionMapper,batchMapper,itemMapper,makePartRowMapper,
+        linkedCalcItemMapper,factorQuoteBaseMappingMapper,objectMapper,versions,monthly);
+    assertThat(reader.calculate(VERSION_ID)).isSameAs(expected);
+    Mockito.verifyNoInteractions(batchMapper,itemMapper,makePartRowMapper,linkedCalcItemMapper,factorQuoteBaseMappingMapper);
+  }
+
   @Test
   void settlementAmountUsesCapturedPrecisionBeforeFinalAmountRounding() throws Exception {
     var oa = fixedItem(11L, "PPR-OA", "SET:SETTLEMENT", "SETTLEMENT", "3", "4.84102471", "14.52307412");

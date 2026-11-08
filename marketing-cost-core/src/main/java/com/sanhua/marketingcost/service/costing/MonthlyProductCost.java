@@ -11,8 +11,9 @@ import java.util.*;
 
 /** Pure versioned computation. MAKE/PACK amounts and non-BOM material retain their existing rules. */
 public final class MonthlyProductCost {
-  public static final String ALGORITHM_VERSION = "MONTHLY_PRODUCT_COST_V1";
+  public static final String ALGORITHM_VERSION = "MONTHLY_PRODUCT_COST_V2";
   public static final int SNAPSHOT_VERSION = 1;
+  public static boolean isMonthlyVersion(String version) { return ALGORITHM_VERSION.equals(version) || "MONTHLY_PRODUCT_COST_V1".equals(version); }
   private MonthlyProductCost() {}
 
   /** A settlement contributes once; its raw-component explanation rows do not contribute. */
@@ -80,8 +81,13 @@ public final class MonthlyProductCost {
 
   public record HouseholdLine(long monthlyPriceId, String materialCode, String pricingUnit,
       String sourceEvidenceHash, BigDecimal price, BigDecimal householdRate, BigDecimal salesRate,
-      BigDecimal quantity, BigDecimal amount, List<String> paths) {
+      BigDecimal quantity, BigDecimal amount, List<String> paths, BigDecimal customerPrice, BigDecimal customerAmount) {
+    public HouseholdLine(long id,String material,String unit,String hash,BigDecimal price,BigDecimal h,BigDecimal sales,BigDecimal quantity,BigDecimal amount,List<String> paths) {
+      this(id,material,unit,hash,price,h,sales,quantity,amount,paths,null,null);
+    }
     public HouseholdLine { paths = List.copyOf(paths); }
+    public BigDecimal effectiveCustomerPrice() { return customerPrice==null?price:customerPrice; }
+    public BigDecimal effectiveCustomerAmount() { return customerAmount==null?amount:customerAmount; }
   }
   public record FeeLine(ProductFeeCode code, BigDecimal amount, ProductFeeContract.State state,
       Long profileVersionId) {}
@@ -99,14 +105,141 @@ public final class MonthlyProductCost {
     }
   }
 
+  /** Public monthly price coordinates are shareable; private PROFILE/source coordinates are not. */
+  public record MaterialAmounts(String code, BigDecimal quantity, List<Long> monthlyPriceIds,
+      BigDecimal financeAmount, BigDecimal customerAmount, boolean contributes) {
+    public MaterialAmounts { monthlyPriceIds = monthlyPriceIds.stream().sorted().toList(); }
+  }
+  public record DetailAmounts(String code, String category, BigDecimal base, BigDecimal rate, BigDecimal amount) {}
+  public record FeeAmounts(ProductFeeCode code, BigDecimal amount, ProductFeeContract.State state) {}
+  public record HouseholdInput(long monthlyPriceId, String materialCode, String pricingUnit,
+      String sourceEvidenceHash, BigDecimal price, BigDecimal householdRate, BigDecimal salesRate,
+      BigDecimal quantity, BigDecimal customerPrice) {
+    public HouseholdInput {
+      if (customerPrice == null || customerPrice.signum() < 0)
+        throw new IllegalArgumentException("Invalid household customer price");
+    }
+  }
+  public record HouseholdAmount(long monthlyPriceId, BigDecimal amount, BigDecimal customerAmount) {}
+  public record NumericInputs(List<MaterialAmounts> materials, BigDecimal nonBomMaterial,
+      BigDecimal directLabor, BigDecimal indirectLabor, BigDecimal lossRate, BigDecimal manufactureRate,
+      BigDecimal coefficient, BigDecimal managementRate, BigDecimal salesRate, BigDecimal financeRate,
+      BigDecimal otherIndependentFees, List<DetailAmounts> details, List<HouseholdInput> household,
+      List<FeeAmounts> fees) {
+    public NumericInputs {
+      materials = List.copyOf(materials); details = List.copyOf(details);
+      household = List.copyOf(household); fees = List.copyOf(fees);
+    }
+  }
+  public record Numbers(NumericInputs inputs, OrdinaryCostAmounts.Result ordinary,
+      List<HouseholdAmount> household, BigDecimal financeMaterialCost, BigDecimal householdSubtotal,
+      BigDecimal householdContribution, BigDecimal productFeeTotal, BigDecimal totalCost,
+      BigDecimal cuMaterialAdjustment, BigDecimal finalQuoteAmount) {
+    public Numbers { household = List.copyOf(household); }
+  }
+
+  // Exact addition of material contributions is independent of their private preparation keys.
+  // Sort only the numerical comparison input; retain every occurrence and the consumer's own rows.
+  private static final Comparator<MaterialAmounts> MATERIAL_AMOUNTS_ORDER = Comparator
+      .comparing(MaterialAmounts::code).thenComparing(line -> line.monthlyPriceIds().toString())
+      .thenComparing(MaterialAmounts::quantity).thenComparing(MaterialAmounts::financeAmount)
+      .thenComparing(MaterialAmounts::customerAmount).thenComparing(MaterialAmounts::contributes);
+
+  /** Validated immutable customer binding. Creating it does not execute the cost formula. */
+  public static final class Resolved {
+    private final MonthlyAdoptionPlan plan;
+    private final Ordinary ordinary;
+    private final EffectiveTechnicalDataInput technical;
+    private final List<FeeLine> fees;
+    private final NumericInputs inputs;
+    private Resolved(MonthlyAdoptionPlan plan, Ordinary ordinary, EffectiveTechnicalDataInput technical,
+        List<FeeLine> fees, List<HouseholdInput> household) {
+      this.plan = plan; this.ordinary = ordinary; this.technical = technical; this.fees = List.copyOf(fees);
+      inputs = new NumericInputs(ordinary.materials().stream().map(line -> new MaterialAmounts(
+          line.materialCode(), line.quantity(), line.monthlyPriceIds(), line.financeAmount(),
+          line.customerAmount(), line.explanationOf() == null)).sorted(MATERIAL_AMOUNTS_ORDER).toList(), ordinary.nonBomMaterial(),
+          ordinary.directLabor(), ordinary.indirectLabor(), ordinary.lossRate(), ordinary.manufactureRate(),
+          ordinary.coefficient(), ordinary.managementRate(), ordinary.salesRate(), ordinary.financeRate(),
+          ordinary.otherIndependentFees(), ordinary.details().stream().map(row -> new DetailAmounts(
+              row.costCode(), row.category(), row.baseAmount(), row.rate(), row.amount())).toList(),
+          household, fees.stream().map(fee -> new FeeAmounts(fee.code(), fee.amount(), fee.state())).toList());
+    }
+    public NumericInputs inputs() { return inputs; }
+    private List<HouseholdLine> bindHousehold(List<HouseholdAmount> numbers) {
+      if (numbers.size() != inputs.household().size()) throw new IllegalArgumentException("Shared household scope differs");
+      var pathsByPrice = new HashMap<Long, List<String>>();
+      for (var use : plan.uses()) {
+        var selected = plan.selections().get(use.request());
+        if (selected.fact().type() == PricingType.HOUSEHOLD_INQUIRY)
+          pathsByPrice.computeIfAbsent(selected.monthlyPriceId(), ignored -> new ArrayList<>()).add(use.path());
+      }
+      var result = new ArrayList<HouseholdLine>();
+      for (int i = 0; i < numbers.size(); i++) {
+        var number = numbers.get(i); var input = inputs.household().get(i);
+        if (number.monthlyPriceId() != input.monthlyPriceId())
+          throw new IllegalArgumentException("Shared household identity differs");
+        var paths = pathsByPrice.get(input.monthlyPriceId()).stream().sorted().toList();
+        result.add(new HouseholdLine(input.monthlyPriceId(), input.materialCode(), input.pricingUnit(),
+            input.sourceEvidenceHash(), input.price(), input.householdRate(), input.salesRate(), input.quantity(), number.amount(), paths, input.customerPrice(), number.customerAmount()));
+      }
+      return List.copyOf(result);
+    }
+    public Result bind(Numbers numbers) {
+      if (!CalculationInputEquality.same(inputs, numbers.inputs()))
+        throw new IllegalArgumentException("Shared monthly calculation inputs differ from this consumer");
+      return new Result(ALGORITHM_VERSION, ProductFeeContract.POLICY_VERSION, ordinary, numbers.ordinary(),
+          plan.selections().entrySet().stream()
+              .sorted(Comparator.comparing(entry -> entry.getKey().family().canonical() + entry.getKey().priceOrgCode() + entry.getKey().conditions()))
+              .map(entry -> new AdoptedPrice(entry.getKey(), entry.getValue())).toList(), plan.uses(), plan.suppressedPaths(),
+          bindHousehold(numbers.household()), fees, numbers.financeMaterialCost(), numbers.householdSubtotal(),
+          numbers.householdContribution(), numbers.productFeeTotal(), numbers.totalCost(), numbers.cuMaterialAdjustment(),
+          numbers.finalQuoteAmount(), technical);
+    }
+  }
+
   public static Result calculate(MonthlyAdoptionPlan plan, Ordinary input,
       EffectiveTechnicalDataInput technical) {
+    return calculate(plan, input, technical, Map.of());
+  }
+
+  public static Result calculate(MonthlyAdoptionPlan plan, Ordinary input,
+      EffectiveTechnicalDataInput technical, Map<Long, BigDecimal> householdCustomerPrices) {
+    var resolved = resolve(plan, input, technical, householdCustomerPrices);
+    return resolved.bind(calculate(resolved.inputs()));
+  }
+
+  public static Resolved resolve(MonthlyAdoptionPlan plan, Ordinary input, EffectiveTechnicalDataInput technical) {
+    return resolve(plan, input, technical, Map.of());
+  }
+
+  public static Resolved resolve(MonthlyAdoptionPlan plan, Ordinary input,
+      EffectiveTechnicalDataInput technical, Map<Long, BigDecimal> householdCustomerPrices) {
+    Objects.requireNonNull(householdCustomerPrices);
     Objects.requireNonNull(plan); Objects.requireNonNull(input);
     validateScope(plan, input.materials());
+    var fees = fees(technical);
+    var groups = new TreeMap<Long, List<Use>>();
+    for (var use : plan.uses()) {
+      var price = plan.selections().get(use.request());
+      if (price.fact().type() == PricingType.HOUSEHOLD_INQUIRY)
+        groups.computeIfAbsent(price.monthlyPriceId(), ignored -> new ArrayList<>()).add(use);
+    }
+    var household = new ArrayList<HouseholdInput>();
+    for (var entry : groups.entrySet()) {
+      var uses = entry.getValue(); var first = uses.getFirst(); var fact = plan.selections().get(first.request()).fact();
+      BigDecimal quantity = uses.stream().map(Use::cumulativeQuantity).reduce(BigDecimal.ZERO, BigDecimal::add);
+      household.add(new HouseholdInput(entry.getKey(), first.request().family().materialCode(),
+          first.request().family().unit(), fact.evidence().sha256(), fact.price(), fact.householdRate(),
+          input.salesRate(), quantity, householdCustomerPrices.getOrDefault(entry.getKey(), fact.price())));
+    }
+    return new Resolved(plan, input, technical, fees, household);
+  }
+
+  /** Original arithmetic and rounding, executed once per exact resolved input. No customer sources. */
+  public static Numbers calculate(NumericInputs input) {
     BigDecimal material = input.nonBomMaterial();
     BigDecimal difference = BigDecimal.ZERO;
-    for (var line : input.materials()) if (line.explanationOf() == null) {
-      // Ordinary part amounts retain the existing per-line six-place boundary.
+    for (var line : input.materials()) if (line.contributes()) {
       material = material.add(OrdinaryCostAmounts.money(line.financeAmount()));
       difference = difference.add(line.customerAmount().subtract(line.financeAmount()));
     }
@@ -114,41 +247,26 @@ public final class MonthlyProductCost {
     var amounts = OrdinaryCostAmounts.calculate(material, input.directLabor(), input.indirectLabor(),
         input.lossRate(), input.manufactureRate(), input.coefficient(), input.managementRate(),
         input.salesRate(), input.financeRate(), input.otherIndependentFees());
-    var groups = new TreeMap<Long, List<Use>>();
-    for (var use : plan.uses()) {
-      var price = plan.selections().get(use.request());
-      if (price.fact().type() == PricingType.HOUSEHOLD_INQUIRY)
-        groups.computeIfAbsent(price.monthlyPriceId(), ignored -> new ArrayList<>()).add(use);
-    }
-    var household = new ArrayList<HouseholdLine>();
+    var household = new ArrayList<HouseholdAmount>();
     BigDecimal subtotal = BigDecimal.ZERO;
-    for (var entry : groups.entrySet()) {
-      var uses = entry.getValue();
-      var first = uses.getFirst();
-      var selection = plan.selections().get(first.request());
-      var fact = selection.fact();
-      BigDecimal quantity = uses.stream().map(Use::cumulativeQuantity).reduce(BigDecimal.ZERO, BigDecimal::add);
-      // Keep the rational calculation intact until the line boundary, including fractional Q.
-      BigDecimal amount = fact.price().multiply(BigDecimal.ONE.add(fact.householdRate()).add(input.salesRate()))
-          .multiply(quantity).divide(BigDecimal.ONE.add(fact.householdRate()), 6, RoundingMode.HALF_UP);
-      household.add(new HouseholdLine(entry.getKey(), first.request().family().materialCode(),
-          first.request().family().unit(), fact.evidence().sha256(), fact.price(), fact.householdRate(),
-          input.salesRate(), quantity, amount, uses.stream().map(Use::path).sorted().toList()));
+    for (var line : input.household()) {
+      BigDecimal amount = line.price().multiply(BigDecimal.ONE.add(line.householdRate()).add(input.salesRate()))
+          .multiply(line.quantity()).divide(BigDecimal.ONE.add(line.householdRate()), 6, RoundingMode.HALF_UP);
+      BigDecimal customerAmount = line.customerPrice().multiply(BigDecimal.ONE.add(line.householdRate()).add(input.salesRate()))
+          .multiply(line.quantity()).divide(BigDecimal.ONE.add(line.householdRate()), 6, RoundingMode.HALF_UP);
+      difference = difference.add(customerAmount.subtract(amount));
+      household.add(new HouseholdAmount(line.monthlyPriceId(), amount, customerAmount));
       subtotal = subtotal.add(amount);
     }
     subtotal = OrdinaryCostAmounts.money(subtotal);
     BigDecimal contribution = OrdinaryCostAmounts.money(subtotal.multiply(input.coefficient()));
-    var fees = fees(technical);
-    BigDecimal feeTotal = fees.stream().map(FeeLine::amount).filter(Objects::nonNull)
+    BigDecimal feeTotal = input.fees().stream().map(FeeAmounts::amount).filter(Objects::nonNull)
         .reduce(BigDecimal.ZERO, BigDecimal::add);
     feeTotal = OrdinaryCostAmounts.money(feeTotal);
     BigDecimal total = OrdinaryCostAmounts.money(amounts.total().add(contribution).add(feeTotal));
     difference = OrdinaryCostAmounts.money(difference);
-    return new Result(ALGORITHM_VERSION, ProductFeeContract.POLICY_VERSION, input, amounts, plan.selections().entrySet().stream()
-            .sorted(Comparator.comparing(entry -> entry.getKey().family().canonical() + entry.getKey().priceOrgCode() + entry.getKey().conditions()))
-            .map(entry -> new AdoptedPrice(entry.getKey(), entry.getValue())).toList(), plan.uses(), plan.suppressedPaths(),
-        household, fees, material, subtotal, contribution, feeTotal, total, difference,
-        OrdinaryCostAmounts.money(total.add(difference)), technical);
+    return new Numbers(input, amounts, household, material, subtotal, contribution, feeTotal, total, difference,
+        OrdinaryCostAmounts.money(total.add(difference)));
   }
 
   private static List<FeeLine> fees(EffectiveTechnicalDataInput technical) {

@@ -608,7 +608,7 @@ class QuoteEffectiveBomToCostingRowsTest {
     });
     var codec = new MonthlyPriceDocumentCodec(json);
     var source = new HouseholdMonthlyPriceSource(new HouseholdInquiryStorage(
-        mock(com.sanhua.marketingcost.mapper.monthly.HouseholdInquiryStorageMapper.class), codec), codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class));
+        mock(com.sanhua.marketingcost.mapper.monthly.HouseholdInquiryStorageMapper.class), codec), codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader.class));
     QuotationPriceSessions sessions = request -> new QuotationPriceSession() {
       @Override public MonthlyMaterialPrices.Context context() {
         return new MonthlyMaterialPrices.Context(request.businessUnit(), request.oaNo(), request.supplierReviews().oaFormItemId(),

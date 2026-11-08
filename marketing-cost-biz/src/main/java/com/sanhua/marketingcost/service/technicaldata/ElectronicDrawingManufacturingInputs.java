@@ -37,7 +37,13 @@ public class ElectronicDrawingManufacturingInputs {
     if (drawing == null) return Map.of();
     var context = contexts.load(drawing.product().getOaFormItemId(), drawing.task().getBusinessUnitType(),
         drawing.task().getApplicableOrgCode(), drawing.product().getAccountingMonth());
-    if (context.sourceVersionId() == null) return Map.of();
+    return read(context, drawing.version().getId());
+  }
+
+  public Map<String, TechnicalManufacturingInputs.Input> read(
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext context,
+      Long technicalVersionId) {
+    if (context == null || context.sourceVersionId() == null) return Map.of();
     var source = sourceNodes.findByVersionId(context.sourceVersionId()).stream()
         .collect(Collectors.toMap(com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode::getId, Function.identity()));
     var rows = details.selectList(Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
@@ -72,7 +78,7 @@ public class ElectronicDrawingManufacturingInputs {
       var material = new RawMaterial("DRAWING_RAW:" + original.getId(), original.getId().toString(),
           context.sourceVersionId(), parent.getMaterialCode(), raw.getMaterialCode(), raw.getDrawingNo(),
           netG.movePointLeft(3), raw.getQtyPerParent(), raw.getUnit(), null, grossG.movePointLeft(3), null, evidence);
-      result.put(parent.getPath(), new TechnicalManufacturingInputs.Input(drawing.version().getId(), parent.getPath(), material));
+      result.put(parent.getPath(), new TechnicalManufacturingInputs.Input(technicalVersionId, parent.getPath(), material));
     }
     return Map.copyOf(result);
   }

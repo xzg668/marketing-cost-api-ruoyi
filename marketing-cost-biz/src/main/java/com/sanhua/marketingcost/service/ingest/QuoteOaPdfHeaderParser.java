@@ -81,6 +81,10 @@ public class QuoteOaPdfHeaderParser {
             trimToNull(line.substring(valueStart, nextLabelIndex(line, valueStart, allLabels)));
         if (!StringUtils.hasText(value) && allowNextLineValue(field)) {
           value = nextLineValue(lines, lineIndex + 1, allLabels);
+          // A blank final-tender cell can be followed by the wrapped preliminary label.
+          // Only an actual yes/no value belongs to this optional field.
+          if ("boardTender".equals(field.getFieldCode())
+              && !"是".equals(value) && !"否".equals(value)) return null;
         }
         if (StringUtils.hasText(value)) {
           return new FieldValue(value, "PDF:line:" + (lineIndex + 1) + ":" + alias);

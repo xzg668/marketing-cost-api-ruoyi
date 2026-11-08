@@ -19,27 +19,32 @@ public class TechnicalDataManufacturingBomSource {
   private final TechnicalDataTaskRepository tasks;
   private final TechnicalDataVersionContentCodec codec;
   private final MaterialMasterRawMapper materials;
+  private final com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse;
 
   public TechnicalDataManufacturingBomSource(QuoteTechnicalDataRepository repository,
-      TechnicalDataTaskRepository tasks, TechnicalDataVersionContentCodec codec, MaterialMasterRawMapper materials) {
+      TechnicalDataTaskRepository tasks, TechnicalDataVersionContentCodec codec, MaterialMasterRawMapper materials,
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse) {
+    this.drawingReuse = drawingReuse;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.materials = materials;
   }
 
   public List<ManufacturingRawNode> load(ElectronicDrawingWorkContext context) {
+    var reused = reused(context);
     var product = repository.findActiveProduct(context.oaFormItemId(), context.accountingMonth()).orElse(null);
-    if (product == null) return List.of();
+    if (product == null) return reused;
     var module = tasks.findModules(product.getId()).stream().filter(row -> "MANUFACTURING".equals(row.getModuleType())).findFirst().orElse(null);
     if (module == null || !Objects.equals(module.getRequiredFlag(), 1)
-        || !"MISSING".equals(module.getSourceAvailability())) return List.of();
+        || !"MISSING".equals(module.getSourceAvailability())) return reused;
     Long selected = Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(module.getModuleStatus())
         ? module.getCurrentVersionId() : product.getCurrentEditVersionId();
-    if (selected == null) return List.of();
+    if (selected == null) return reused;
     var version = repository.findVersion(selected).orElseThrow(() -> invalid("制造件补录版本不存在"));
     if (!Objects.equals(version.getProductId(), product.getId())) throw invalid("制造件补录版本归属不一致");
     var content = codec.manufacturing(version);
-    if (content == null) return List.of();
+    if (content == null) return reused;
     if (!TechnicalDataManufacturingRules.validate(content, product).isEmpty()) throw invalid("制造件补录输入或单位不完整");
     if (!Objects.equals(content.evidence().drawingSourceVersionId(), context.sourceVersionId())) {
+      if (drawingReuse.verifiedRevision(context)) return reused;
       throw invalid("图库版本已变化，请核实原材料关系，不能跨来源节点套用");
     }
     var result = new ArrayList<ManufacturingRawNode>();
@@ -70,6 +75,25 @@ public class TechnicalDataManufacturingBomSource {
               row.parentMaterialNo(),
               material,
               row.quantityPerParent()));
+    }
+    var own = result.stream().map(ManufacturingRawNode::parentSourceNodeId).collect(java.util.stream.Collectors.toSet());
+    reused.stream().filter(row -> !own.contains(row.parentSourceNodeId())).forEach(result::add);
+    return List.copyOf(result);
+  }
+
+  private List<ManufacturingRawNode> reused(ElectronicDrawingWorkContext context) {
+    var result = new ArrayList<ManufacturingRawNode>();
+    for (var reused : drawingReuse.read(context)) {
+      var input = reused.input();
+      var matches = materials.selectByLatestBatchAndCodes(Set.of(input.rawMaterialNo()), null, context.materialOrgCode());
+      if (matches.size() != 1 || !Objects.equals(matches.getFirst().getUnit(), input.unit()))
+        throw invalid("复用原材料的料品或采购单位已变化，请重新核实");
+      var raw = matches.getFirst();
+      var material = new MaterialSnapshot(raw.getMaterialCode(), raw.getMaterialName(), raw.getMaterialSpec(),
+          raw.getMaterialModel(), raw.getDrawingNo(), raw.getShapeAttr(), raw.getMainCategoryCode(),
+          raw.getProductionCategory(), raw.getCostElement(), raw.getUnit());
+      result.add(new ManufacturingRawNode(reused.technicalVersionId(), reused.itemKey(), reused.nodeId(),
+          input.parentMaterialNo(), material, input.quantityPerParent()));
     }
     return List.copyOf(result);
   }

@@ -137,11 +137,11 @@ public class ScrapPriceCalculationEvidence {
 
   public static boolean isScrap(String encoded) {
     // 只是价源识别；真正读取时仍做完整结构与金额校验。
-    if (encoded == null || !encoded.contains(SOURCE)) return false;
+    if (encoded == null) return false;
     try {
       var snapshot = SOURCE_READER.readTree(encoded);
       if (snapshot.path("document").isTextual()) {
-        var input = SOURCE_READER.readTree(snapshot.path("document").asText());
+        var input = SOURCE_READER.readTree(MONTHLY_DOCUMENTS.unwrap(encoded));
         if (MonthlyPreparationPrice.KIND.equals(input.path("sourceKind").asText())) {
           var captured = MONTHLY_DOCUMENTS.decode(encoded, MonthlyPreparationPrice.class);
           return SOURCE.equals(SOURCE_READER.readTree(captured.selection().fact().evidence().json())

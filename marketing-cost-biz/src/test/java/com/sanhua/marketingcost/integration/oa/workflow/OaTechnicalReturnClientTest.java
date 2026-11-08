@@ -82,7 +82,7 @@ class OaTechnicalReturnClientTest {
                     new OaTechnicalReturnClient.Target(
                         "P2", List.of("PACKAGE"), "001234", "张三", "核实包装用量"))));
     assertThat(body.path("userid").asText()).isEqualTo("00101516");
-    assertThat(body.at("/otherParams/src").asText()).isEqualTo("submit");
+    assertThat(body.at("/otherParams/src").asText()).isEqualTo("save");
     assertThat(body.at("/formData/dataDetails/0/dataKey").asText()).isEqualTo("jsy");
     assertThat(body.at("/formData/dataDetails/0/dataOptions")).hasSize(1);
     assertThat(body.at("/formData/dataDetails/0/dataOptions/0/optionId").asText())
@@ -91,6 +91,22 @@ class OaTechnicalReturnClientTest {
         .contains("产品P1", "工资改为2元", "产品P2", "核实包装用量", "https://quote.test")
         .doesNotContain("净损失率");
     verifyNoInteractions(workflow);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"FI-SC-005", "FI-SC-006", "FI-SC-020", "FI-SR-005"})
+  void bothBusinessUnitsSaveReturnPeopleBeforeRejecting(String process) {
+    properties.getTechnicalPeopleDataKeys().putIfAbsent(process, "jsy");
+    var command = new OaTechnicalReturnClient.Request("FLOW-1", process, "00101516",
+        List.of(new OaTechnicalReturnClient.Target("P1", List.of("PROFILE"), "001234", "张三", "修改")),
+        "https://quote.test/technical-data/workbench?formId=1");
+    when(workflow.submit(any())).thenReturn(new OaWorkflowResult("test", OaWorkflowResult.Status.SUCCESS,
+        200, "0", "成功", "FLOW-1", null, 1));
+    var body = client.preview(command);
+    client.updateTechnicians(body);
+    verify(workflow).submit(argThat(actual -> actual.at("/otherParams/src").asText().equals("save")));
+    assertThat(OaTechnicalPeopleRequest.build(new ObjectMapper(), "jsy", "FLOW-1", "00101516",
+        List.of("001234"), "分派技术员").at("/otherParams/src").asText()).isEqualTo("submit");
   }
 
   @Test

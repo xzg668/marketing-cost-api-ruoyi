@@ -23,20 +23,22 @@ public class HttpDrawingVerificationClient implements DrawingVerificationClient 
   private final DrawingVerificationCodec codec;
   private final ObjectMapper json;
   private final HttpClient client;
+  private final DrawingVerificationCallGuard calls;
 
   @Autowired
   public HttpDrawingVerificationClient(DrawingVerificationProperties properties,
-      DrawingVerificationCodec codec, ObjectMapper json) {
+      DrawingVerificationCodec codec, ObjectMapper json, DrawingVerificationCallGuard calls) {
     this(properties, codec, json, HttpClient.newBuilder().connectTimeout(properties.getConnectTimeout())
-        .followRedirects(HttpClient.Redirect.NEVER).build());
+        .followRedirects(HttpClient.Redirect.NEVER).build(), calls);
   }
 
   HttpDrawingVerificationClient(DrawingVerificationProperties properties,
-      DrawingVerificationCodec codec, ObjectMapper json, HttpClient client) {
+      DrawingVerificationCodec codec, ObjectMapper json, HttpClient client, DrawingVerificationCallGuard calls) {
     this.properties = properties;
     this.codec = codec;
     this.json = json;
     this.client = client;
+    this.calls = calls;
   }
 
   @Override public DrawingVerificationPayload verify(Query query) {
@@ -51,6 +53,10 @@ public class HttpDrawingVerificationClient implements DrawingVerificationClient 
     HttpRequest request = HttpRequest.newBuilder(properties.endpoint()).timeout(properties.getRequestTimeout())
         .header("Content-Type", "application/json").header("Accept", "application/json")
         .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
+    return calls.execute(request.uri(), () -> verify(query, request, body));
+  }
+
+  private DrawingVerificationPayload verify(Query query, HttpRequest request, String body) {
     try (var log = ExternalInterfaceLog.start("DRAWING_PDF", "OUTBOUND", "POST", request.uri(), request.headers().map())) {
       log.request(body);
       log.correlate("requestId", query.requestId());

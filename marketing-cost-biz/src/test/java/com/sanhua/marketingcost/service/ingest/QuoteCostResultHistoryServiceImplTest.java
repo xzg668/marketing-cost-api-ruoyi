@@ -9,15 +9,14 @@ import static org.mockito.Mockito.when;
 import com.sanhua.marketingcost.dto.ingest.QuoteCostResultHistoryResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteMonthlyCostResultDetailResponse;
 import com.sanhua.marketingcost.entity.MonthlyRepriceBatch;
-import com.sanhua.marketingcost.entity.MonthlyRepriceCostItem;
-import com.sanhua.marketingcost.entity.MonthlyRepricePartItem;
+import com.sanhua.marketingcost.dto.MonthlyRepriceCostItemDto;
+import com.sanhua.marketingcost.dto.MonthlyRepricePartItemDto;
 import com.sanhua.marketingcost.entity.MonthlyRepriceResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceBatchMapper;
-import com.sanhua.marketingcost.mapper.MonthlyRepriceCostItemMapper;
-import com.sanhua.marketingcost.mapper.MonthlyRepricePartItemMapper;
+import com.sanhua.marketingcost.service.MonthlyRepriceQueryService;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceResultMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -39,8 +38,7 @@ class QuoteCostResultHistoryServiceImplTest {
   private QuoteCostRunVersionMapper versionMapper;
   private MonthlyRepriceBatchMapper batchMapper;
   private MonthlyRepriceResultMapper resultMapper;
-  private MonthlyRepricePartItemMapper partMapper;
-  private MonthlyRepriceCostItemMapper costMapper;
+  private MonthlyRepriceQueryService monthlyQuery;
   private QuoteCostResultHistoryServiceImpl service;
 
   @BeforeEach
@@ -50,11 +48,10 @@ class QuoteCostResultHistoryServiceImplTest {
     versionMapper = mock(QuoteCostRunVersionMapper.class);
     batchMapper = mock(MonthlyRepriceBatchMapper.class);
     resultMapper = mock(MonthlyRepriceResultMapper.class);
-    partMapper = mock(MonthlyRepricePartItemMapper.class);
-    costMapper = mock(MonthlyRepriceCostItemMapper.class);
+    monthlyQuery = mock(MonthlyRepriceQueryService.class);
     service =
         new QuoteCostResultHistoryServiceImpl(
-            formMapper, itemMapper, versionMapper, batchMapper, resultMapper, partMapper, costMapper);
+            formMapper, itemMapper, versionMapper, batchMapper, resultMapper, monthlyQuery);
 
     UsernamePasswordAuthenticationToken authentication =
         new UsernamePasswordAuthenticationToken("finance", null, List.of());
@@ -64,8 +61,6 @@ class QuoteCostResultHistoryServiceImplTest {
     when(formMapper.selectOne(any())).thenReturn(form());
     when(itemMapper.selectById(9L)).thenReturn(item());
     when(itemMapper.selectCount(any())).thenReturn(1L);
-    when(partMapper.selectList(any())).thenReturn(List.of());
-    when(costMapper.selectList(any())).thenReturn(List.of());
   }
 
   @AfterEach
@@ -80,7 +75,7 @@ class QuoteCostResultHistoryServiceImplTest {
     quote.setFinalQuoteAmount(new BigDecimal("150.13413673"));
     MonthlyRepriceResult monthly = monthlyResult();
     when(versionMapper.selectList(any())).thenReturn(List.of(quote));
-    when(resultMapper.selectList(any())).thenReturn(List.of(monthly));
+    when(resultMapper.publishedLegacyResults(any(),any(),any())).thenReturn(List.of(monthly));
     when(batchMapper.selectList(any())).thenReturn(List.of(confirmedBatch()));
 
     QuoteCostResultHistoryResponse response =
@@ -104,14 +99,15 @@ class QuoteCostResultHistoryServiceImplTest {
   @Test
   void readsMonthlyDetailsForDeletedLegacyItemWhenOneActiveProductMatches() {
     MonthlyRepriceResult monthly = monthlyResult();
-    MonthlyRepricePartItem part = new MonthlyRepricePartItem();
+    MonthlyRepricePartItemDto part = new MonthlyRepricePartItemDto();
     part.setPartCode("PART-1");
-    MonthlyRepriceCostItem cost = new MonthlyRepriceCostItem();
+    MonthlyRepriceCostItemDto cost = new MonthlyRepriceCostItemDto();
     cost.setCostItemCode("TOTAL");
     when(resultMapper.selectById(6L)).thenReturn(monthly);
+    when(resultMapper.publishedResult(monthly.getRepriceNo(),6L)).thenReturn(monthly);
     when(batchMapper.selectOne(any())).thenReturn(confirmedBatch());
-    when(partMapper.selectList(any())).thenReturn(List.of(part));
-    when(costMapper.selectList(any())).thenReturn(List.of(cost));
+    when(monthlyQuery.listPublishedPartItems(monthly.getRepriceNo(), 6L)).thenReturn(List.of(part));
+    when(monthlyQuery.listPublishedCostItems(monthly.getRepriceNo(), 6L)).thenReturn(List.of(cost));
 
     QuoteMonthlyCostResultDetailResponse response =
         service.getMonthlyResult("FI-SC-006-20260327-037", 9L, 6L);
@@ -124,7 +120,7 @@ class QuoteCostResultHistoryServiceImplTest {
   @Test
   void doesNotExposeUnconfirmedMonthlyResult() {
     when(versionMapper.selectList(any())).thenReturn(List.of(quoteVersion()));
-    when(resultMapper.selectList(any())).thenReturn(List.of(monthlyResult()));
+    when(resultMapper.publishedLegacyResults(any(),any(),any())).thenReturn(List.of(monthlyResult()));
     when(batchMapper.selectList(any())).thenReturn(List.of());
 
     QuoteCostResultHistoryResponse response =
@@ -139,11 +135,42 @@ class QuoteCostResultHistoryServiceImplTest {
     MonthlyRepriceResult monthly = monthlyResult();
     monthly.setProductCode("OTHER");
     when(resultMapper.selectById(6L)).thenReturn(monthly);
+    when(resultMapper.publishedResult(monthly.getRepriceNo(),6L)).thenReturn(monthly);
 
     assertThatThrownBy(
             () -> service.getMonthlyResult("FI-SC-006-20260327-037", 9L, 6L))
         .isInstanceOf(QuoteIngestException.class)
         .hasMessageContaining("不属于当前报价产品行");
+  }
+
+  @Test void mergedOaHistoryUsesExactSavedMembershipAndSharedDetailReader() {
+    var monthly=monthlyResult();monthly.setReuseBatchId(17L);monthly.setContractVersion(1);
+    monthly.setOaNo("SELECTED-OTHER-OA");monthly.setOaFormItemId(20L);
+    when(resultMapper.confirmedForSource("COMMERCIAL",form().getOaNo(),9L,"1079900000536"))
+        .thenReturn(List.of(monthly));
+    when(batchMapper.selectList(any())).thenReturn(List.of(confirmedBatch()));
+    assertThat(service.listHistory(form().getOaNo(),9L).getResults())
+        .extracting("sourceId").containsExactly(6L);
+    when(resultMapper.selectById(6L)).thenReturn(monthly);
+    when(resultMapper.publishedResult(monthly.getRepriceNo(),6L)).thenReturn(monthly);
+    when(batchMapper.selectOne(any())).thenReturn(confirmedBatch());
+    when(resultMapper.sourceMembership(17L,6L,form().getOaNo(),9L)).thenReturn(1L);
+    var part=new MonthlyRepricePartItemDto();part.setPartCode("SAVED-PART");
+    when(monthlyQuery.listPublishedPartItems(monthly.getRepriceNo(),6L)).thenReturn(List.of(part));
+    assertThat(service.getMonthlyResult(form().getOaNo(),9L,6L).getPartItems())
+        .extracting("partCode").containsExactly("SAVED-PART");
+    org.mockito.Mockito.verify(monthlyQuery).listPublishedCostItems(monthly.getRepriceNo(),6L);
+  }
+
+  @Test void newScopeCannotUseLegacySingleProductFallbackToClaimAnotherOaResult() {
+    var monthly=monthlyResult();monthly.setReuseBatchId(17L);monthly.setContractVersion(1);
+    when(resultMapper.selectById(6L)).thenReturn(monthly);
+    when(resultMapper.publishedResult(monthly.getRepriceNo(),6L)).thenReturn(monthly);
+    // Old history permits a reimported unique item; a new scope requires its saved source link.
+    when(itemMapper.selectCount(any())).thenReturn(1L);
+    assertThatThrownBy(() -> service.getMonthlyResult(form().getOaNo(),9L,6L))
+        .isInstanceOf(QuoteIngestException.class).hasMessageContaining("不属于当前报价产品行");
+    org.mockito.Mockito.verifyNoInteractions(monthlyQuery);
   }
 
   private OaForm form() {

@@ -184,7 +184,10 @@ public class TechnicalDataPriceApplicationService {
   }
 
   public List<String> validateCurrent(QuoteTechProduct product, QuoteTechDataVersion version) {
-    if (reuse.unchanged(product, version, "PRICE")) {
+    boolean shared = tasks.findModules(product.getId()).stream().anyMatch(module ->
+        "PRICE".equals(module.getModuleType()) && "TECH_PRICE_SHARED".equals(module.getReferenceSourceType()));
+    // 空的本地输入并不能证明引用仍可用；退回重提时检查原产品当前保存的价格。
+    if (!shared && reuse.unchanged(product, version, "PRICE")) {
       var saved = codec.prices(version);
       var problems = new ArrayList<String>();
       for (var row : saved.items()) {

@@ -27,6 +27,10 @@ public class SecurityQuoteEffectiveBomActorProvider
     if (authentication == null) {
       throw new IllegalStateException("当前登录用户缺少用户ID，不能生成报价物料");
     }
+    if (authentication.getPrincipal() instanceof com.sanhua.marketingcost.integration.oa.oauth.OaOAuthPrincipal person) {
+      if (!positive(person.userId())) throw new IllegalStateException("OA 登录用户缺少有效用户ID，不能生成报价物料");
+      return person.userId();
+    }
     Long detailUserId = detailUserId(authentication.getDetails());
     if (positive(detailUserId)) {
       return detailUserId;

@@ -29,7 +29,7 @@ class TechnicalPriceCostingSourcesTest {
       5L, 20L, 30L, 11L, "ORIGINAL-PRODUCT", "PRICE", "APPROVED", "APPROVED", 1L, "张工", 39L, "APPROVED", "COMMERCIAL", "210", "2026-08");
 
   @BeforeEach void source() {
-    when(claims.find("BUY")).thenReturn(new TechnicalDataPriceOwner("BUY", 5L, 20L, 30L, "张工", "APPROVED", "APPROVED", 39L, "210", "COMMERCIAL", "只", "CNY"));
+    when(claims.find("BUY")).thenReturn(new TechnicalDataPriceOwner("BUY", 5L, 20L, 30L, "张工", "APPROVED", "APPROVED", 39L, "210", "COMMERCIAL", "只", "CNY", "SOURCE-PRODUCT"));
     when(modules.module(20L, "PRICE")).thenReturn(owner);
     when(jdbc.queryForObject(anyString(), eq(Integer.class), any(Object[].class))).thenReturn(1);
     var product = new QuoteTechProduct(); product.setId(20L);

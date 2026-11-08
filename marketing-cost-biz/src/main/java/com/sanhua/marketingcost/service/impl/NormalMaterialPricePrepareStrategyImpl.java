@@ -74,6 +74,23 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     return item.getBomRow().getQtyPerTop();
   }
 
+  @Override public Map<PricePreparePlanItem, QuotationPriceSession.Input> inputs(
+      QuotationPriceSession session, List<PricePreparePlanItem> items) {
+    var inputs = new java.util.LinkedHashMap<PricePreparePlanItem, QuotationPriceSession.Input>();
+    for (var item : items) {
+      var q = quantity(item);
+      if (q == null || q.signum() == 0) continue;
+      var row = item.getBomRow();
+      boolean scrap = isByproduct(item);
+      inputs.put(item, new QuotationPriceSession.Input(item.getMaterialCode(), organization(item),
+          scrap ? "KG" : row.getUnit(), row.getMaterialSpec(), scrap ? TaxBasis.EXCLUDED : null,
+          null, session.conditions(organization(item)), q.abs(),
+          scrap ? QuotationPriceSession.Purpose.SCRAP : row.isSupplementalPackaging()
+              ? QuotationPriceSession.Purpose.PACKAGE : QuotationPriceSession.Purpose.MATERIAL));
+    }
+    return java.util.Collections.unmodifiableMap(inputs);
+  }
+
   private Map<PricePreparePlanItem, NormalMaterialPricePrepareResult> prepareMonthly(
       String oaNo, String unit, String month, LocalDateTime asOf, PricePrepareScenarioContext scenario,
       List<PricePreparePlanItem> items) {
@@ -82,10 +99,9 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         first.getBomRow().getOaFormItemId(), organization(first));
     var session = monthlySessions.open(oaNo, unit, month,
         asOf == null ? LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE) : asOf, scenario.forOrganization(organization(first)));
-    var inputs = new java.util.LinkedHashMap<PricePreparePlanItem, QuotationPriceSession.Input>();
+    var inputs = inputs(session, items);
     var results = new java.util.LinkedHashMap<PricePreparePlanItem, NormalMaterialPricePrepareResult>();
     for (var item : items) {
-      var row = item.getBomRow();
       var q = quantity(item);
       if (q == null) {
         results.put(item, NormalMaterialPricePrepareResult.gap(STATUS_FAILED, GAP_TYPE_MISSING_PRICE,
@@ -93,14 +109,6 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       } else if (q.signum() == 0) {
         results.put(item, NormalMaterialPricePrepareResult.ready(BigDecimal.ZERO, BigDecimal.ZERO,
             "零用量", "ZERO_USAGE", null, "零用量不采用物料月价"));
-      } else {
-        // Source registration is consulted only after the monthly lookup misses.
-        boolean scrap = isByproduct(item);
-        inputs.put(item, new QuotationPriceSession.Input(item.getMaterialCode(), organization(item),
-            scrap ? "KG" : row.getUnit(), row.getMaterialSpec(), scrap ? TaxBasis.EXCLUDED : null,
-            null, session.conditions(organization(item)), q.abs(),
-            scrap ? QuotationPriceSession.Purpose.SCRAP : row.isSupplementalPackaging()
-                ? QuotationPriceSession.Purpose.PACKAGE : QuotationPriceSession.Purpose.MATERIAL));
       }
     }
     var read = session.read(inputs.values());

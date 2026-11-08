@@ -6,6 +6,9 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.AuxCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunContext;
+import com.sanhua.marketingcost.dto.CostRunFeeQuery;
+import com.sanhua.marketingcost.service.costing.CostRunPreparedInputs;
+import com.sanhua.marketingcost.service.costing.ResolvedOrdinaryCost;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
@@ -55,6 +58,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
@@ -335,32 +339,99 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       progress.accept(100);
       return Collections.emptyList();
     }
-    // T16：calculateItems 是原子计算，开始/结束各报一次进度（中途无明确切片节点）
+    // Resolve all sources, then execute the original ordinary cost calculation.
     progress.accept(0);
+    if (context != null && context.getPreparedInputs() != null) {
+      context.getPreparedInputs().requireFor(context, materialCodes);
+    }
     // Household contributions are calculated after ordinary fees from their saved P/H.
     // Keep them out of every ordinary material/package bucket and fee base.
     List<CostRunPartItemDto> ordinaryPartItems = currentPartItems == null ? null
         : currentPartItems.stream().filter(item -> item == null
             || !"HOUSEHOLD_INQUIRY".equals(item.getMonthlyPricingType())).toList();
-    List<CostRunCostItemDto> result =
-        calculateItems(
-            oaNo.trim(),
-            productCode.trim(),
-            materialCodes,
-            resolveCostSourceContext(oaNo.trim(), productCode.trim(), context, currentPartItems),
-            ordinaryPartItems,
-            persistDailyResult);
+    var resolved = resolveItems(oaNo.trim(), productCode.trim(), materialCodes,
+        resolveCostSourceContext(oaNo.trim(), productCode.trim(), context, currentPartItems), ordinaryPartItems);
+    var result = resolved.bind(ResolvedOrdinaryCost.calculate(resolved.inputs()));
+    if (persistDailyResult) saveCostRunItems(oaNo.trim(), productCode.trim(), result,
+        result.stream().map(CostRunCostItemDto::getCostCode).toList());
     progress.accept(100);
     return result;
   }
 
-  private List<CostRunCostItemDto> calculateItems(
+  @Override
+  public ResolvedOrdinaryCost resolve(CostRunContext context, List<CostRunPartItemDto> currentPartItems) {
+    Objects.requireNonNull(context);
+    var materialCodes = Set.of(context.getProductCode().trim());
+    if (context.getPreparedInputs() != null) context.getPreparedInputs().requireFor(context, materialCodes);
+    var ordinary = currentPartItems.stream().filter(item -> item == null
+        || !"HOUSEHOLD_INQUIRY".equals(item.getMonthlyPricingType())).toList();
+    return resolveItems(context.getOaNo().trim(), context.getProductCode().trim(), materialCodes,
+        resolveCostSourceContext(context.getOaNo().trim(), context.getProductCode().trim(), context, currentPartItems), ordinary);
+  }
+
+  record InputDimensions(int year, String unit, String organization, String model,
+      String sourceDivision, String accountingMonth, CostRunFeeQuery.ThreeExpense threeExpense) {}
+
+  InputDimensions inputDimensions(CostRunContext context) {
+    var selected = Objects.requireNonNull(context.getQuotationInput(), "批量准备缺少选定OA资料");
+    selected.requireFor(context, context.getOaNo(), context.getProductCode());
+    String organization = requiredMaterialOrganizationCode(context.getMaterialOrganizationCode());
+    var resolved = resolveCostSourceContext(selected.form(), List.of(selected.item()),
+        context.getProductCode(), context, organization);
+    var match = resolved.threeExpenseMatchContext;
+    var three = match == null || StringUtils.hasText(match.missingReason) ? null
+        : new CostRunFeeQuery.ThreeExpense(match.periodYear, match.productCategory, match.productLine, resolved.businessUnitType);
+    return new InputDimensions(resolved.costYear, resolved.businessUnitType, organization,
+        resolved.productModel, resolved.sourceBusinessDivision, resolved.accountingPeriodMonth, three);
+  }
+
+  List<CostRunFeeQuery.Department> departmentRequests(String productCode, InputDimensions scope,
+      CostRunPreparedInputs.Catalog sources) {
+    var raw = preparedMaterial(productCode, scope.organization(), sources);
+    String division = trimToNull(raw == null ? scope.sourceDivision() : raw.getProductionDivision());
+    if (division == null) return List.of();
+    return java.util.stream.Stream.of(DEPARTMENT_SUBJECT_OVERHAUL, DEPARTMENT_SUBJECT_TOOLING,
+        DEPARTMENT_SUBJECT_WATER, DEPARTMENT_SUBJECT_OTHER).flatMap(List::stream).distinct()
+        .map(subject -> new CostRunFeeQuery.Department(scope.year(), division, subject, scope.unit())).toList();
+  }
+
+  List<CostRunFeeQuery.Manufacture> manufactureRequests(String productCode, Set<String> materialCodes,
+      InputDimensions scope, CostRunPreparedInputs.Catalog sources) {
+    var requests = new ArrayList<CostRunFeeQuery.Manufacture>();
+    requests.add(new CostRunFeeQuery.Manufacture(scope.year(), MANUFACTURE_MATCH_LEVEL_MATERIAL_CODE,
+        productCode.trim(), scope.unit()));
+    for (String code : normalizeCostMaterialCodes(materialCodes, productCode)) {
+      var raw = preparedMaterial(code, scope.organization(), sources);
+      if (raw == null) continue;
+      String division = trimToNull(raw.getProductionDivision());
+      String model = trimToNull(raw.getMaterialModel());
+      String name = trimToNull(raw.getMaterialName());
+      if (division != null && model != null) requests.add(new CostRunFeeQuery.Manufacture(scope.year(),
+          MANUFACTURE_MATCH_LEVEL_MATERIAL_MODEL, ManufactureRateMatchSupport.divisionModelKey(division, model), scope.unit()));
+      if (division != null && name != null) requests.add(new CostRunFeeQuery.Manufacture(scope.year(),
+          MANUFACTURE_MATCH_LEVEL_DIVISION_PRODUCT_NAME, buildManufactureDivisionProductKey(division, name), scope.unit()));
+    }
+    var finished = preparedMaterial(productCode, scope.organization(), sources);
+    String division = trimToNull(finished == null ? scope.sourceDivision() : finished.getProductionDivision());
+    String category = finished == null ? null : ManufactureRateMatchSupport.categoryPrefix(trimToNull(finished.getProductionCategory()));
+    if (division != null && category != null) requests.add(new CostRunFeeQuery.Manufacture(scope.year(),
+        MANUFACTURE_MATCH_LEVEL_DIVISION_CATEGORY_PREFIX, ManufactureRateMatchSupport.divisionCategoryKey(division, category), scope.unit()));
+    if (division != null) requests.add(new CostRunFeeQuery.Manufacture(scope.year(),
+        MANUFACTURE_MATCH_LEVEL_DIVISION, division, scope.unit()));
+    return List.copyOf(requests);
+  }
+
+  private MaterialMasterRaw preparedMaterial(String code, String organization, CostRunPreparedInputs.Catalog sources) {
+    var rows = sources.require(new CostRunFeeQuery.Material(code.trim(), organization), MaterialMasterRaw.class);
+    return rows.isEmpty() ? null : rows.getFirst();
+  }
+
+  private ResolvedOrdinaryCost resolveItems(
       String oaNoValue,
       String productCodeValue,
       Set<String> materialCodes,
       CostSourceContext costSourceContext,
-      List<CostRunPartItemDto> currentPartItems,
-      boolean persistDailyResult) {
+      List<CostRunPartItemDto> currentPartItems) {
     EffectiveTechnicalDataInput technicalData =
         costSourceContext == null ? null : costSourceContext.effectiveTechnicalData;
     // 1) 先算人工 -> 部门经费。正式核算有成本年度时，工资金额只取 CMS 公共生效来源。
@@ -374,23 +445,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     DepartmentFeeResult feeResult =
         calculateDepartmentFees(productCodeValue, directTotal.add(indirectTotal), costSourceContext);
 
-    List<String> costCodes = new ArrayList<>();
-    costCodes.add(MATERIAL);
-    costCodes.add(DIRECT_LABOR);
-    costCodes.add(INDIRECT_LABOR);
-    costCodes.add(LOSS);
-    costCodes.add(MANUFACTURE);
-    costCodes.add(MANUFACTURE_COST);
-    costCodes.add(ADJUSTED_MANUFACTURE_COST);
-    costCodes.add(MGMT_EXP);
-    costCodes.add(SALES_EXP);
-    costCodes.add(FIN_EXP);
-    costCodes.add(TOTAL);
-    costCodes.add(OVERHAUL);
-    costCodes.add(TOOLING_REPAIR);
-    costCodes.add(WATER_POWER);
-    costCodes.add(DEPT_OTHER);
-
     // 2) 再算辅料
     List<CostRunCostItemDto> auxItems = technicalData != null && technicalData.auxiliaryRequired()
         ? buildTechnicalAuxItems(technicalData)
@@ -400,20 +454,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       if (auxItem.getAmount() != null) {
         auxTotal = auxTotal.add(auxItem.getAmount());
       }
-      if (StringUtils.hasText(auxItem.getCostCode())) {
-        costCodes.add(auxItem.getCostCode());
-      }
     }
 
-    List<CostRunCostItemDto> otherExpenseItems = new ArrayList<>(buildOtherExpenseItems(productCodeValue));
+    List<CostRunCostItemDto> otherExpenseItems = new ArrayList<>(buildOtherExpenseItems(productCodeValue, costSourceContext));
     appendTechnicalProductFees(otherExpenseItems, technicalData);
     BigDecimal otherExpenseTotal = BigDecimal.ZERO;
     for (CostRunCostItemDto otherItem : otherExpenseItems) {
       if (otherItem.getAmount() != null) {
         otherExpenseTotal = otherExpenseTotal.add(otherItem.getAmount());
-      }
-      if (StringUtils.hasText(otherItem.getCostCode())) {
-        costCodes.add(otherItem.getCostCode());
       }
     }
 
@@ -436,7 +484,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         : packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
     // 包装进 materialTotal；优先用包装组件父件新口径，取不到包装组件数据时退回原始包装件金额。
     // 运费属于报价商务信息，不进入成本核算；这里只累计正式配置的其他费用。
-    costCodes.add(OTHER_EXP_PACKAGE);
     BigDecimal deptTotal =
         amountOrZero(feeResult.overhaul.amount())
             .add(amountOrZero(feeResult.tooling.amount()))
@@ -469,21 +516,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal mgmtRate = threeExpenseRate == null ? null : threeExpenseRate.getManagementExpenseRate();
     BigDecimal salesRate = threeExpenseRate == null ? null : threeExpenseRate.getSalesExpenseRate();
     BigDecimal financeRate = threeExpenseRate == null ? null : threeExpenseRate.getFinanceExpenseRate();
-    var amounts = com.sanhua.marketingcost.service.costing.OrdinaryCostAmounts.calculate(
-        materialTotal, directTotal, indirectTotal, lossRate, manufactureRate, coefficient,
-        mgmtRate, salesRate, financeRate, otherExpenseTotal);
-    BigDecimal lossBase = amounts.lossBase();
-    BigDecimal lossAmount = amounts.loss();
-    BigDecimal manufactureCost = amounts.manufactureCost();
-    BigDecimal manufactureFee = amounts.manufactureFee();
-    BigDecimal adjustedManufactureCost = amounts.adjustedManufactureCost();
-    BigDecimal mgmtAmount = amounts.management();
-    BigDecimal salesAmount = amounts.sales();
-    BigDecimal financeAmount = amounts.finance();
-    // A partial material subtotal may be displayed, but missing required department fees
-    // must not produce a complete cost. Missing subject amounts remain null in their rows.
-    BigDecimal totalAmount = feeResult.hasRequiredAmounts() ? amounts.total() : null;
-
+    // Derived amounts are computed only after all actual input values have been resolved.
     List<CostRunCostItemDto> items = new ArrayList<>();
     items.add(buildItem(MATERIAL, "材料费", null, null, materialTotal));
     items.addAll(auxItems);
@@ -493,28 +526,28 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     items.add(buildItem(
         INDIRECT_LABOR, "辅助人工工资", null, null, indirectTotal, laborResult.indirectRemark,
         laborResult.sourceTable, laborResult.sourceId));
-    items.add(buildItem(LOSS, "净损失率", lossBase, lossRate, lossAmount, lossRemark));
+    items.add(buildItem(LOSS, "净损失率", null, lossRate, null, lossRemark));
     // T10：MANUFACTURE / MANUFACTURE_COST / ADJUSTED_MANUFACTURE_COST 共享同一份 remark
     items.add(buildItem(
-        MANUFACTURE, "制造费用", manufactureCost, manufactureRate, manufactureFee, manufactureRemark));
-    items.add(buildItem(MANUFACTURE_COST, "制造成本", null, null, manufactureCost, manufactureRemark));
+        MANUFACTURE, "制造费用", null, manufactureRate, null, manufactureRemark));
+    items.add(buildItem(MANUFACTURE_COST, "制造成本", null, null, null, manufactureRemark));
     // Task #9：调整后制造成本（baseAmount=制造成本，rate=系数）；T10 沿用同一 remark
     items.add(buildItem(
         ADJUSTED_MANUFACTURE_COST,
         "调整后制造成本",
-        manufactureCost,
+        null,
         coefficient,
-        adjustedManufactureCost,
+        null,
         adjustedManufactureRemark,
         coefficientLookup.technicalVersionId() == null ? null : "lp_quote_tech_data_version",
         coefficientLookup.technicalVersionId()));
     // T10：MGMT/SALES/FIN 三项共享 threeExpRemark
     items.add(buildItem(
-        MGMT_EXP, "管理费用", adjustedManufactureCost, mgmtRate, mgmtAmount, threeExpRemark));
+        MGMT_EXP, "管理费用", null, mgmtRate, null, threeExpRemark));
     items.add(buildItem(
-        SALES_EXP, "销售费用", adjustedManufactureCost, salesRate, salesAmount, threeExpRemark));
+        SALES_EXP, "销售费用", null, salesRate, null, threeExpRemark));
     items.add(buildItem(
-        FIN_EXP, "财务费用", adjustedManufactureCost, financeRate, financeAmount, threeExpRemark));
+        FIN_EXP, "财务费用", null, financeRate, null, threeExpRemark));
     items.addAll(otherExpenseItems);
     // T11：包装费仅用于展示其归集结果，金额已进入材料费，不重复累加总成本。
     items.add(buildItem(
@@ -526,29 +559,20 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         useTechnicalPackage ? technicalSourceRemark(technicalData, "PACKAGE") : null,
         useTechnicalPackage ? "lp_quote_tech_data_version" : null,
         useTechnicalPackage ? technicalData.versionId() : null));
-    items.add(buildItem(TOTAL, "不含税总成本", null, null, totalAmount));
+    items.add(buildItem(TOTAL, "不含税总成本", null, null, null));
     items.add(buildDepartmentItem(OVERHAUL, "大修费", feeResult.overhaul));
     items.add(buildDepartmentItem(TOOLING_REPAIR, "工装零星修理费", feeResult.tooling));
     items.add(buildDepartmentItem(WATER_POWER, "水电费", feeResult.water));
     items.add(buildDepartmentItem(DEPT_OTHER, "其他费用", feeResult.other));
 
-    // T24：见机表原材料汇总（不参与 totalAmount 累加；category=BOM_BUCKET 与上面 EXPENSE 行严格隔离）
+    // T24：见机表原材料汇总（不参与总成本累加；category=BOM_BUCKET 与上面 EXPENSE 行严格隔离）
     //   - 焊料 BUCKET_WELD: Σ(part 子件 cost_element=主要材料-焊料)
     //   - 包装 BUCKET_PACKAGE: Σ(包装组件父件 amount) × 1.05
     List<CostRunCostItemDto> bucketItems =
         buildBucketItems(
             oaNoValue, productCodeValue, currentPartItems, costSourceContext, technicalData);
-    for (CostRunCostItemDto b : bucketItems) {
-      items.add(b);
-      if (StringUtils.hasText(b.getCostCode())) {
-        costCodes.add(b.getCostCode());
-      }
-    }
-
-    if (persistDailyResult) {
-      saveCostRunItems(oaNoValue, productCodeValue, items, costCodes);
-    }
-    return items;
+    items.addAll(bucketItems);
+    return new ResolvedOrdinaryCost(items, otherExpenseTotal, feeResult.hasRequiredAmounts());
   }
 
   /**
@@ -835,8 +859,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       String productCode,
       CostRunContext context,
       List<CostRunPartItemDto> currentPartItems) {
+    var selected = context == null ? null : context.getQuotationInput();
+    if (selected != null) selected.requireFor(context, oaNo, productCode);
     String materialOrganizationCode =
         resolveCostSourceMaterialOrganizationCode(context, currentPartItems, oaNo, productCode);
+    if (selected != null) {
+      var resolved = resolveCostSourceContext(selected.form(), List.of(selected.item()), productCode,
+          context, materialOrganizationCode);
+      resolved.prepared = context.getPreparedInputs();
+      return resolved;
+    }
     if (!StringUtils.hasText(oaNo)) {
       return new CostSourceContext(
           resolveCostYear(context), "", materialOrganizationCode, resolveAuxPricingMonth(context),
@@ -1246,7 +1278,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
     for (String subject : expenseSubjects) {
       DepartmentFundRate rate =
-          findDepartmentFundRateBySubject(productionDivision, subject, rateYear, businessUnitType);
+          findDepartmentFundRateBySubject(productionDivision, subject, rateYear, businessUnitType, costSourceContext);
       if (rate != null) {
         return new DepartmentFundLookup(rate, raw == null
             ? "成品料号 " + code + " 未找到 U9 主档，按OA事业部 " + productionDivision + " 匹配部门经费"
@@ -1267,12 +1299,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   }
 
   private DepartmentFundRate findDepartmentFundRateBySubject(
-      String businessDivision, String expenseSubject, Integer rateYear, String businessUnitType) {
+      String businessDivision, String expenseSubject, Integer rateYear, String businessUnitType,
+      CostSourceContext context) {
     if (!StringUtils.hasText(businessDivision)
         || !StringUtils.hasText(expenseSubject)
         || rateYear == null) {
       return null;
     }
+    if (context != null && context.prepared != null) return context.prepared.fees().one(
+        new CostRunFeeQuery.Department(rateYear, businessDivision.trim(), expenseSubject.trim(), businessUnitType),
+        DepartmentFundRate.class);
     var query =
         Wrappers.lambdaQuery(DepartmentFundRate.class)
             .eq(DepartmentFundRate::getRateYear, rateYear)
@@ -1290,7 +1326,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   /** 与补录共用公共取率，金额仍由本服务按原有计算基数计算。 */
   private RateLookup findLossRate(String productCode, CostSourceContext context, EffectiveTechnicalDataInput technicalData) {
     if (context == null || !StringUtils.hasText(context.businessUnitType)) return new RateLookup(null, "净损失率缺少业务单元，无法匹配配置");
-    var source = netLossRates.lookup(productCode, context == null ? null : context.productModel,
+    var source = context.prepared != null ? context.prepared.netLoss()
+        : netLossRates.lookup(productCode, context == null ? null : context.productModel,
         requiredCostSourceMaterialOrganizationCode(context),
         context == null || context.costYear == null ? Year.now().getValue() : context.costYear,
         context == null ? "" : normalizeBusinessUnit(context.businessUnitType));
@@ -1320,6 +1357,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private List<MaterialMasterRaw> selectRawRows(
       List<String> materialCodes, CostSourceContext costSourceContext) {
     String organization = requiredCostSourceMaterialOrganizationCode(costSourceContext);
+    if (costSourceContext.prepared != null) {
+      var rows = new LinkedHashMap<Long, MaterialMasterRaw>();
+      for (String code : materialCodes) {
+        for (var row : costSourceContext.prepared.fees().require(
+            new CostRunFeeQuery.Material(code, organization), MaterialMasterRaw.class)) rows.put(row.getId(), row);
+      }
+      return List.copyOf(rows.values());
+    }
     return materialMasterRawMapper.selectByLatestBatchAndCodes(materialCodes, null, organization);
   }
 
@@ -1338,7 +1383,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (finishedCode != null) {
       ManufactureRate codeRate =
           findManufactureRateByMatch(
-              MANUFACTURE_MATCH_LEVEL_MATERIAL_CODE, finishedCode, rateYear, businessUnitType);
+              MANUFACTURE_MATCH_LEVEL_MATERIAL_CODE, finishedCode, rateYear, businessUnitType, costSourceContext);
       RateLookup codeLookup = toManufactureLookup(codeRate);
       if (codeLookup != null) {
         return codeLookup;
@@ -1364,7 +1409,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                 MANUFACTURE_MATCH_LEVEL_MATERIAL_MODEL,
                 modelMatchKey,
                 rateYear,
-                businessUnitType);
+                businessUnitType, costSourceContext);
         RateLookup modelLookup = toManufactureLookup(modelRate);
         if (modelLookup != null) {
           return modelLookup;
@@ -1388,7 +1433,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         String matchKey = buildManufactureDivisionProductKey(division, materialName);
         ManufactureRate nameRate =
             findManufactureRateByMatch(
-                MANUFACTURE_MATCH_LEVEL_DIVISION_PRODUCT_NAME, matchKey, rateYear, businessUnitType);
+                MANUFACTURE_MATCH_LEVEL_DIVISION_PRODUCT_NAME, matchKey, rateYear, businessUnitType, costSourceContext);
         RateLookup nameLookup = toManufactureLookup(nameRate);
         if (nameLookup != null) {
           return nameLookup;
@@ -1418,7 +1463,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                 MANUFACTURE_MATCH_LEVEL_DIVISION_CATEGORY_PREFIX,
                 categoryMatchKey,
                 rateYear,
-                businessUnitType);
+                businessUnitType, costSourceContext);
         RateLookup categoryLookup = toManufactureLookup(categoryRate);
         if (categoryLookup != null) {
           return categoryLookup;
@@ -1438,7 +1483,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       if (finishedDivision != null) {
         ManufactureRate divisionRate =
             findManufactureRateByMatch(
-                MANUFACTURE_MATCH_LEVEL_DIVISION, finishedDivision, rateYear, businessUnitType);
+                MANUFACTURE_MATCH_LEVEL_DIVISION, finishedDivision, rateYear, businessUnitType, costSourceContext);
         RateLookup divisionLookup = toManufactureLookup(divisionRate);
         if (divisionLookup != null) {
           return divisionLookup;
@@ -1454,7 +1499,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           missReasons.add("OA事业部为空，无法在成品料品档案缺失时匹配事业部费率");
         } else {
           RateLookup oaLookup = toManufactureLookup(findManufactureRateByMatch(
-              MANUFACTURE_MATCH_LEVEL_DIVISION, oaDivision, rateYear, businessUnitType));
+              MANUFACTURE_MATCH_LEVEL_DIVISION, oaDivision, rateYear, businessUnitType, costSourceContext));
           if (oaLookup != null) {
             String source = "成品料号 " + finishedCode + " 未找到 U9 主档，按OA事业部 "
                 + oaDivision + " 匹配制造费用率";
@@ -1493,10 +1538,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   }
 
   private ManufactureRate findManufactureRateByMatch(
-      String matchLevel, String matchKey, Integer rateYear, String businessUnitType) {
+      String matchLevel, String matchKey, Integer rateYear, String businessUnitType,
+      CostSourceContext context) {
     if (!StringUtils.hasText(matchLevel) || !StringUtils.hasText(matchKey) || rateYear == null) {
       return null;
     }
+    if (context != null && context.prepared != null) return context.prepared.fees().one(
+        new CostRunFeeQuery.Manufacture(rateYear, matchLevel.trim(), matchKey.trim(), businessUnitType),
+        ManufactureRate.class);
     var query =
         Wrappers.lambdaQuery(ManufactureRate.class)
             .eq(ManufactureRate::getRateYear, rateYear)
@@ -1547,8 +1596,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (!StringUtils.hasText(businessUnitType)) {
       return new ThreeExpenseLookup(null, "三项费用未命中：businessUnitType 缺失");
     }
-    List<ThreeExpenseRate> candidates =
-        threeExpenseRateMapper.selectList(
+    List<ThreeExpenseRate> candidates = context.prepared != null
+        ? context.prepared.fees().require(new CostRunFeeQuery.ThreeExpense(
+            match.periodYear, match.productCategory, match.productLine, businessUnitType), ThreeExpenseRate.class)
+        : threeExpenseRateMapper.selectList(
             Wrappers.lambdaQuery(ThreeExpenseRate.class)
                 .eq(ThreeExpenseRate::getBusinessUnitType, businessUnitType)
                 .eq(ThreeExpenseRate::getPeriodYear, match.periodYear)
@@ -1827,12 +1878,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
   }
 
-  private List<CostRunCostItemDto> buildOtherExpenseItems(String productCode) {
+  private List<CostRunCostItemDto> buildOtherExpenseItems(String productCode, CostSourceContext context) {
     if (!StringUtils.hasText(productCode)) {
       return Collections.emptyList();
     }
     // T19：走 cached lookup
-    List<OtherExpenseRate> rates = cacheLookup.findOtherExpenseRates(productCode);
+    List<OtherExpenseRate> rates = context != null && context.prepared != null
+        ? context.prepared.fees().require(new CostRunFeeQuery.OtherExpense(productCode.trim()), OtherExpenseRate.class)
+        : cacheLookup.findOtherExpenseRates(productCode);
     if (rates == null || rates.isEmpty()) {
       return Collections.emptyList();
     }
@@ -1887,8 +1940,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return Collections.emptyList();
     }
     List<AuxCostItemDto> auxSubjects = new ArrayList<>();
-    List<AuxCostItemDto> cmsItems =
-        auxCostItemMapper.selectEffectiveAuxCostItems(
+    List<AuxCostItemDto> cmsItems = costSourceContext.prepared != null
+        ? costSourceContext.prepared.auxiliary() : auxCostItemMapper.selectEffectiveAuxCostItems(
             costSourceContext.costYear, materialCodes, costSourceContext.businessUnitType, costSourceContext.pricingMonth);
     if (cmsItems != null) {
       for (AuxCostItemDto cmsItem : cmsItems) {
@@ -1971,6 +2024,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private BigDecimal ruleDecimal(
       String ruleCode, CostSourceContext context, BigDecimal fallbackValue) {
+    if (context != null && context.prepared != null) {
+      String unit = StringUtils.hasText(context.businessUnitType) ? context.businessUnitType.trim() : "*";
+      var configured = context.prepared.fees().one(new CostRunFeeQuery.Rule(ruleCode.trim(),
+          context.prepared.ruleMonth(), unit), com.sanhua.marketingcost.service.costing.CostRunFeeSources.RuleFact.class);
+      return configured == null || configured.decimalValue() == null ? fallbackValue : configured.decimalValue();
+    }
     return businessRuleProvider.decimalValue(
         ruleCode,
         context == null ? null : context.accountingPeriodMonth,
@@ -2060,8 +2119,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         || materialCodes.isEmpty()) {
       return Collections.emptyMap();
     }
-    List<CmsCostSourceEffective> rows = cmsCostSourceEffectiveMapper.selectSalarySources(
-        costSourceContext.costYear, costSourceContext.businessUnitType, materialCodes);
+    List<CmsCostSourceEffective> rows = costSourceContext.prepared != null
+        ? costSourceContext.prepared.salary() : cmsCostSourceEffectiveMapper.selectSalarySources(
+            costSourceContext.costYear, costSourceContext.businessUnitType, materialCodes);
     if (rows == null || rows.isEmpty()) {
       return Collections.emptyMap();
     }
@@ -2500,7 +2560,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     String businessUnitType = costSourceContext == null ? "" : costSourceContext.businessUnitType;
     String organizationCode = costSourceContext == null ? null : costSourceContext.materialOrganizationCode;
     var technical = costSourceContext == null ? null : costSourceContext.effectiveTechnicalData;
-    return lookupProductCoefficient(productCode, organizationCode, propertyYear, businessUnitType, technical);
+    var prepared = costSourceContext == null ? null : costSourceContext.prepared;
+    if (prepared != null) propertyYear = prepared.propertyYear();
+    return lookupProductCoefficient(productCode, organizationCode, propertyYear, businessUnitType, technical, prepared);
   }
 
   ProductCoefficientLookup lookupProductCoefficient(
@@ -2509,16 +2571,23 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       Integer propertyYear,
       String businessUnitType,
       EffectiveTechnicalDataInput technical) {
+    return lookupProductCoefficient(productCode, organizationCode, propertyYear, businessUnitType, technical, null);
+  }
+
+  private ProductCoefficientLookup lookupProductCoefficient(String productCode, String organizationCode,
+      Integer propertyYear, String businessUnitType, EffectiveTechnicalDataInput technical,
+      CostRunPreparedInputs prepared) {
     if (!StringUtils.hasText(productCode)) {
       return new ProductCoefficientLookup(BigDecimal.ONE, "产品料号为空，产品属性系数回落=1", null);
     }
     String code = productCode.trim();
     if (StringUtils.hasText(organizationCode)) {
-      String rawAttr = trimToNull(materialMasterRawMapper.selectActiveProductAttr(
-          code, MaterialOrganization.fromCode(organizationCode).getCode()));
+      String organization = MaterialOrganization.fromCode(organizationCode).getCode();
+      var raw = prepared == null ? null : prepared.fees().one(new CostRunFeeQuery.Material(code, organization), MaterialMasterRaw.class);
+      String rawAttr = trimToNull(prepared == null ? materialMasterRawMapper.selectActiveProductAttr(code, organization)
+          : raw == null ? null : raw.getProductAttr());
       if (rawAttr != null) {
-        BigDecimal coefficient = cacheLookup.findProductPropertyCoefficient(
-            rawAttr, propertyYear, businessUnitType);
+        BigDecimal coefficient = propertyCoefficient(rawAttr, propertyYear, businessUnitType, prepared);
         if (coefficient == null) {
           throw new IllegalArgumentException("U9 料品档案产品属性缺少本年度规则：料号=" + code
               + "，属性=" + rawAttr + "，年度=" + propertyYear + "，业务单元=" + businessUnitType);
@@ -2528,9 +2597,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
     }
 
-    ProductProperty property = cacheLookup.findProductProperty(code, propertyYear, businessUnitType);
+    ProductProperty property = prepared == null ? cacheLookup.findProductProperty(code, propertyYear, businessUnitType)
+        : prepared.fees().one(new CostRunFeeQuery.Property(propertyYear, code, businessUnitType), ProductProperty.class);
+    if (prepared != null && property != null) {
+      var coefficient = propertyCoefficient(property.getProductAttr(), property.getPropertyYear(), property.getBusinessUnitType(), prepared);
+      if (coefficient != null) {
+        property.setUpliftRate(coefficient.subtract(BigDecimal.ONE)); property.setCoefficient(coefficient);
+      }
+    }
     if (property == null && technical != null && StringUtils.hasText(technical.productProperty())) {
-      var coefficient = cacheLookup.findProductPropertyCoefficient(technical.productProperty(), propertyYear, businessUnitType);
+      var coefficient = propertyCoefficient(technical.productProperty(), propertyYear, businessUnitType, prepared);
       if (coefficient == null) throw new IllegalArgumentException("缺少本年度产品属性规则：" + technical.productProperty());
       return new ProductCoefficientLookup(coefficient, technicalSourceRemark(technical, "PROFILE")
           + "；属性=" + technical.productProperty() + "；采用本年度公共属性规则", technical.sourceVersionId("PROFILE"));
@@ -2546,6 +2622,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     String code = productCode.trim();
     ProductProperty property = cacheLookup.findProductProperty(code, propertyYear, businessUnitType);
     return coefficientFromProperty(code, propertyYear, businessUnitType, property);
+  }
+
+  private BigDecimal propertyCoefficient(String attribute, Integer year, String unit, CostRunPreparedInputs prepared) {
+    if (prepared == null) return cacheLookup.findProductPropertyCoefficient(attribute, year, unit);
+    if (!StringUtils.hasText(attribute) || year == null || !StringUtils.hasText(unit)) return null;
+    var rule = prepared.fees().one(new CostRunFeeQuery.PropertyRule(year, attribute, unit),
+        com.sanhua.marketingcost.entity.ProductPropertyRule.class);
+    return com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients.from(rule, attribute, year);
   }
 
   private ProductCoefficientLookup coefficientFromProperty(
@@ -2584,6 +2668,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   }
 
   private static class CostSourceContext {
+    private com.sanhua.marketingcost.service.costing.CostRunPreparedInputs prepared;
     private final Integer costYear;
     private final String pricingMonth;
     private final String productModel;

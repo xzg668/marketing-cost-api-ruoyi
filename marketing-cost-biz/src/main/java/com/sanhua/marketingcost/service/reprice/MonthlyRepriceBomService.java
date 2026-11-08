@@ -32,7 +32,10 @@ public class MonthlyRepriceBomService {
     this.bom=bom; this.json=json; transaction=new TransactionTemplate(manager);
   }
 
-  public record Input(OaForm form, OaFormItem item, QuoteBomContext context) {}
+  public record Input(OaForm form, OaFormItem item, QuoteBomContext context,
+      com.sanhua.marketingcost.service.pricing.monthly.AnnualUsageInput annualUsage) {
+    public Input(OaForm form, OaFormItem item, QuoteBomContext context) { this(form,item,context,null); }
+  }
   public record Outcome(boolean ready, String problem, QuoteBomStatus bom) {}
 
   public Outcome prepare(String batchNo, long taskId) {
@@ -40,21 +43,40 @@ public class MonthlyRepriceBomService {
     var saved = transaction.execute(tx -> {
       var task=requiredTask(batchNo, taskId);
       ObjectNode request=read(task);
+      var scopeVersion=request.get("scopeVersion");
+      if (scopeVersion!=null && (!scopeVersion.isInt() || scopeVersion.intValue()!=1))
+        throw new QuoteIngestException("不支持的月度客户范围版本，不能按旧资料继续处理");
+      boolean customerScope=scopeVersion!=null;
       if (!request.has("bomInput")) {
-        var item=items.selectById(task.getOaFormItemId());
-        var form=item == null ? null : forms.selectById(item.getOaFormId());
-        if (form == null || !Objects.equals(form.getOaNo(), task.getOaNo())
+        var selected=customerScope
+            ? convert(request.get("selectedInput"),MonthlyRepriceScopeRegistration.SelectedInput.class) : null;
+        var item=selected==null ? items.selectById(task.getOaFormItemId()) : selected.item();
+        var form=selected==null ? (item==null ? null : forms.selectById(item.getOaFormId())) : selected.form();
+        if (customerScope && selected==null)
+          throw new QuoteIngestException("月度对象缺少固定的原报价资料");
+        if (form == null || item == null || !Objects.equals(item.getId(),task.getOaFormItemId())
+            || !Objects.equals(form.getId(),item.getOaFormId())
+            || !Objects.equals(form.getOaNo(), task.getOaNo())
             || !Objects.equals(form.getBusinessUnitType(), task.getBusinessUnitType())
             || !Objects.equals(item.getBusinessUnitType(), task.getBusinessUnitType())
             || !Objects.equals(QuoteProductIdentityUtils.resolveCostingCode(item), task.getProductCode()))
           throw new QuoteIngestException("原报价单产品身份已变化，请核实保存版本归属后重试");
+        if (selected!=null) {
+          var identity=convert(request.get("customerIdentity"),MonthlyRepriceObjectScope.Identity.class);
+          var customer=contexts.resolveCustomer(form,null);
+          if (identity==null || !identity.businessUnitType().equals(task.getBusinessUnitType())
+              || !identity.month().toString().equals(task.getPricingMonth())
+              || !identity.productCode().equals(task.getProductCode())
+              || identity.customerSource()!=customer.source() || !identity.customerValue().equals(customer.value()))
+            throw new QuoteIngestException("固定客户身份与原报价资料不一致");
+        }
         var orgs=contracts.sourceOrganizations(request.path("sourceCostVersionId").asLong());
         if (orgs.size()!=1 || orgs.getFirst().priceOrgCode()==null
             || orgs.getFirst().materialOrganizationCode()==null)
           throw new QuoteIngestException("最近成功报价缺少唯一的数据组织依据，请核实后重试");
         var context=new QuoteBomContext(task.getPricingMonth(),task.getProductCode(),
             contexts.resolveCustomer(form,null),contexts.normalizePackageMethod(item.getPackageMethod()),orgs.getFirst());
-        request.set("bomInput",json.valueToTree(new Input(form,item,context)));
+        request.set("bomInput",json.valueToTree(new Input(form,item,context,selected==null ? null : selected.annualUsage())));
         save(task,request);
       }
       return request;

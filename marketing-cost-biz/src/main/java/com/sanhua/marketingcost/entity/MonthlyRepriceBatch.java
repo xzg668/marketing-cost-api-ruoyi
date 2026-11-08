@@ -45,9 +45,15 @@ public class MonthlyRepriceBatch {
   private String remark;
   /** Null identifies preserved legacy batches; 1 is the 1130 contract. */
   private Integer contractVersion;
+  /** Null retains the original OA-line model; 1 fixes customer/product membership. */
+  private Integer scopeVersion;
+  private Integer sourceCount;
+  private Integer unresolvedSourceCount;
   private String goLiveMonth;
   private Long resultRevision;
   private Long checkedRevision;
+  /** Latest published revision; initial confirmation identity/time remain unchanged during repairs. */
+  private Long publishedRevision;
   private String checkStatus;
   private String checkResultJson;
   private LocalDateTime checkedAt;

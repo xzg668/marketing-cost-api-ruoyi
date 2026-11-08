@@ -22,7 +22,7 @@ class TechnicalDataPackageSourceCheckTest {
   private final MaterialMasterRawMapper materials = mock(MaterialMasterRawMapper.class);
   private final TechnicalDataSharedModules shared = mock(TechnicalDataSharedModules.class);
   private final com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails = mock(com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService.class);
-  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom = new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope(mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper.class), details);
+  private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom = new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope(mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper.class), details, mock(com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.class));
   private final TechnicalDataPackageSourceCheck check = new TechnicalDataPackageSourceCheck(sources,
       drawings, details, materials, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), shared,
       repriceBom, monthlyDetails);

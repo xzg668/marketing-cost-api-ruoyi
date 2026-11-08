@@ -463,7 +463,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
       var sheet = book.getSheet("10月线圈询价");
       for (int index = sheet.getLastRowNum(); index > 2; index--)
         if (sheet.getRow(index) != null) sheet.removeRow(sheet.getRow(index));
-      sheet.getRow(2).getCell(0).setCellValue(code); sheet.getRow(2).getCell(4).setCellValue("20.9853"); book.write(bytes);
+      sheet.getRow(2).getCell(0).setCellValue(code); sheet.getRow(2).getCell(4).setCellValue("20.9853"); sheet.getRow(2).getCell(5).setCellValue(0); sheet.getRow(2).getCell(6).setCellValue(0); book.write(bytes);
       var preview = householdInquiries.preview("COMMERCIAL", "MPP12", bytes.toByteArray(), "mpp12-nested.xls", month);
       householdInquiries.publish("COMMERCIAL", "MPP12", new com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryModels.PublishRequest(
           preview.previewId(), preview.publishRequestId(), preview.previewFingerprint()));

@@ -67,6 +67,12 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
       var item=new OaFormItem();item.setId(req.oaFormItemId());return new ProductCostingContext(form,item,"P",month,"admin","revision");
     });
     when(contexts.resolveRevision(any())).thenAnswer(call->call.getArgument(0));
+    when(contexts.resolveRevisions(anyList())).thenAnswer(call -> {
+      List<ProductCostingContext> candidates = call.getArgument(0);
+      return candidates.stream().collect(java.util.stream.Collectors.toMap(ProductCostingContext::itemId, context -> "revision"));
+    });
+    when(successes.hasCurrentVersion(any())).thenAnswer(call ->
+        versions.containsKey(((ProductCostingContext) call.getArgument(0)).itemId()));
     when(successes.find(any())).thenAnswer(call->{var v=versions.get(((ProductCostingContext)call.getArgument(0)).itemId());return v==null?Optional.empty():Optional.of(new ProductCostingSuccessLookup.ReusableCost(v,"prepare",0));});
     when(oaContext.document(formId)).thenReturn(new TechnicalDataOaContext.Document(formId,requestId,"FI-SC-006",new OaPeer("I07","TEST",Set.of("COMMERCIAL")),null));
     when(oaContext.operatorEmployeeNo(1)).thenReturn("001001");

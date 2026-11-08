@@ -37,6 +37,14 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
   }
 
   @Override
+  public com.sanhua.marketingcost.service.costing.ResolvedCostRun resolve(CostRunContext context) {
+    var progress = context.getProgress() == null ? (java.util.function.IntConsumer) p -> {} : context.getProgress();
+    var parts = filterByProduct(loadPartItems(context, context.getOaNo().trim(), progress), context.getProductCode().trim());
+    return new com.sanhua.marketingcost.service.costing.ResolvedCostRun(context, parts,
+        costRunCostItemService.resolve(context, parts));
+  }
+
+  @Override
   public CostRunObjectResult calculate(CostRunContext context) {
     String oaNo = context.getOaNo().trim();
     String productCode = context.getProductCode().trim();

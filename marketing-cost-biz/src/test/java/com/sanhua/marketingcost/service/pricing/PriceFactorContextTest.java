@@ -12,6 +12,44 @@ import org.junit.jupiter.api.Test;
 
 class PriceFactorContextTest {
   @Test
+  void quotationCopperAndZincOverrideOnlyTheirFormulaInputsAndKeepFinancialEvidence() {
+    var base = financial();
+    var quote = base.withCustomerMetalsPerTon(new BigDecimal("100000"), new BigDecimal("24000"));
+    assertThat(quote.requiredPrice("AVG|cu", FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("100");
+    assertThat(quote.requiredPrice("AVG|zn", FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("24");
+    assertThat(quote.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_TON, true)).isEqualByComparingTo("24000");
+    assertThat(quote.inputSource(PriceFactorContext.ZINC)).isEqualTo("OA_LOCKED");
+    assertThat(quote.financial()).isSameAs(base.financial());
+    assertThat(quote.financialOnly()).isEqualTo(base);
+    assertThat(quote.evidenceForFactors(java.util.Set.of("AVG|ZN")).customerZincPricePerTon()).isEqualByComparingTo("24000");
+    assertThat(quote.withBoardInputs(null).customerZincPricePerTon()).isEqualByComparingTo("24000");
+    assertThat(quote.requiredPrice("AVG|PCU", FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("115.979");
+    assertThat(base.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("21.636");
+  }
+
+  @Test
+  void absentQuotationZincUsesBaselineAndZincCanChangeWithoutCopper() {
+    var base = financial();
+    var copperOnly = base.withCustomerMetalsPerTon(new BigDecimal("100000"), null);
+    assertThat(copperOnly.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("21.636");
+    assertThat(copperOnly.inputSource(PriceFactorContext.ZINC)).isEqualTo("FINANCE_FACTOR");
+    var zincOnly = base.withCustomerMetalsPerTon(null, new BigDecimal("24000"));
+    assertThat(zincOnly.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("90");
+    assertThat(zincOnly.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("24");
+    assertThatThrownBy(() -> base.withCustomerMetalsPerTon(null, BigDecimal.ZERO)).hasMessageContaining("Zn");
+  }
+
+  @Test
+  void historicalContextWithoutZincStillDeserializesWithItsSavedBaseline() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    var tree = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.valueToTree(financial());
+    tree.remove("customerZincPricePerTon");
+    var restored = mapper.treeToValue(tree, PriceFactorContext.class);
+    assertThat(restored.customerZincPricePerTon()).isNull();
+    assertThat(restored.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("21.636");
+  }
+
+  @Test
   void formulaEvidenceKeepsUsedFactorSourcesAndPublicationWithoutChangingInputs() {
     var original = financial().withCustomerCopperPerTon(new BigDecimal("100000"));
     var evidence = original.evidenceForFactors(java.util.Set.of("AVG|cu", "AVG|PCU"));

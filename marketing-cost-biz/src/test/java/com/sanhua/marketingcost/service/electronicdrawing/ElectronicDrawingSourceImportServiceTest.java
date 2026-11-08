@@ -29,16 +29,18 @@ class ElectronicDrawingSourceImportServiceTest {
   final DrawingVerificationTaskMapper tasks = mock(DrawingVerificationTaskMapper.class);
   final DrawingVerificationResultMapper results = mock(DrawingVerificationResultMapper.class);
   final DrawingVerificationService verifications = mock(DrawingVerificationService.class);
+  final ElectronicDrawingBomReuse reuse = mock(ElectronicDrawingBomReuse.class);
   final DrawingVerificationCodec codec = new DrawingVerificationCodec(new ObjectMapper());
   final ElectronicDrawingSourceImportService service =
       new ElectronicDrawingSourceImportService(
-          contexts, items, preparations, versions, nodes, tasks, results, codec, verifications);
+          contexts, items, preparations, versions, nodes, tasks, results, codec, verifications, reuse);
   DrawingVerificationTask task;
   DrawingVerificationResult result;
   ElectronicDrawingWorkContext scope;
 
   @BeforeEach
   void setup() {
+    when(reuse.retainedRows(any(), any())).thenAnswer(call -> call.getArgument(1));
     scope =
         new ElectronicDrawingWorkContext(
             101L,

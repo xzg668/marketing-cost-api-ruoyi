@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 class MonthlyBomPricePreparationTest {
   final MonthlyMaterialPrices prices=mock(MonthlyMaterialPrices.class);
   final HouseholdInquiryStorage sourceStorage=mock(HouseholdInquiryStorage.class);
-  final HouseholdMonthlyPriceSource household=new HouseholdMonthlyPriceSource(sourceStorage,new MonthlyPriceDocumentCodec(new ObjectMapper()), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class));
+  final HouseholdMonthlyPriceSource household=new HouseholdMonthlyPriceSource(sourceStorage,new MonthlyPriceDocumentCodec(new ObjectMapper()), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader.class));
   final BomSettlementRowBuildEngine engine=new BomSettlementRowBuildEngine(
       new BomSettlementRuleMatcher(new BomSettlementRuleConditionEvaluator(new ObjectMapper())),
       new BomByproductCostRuleMatcher(new BomByproductCostRuleConditionEvaluator(new ObjectMapper())));
@@ -41,7 +41,7 @@ class MonthlyBomPricePreparationTest {
   }
   void noHousehold() {
     when(prices.lookup(anyCollection())).thenAnswer(invocation -> new Lookup(Map.of(),Set.copyOf(invocation.getArgument(0))));
-    when(sourceStorage.current(anyString(),anyCollection())).thenReturn(List.of());
+    when(sourceStorage.asOfMonth(anyString(),anyCollection(),any())).thenReturn(List.of());
   }
 
   @Test void rejectsForgedOrdinaryPathMaterialAndQuantityBeforeReadingTheirSources() {
@@ -124,7 +124,7 @@ class MonthlyBomPricePreparationTest {
         .thenReturn(new Candidates(Map.of(request("SCRAP"),new Candidate(selected,null)),Map.of()));
     var result=app.preview(context,bom,inputs,(visible,rows) -> List.of(new Use("TOP/S",request("SCRAP"),new BigDecimal("2.5"))));
     assertThat(result.plan().selections()).containsEntry(request("SCRAP"),selected);
-    verify(sourceStorage).current("COMMERCIAL",Set.of("TOP"));
+    verify(sourceStorage).asOfMonth("COMMERCIAL",Set.of("TOP"),context.month());
     verify(prices,never()).resolveCandidates(any(),anySet());
     verify(prices).resolveScrapCandidates(context,Set.of(request("SCRAP")));
   }

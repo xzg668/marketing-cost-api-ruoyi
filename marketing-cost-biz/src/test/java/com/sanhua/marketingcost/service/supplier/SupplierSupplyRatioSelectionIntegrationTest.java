@@ -41,7 +41,10 @@ class SupplierSupplyRatioSelectionIntegrationTest {
   static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse(
       System.getProperty("mpp.mysql.image", "mysql:8.4")).asCompatibleSubstituteFor("mysql"))
       .withDatabaseName("mrp03_selection_test").withUsername("root").withPassword("mrp03-test-only")
-      .withConfigurationOverride("monthly-pricing/mysql");
+      .withConfigurationOverride("monthly-pricing/mysql")
+      .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","supplier-ratio-tests"))
+      .withLabel("sales-cost.run",java.util.UUID.randomUUID().toString())
+      .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   static HikariDataSource ds; static JdbcTemplate jdbc; static SqlSessionTemplate sql;
   static AnnotationConfigApplicationContext spring; static SupplierSupplyRatioImportService imports;
   static SupplierPriceSelectionService prices; static SupplierSupplyRatioResolveServiceImpl primary;
@@ -70,7 +73,7 @@ class SupplierSupplyRatioSelectionIntegrationTest {
     jdbc.execute(logSchema.substring(logSchema.indexOf("CREATE TABLE `lp_business_change_log`")));
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")) {
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/monthly.sql");
       var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mrp03_selection_test < /tmp/monthly.sql");
       assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
@@ -97,7 +100,7 @@ class SupplierSupplyRatioSelectionIntegrationTest {
         sql.getMapper(MonthlyPriceLinkMapper.class)),new DataSourceTransactionManager(ds),codec,
         (context,requests,dependencies)->fixed.read(context,requests));
   }
-  @AfterAll static void stop() { if(spring!=null)spring.close(); if(ds!=null)ds.close(); MYSQL.stop(); }
+  @AfterAll static void stop() { if(spring!=null)spring.close(); if(ds!=null)ds.close(); if(!Boolean.getBoolean("mpp.mysql.retain"))MYSQL.stop(); }
   @BeforeEach void auth() {
     var a=new UsernamePasswordAuthenticationToken("mrp03-finance",null);
     a.setDetails(Map.of("businessUnitType","COMMERCIAL")); SecurityContextHolder.getContext().setAuthentication(a);
@@ -148,31 +151,33 @@ class SupplierSupplyRatioSelectionIntegrationTest {
     assertThat(result.values().get(req).selection().fact().price()).isEqualByComparingTo(
         candidates().stream().filter(c->c.supplierCode().equals(expected)).findFirst().orElseThrow().unitPrice());
   }
-  @Test void addingOnlyCStillChoosesUnchangedAWithTheCompleteCurrentSet() {
+  @Test void replacingMaterialSetUsesOnlyNewRatiosAcrossEveryConsumer() {
     String code=code(); save("COMMERCIAL",row(code,"000A","0.7"),row(code,"000B","0.3"));
-    var before=prices.activeRatios(scope(code)); save("COMMERCIAL",row(code,"000C","0.2"));
-    candidates().forEach(c->price(code,c.supplierCode(),c.unitPrice().toPlainString())); assertChoices(code,"000A",QuoteMaterialShape.MANUFACTURE);
-    assertThat(prices.activeRatios(scope(code))).extracting(SupplierSupplyRatio::getId).containsAll(before.stream().map(SupplierSupplyRatio::getId).toList()).hasSize(3);
+    var before=prices.activeRatios(scope(code)); save("COMMERCIAL",row(code,"000C","1"));
+    candidates().forEach(c->price(code,c.supplierCode(),c.unitPrice().toPlainString())); assertChoices(code,"000C",QuoteMaterialShape.OUTSOURCE);
+    assertThat(prices.activeRatios(scope(code))).extracting(SupplierSupplyRatio::getId).doesNotContainAnyElementsOf(before.stream().map(SupplierSupplyRatio::getId).toList()).hasSize(1);
     assertThat(inputs.ratios("COMMERCIAL",LocalDate.of(2026,10,1),Set.of(code))).extracting(SupplierSupplyRatio::getId)
         .containsExactlyElementsOf(prices.activeRatios(scope(code)).stream().map(SupplierSupplyRatio::getId).toList());
   }
-  @Test void changingOnlyAAndBLeavesUnchangedCEligibleForEveryPolicy() {
+  @Test void omittedOldHighRatioCannotWinAfterMaterialReplacement() {
     String code=code(); save("COMMERCIAL",row(code,"000A","0.7"),row(code,"000B","0.2"),row(code,"000C","0.5"));
-    save("COMMERCIAL",row(code,"000A","0.3"),row(code,"000B","0.2"));
-    candidates().forEach(c->price(code,c.supplierCode(),c.unitPrice().toPlainString())); assertChoices(code,"000C",QuoteMaterialShape.OUTSOURCE);
+    save("COMMERCIAL",row(code,"000A","0.8"),row(code,"000B","0.2"));
+    candidates().forEach(c->price(code,c.supplierCode(),c.unitPrice().toPlainString())); assertChoices(code,"000A",QuoteMaterialShape.MANUFACTURE);
   }
-  @Test void zeroRetiresTheOldPositiveBeforeSingleSamePriceAndPreferredShortcuts() {
+  @Test void zeroReplacesOldPositiveForRatioSelectionWhileDirectPriceShortcutsRemainUnchanged() {
     String code=code(); save("COMMERCIAL",row(code,"000A","0.2"),row(code,"000B","0.8"));
-    long old=primary.resolve("COMMERCIAL",code,null,null,LocalDate.of(2026,10,1)).getId(); save("COMMERCIAL",row(code,"000B","0"));
-    assertThat(prices.select(scope(code),List.of(candidate("000B","99"))).candidate()).isNull();
-    assertThat(prices.select(scope(code),List.of(candidate("000A","10"),candidate("000B","10"))).candidate().supplierCode()).isEqualTo("000A");
+    long old=primary.resolve("COMMERCIAL",code,null,null,LocalDate.of(2026,10,1)).getId(); save("COMMERCIAL",row(code,"000A","0.2"),row(code,"000B","0"));
+    assertThat(prices.select(scope(code),List.of(candidate("000B","99"))).rule()).isEqualTo("SINGLE");
+    assertThat(prices.select(scope(code),List.of(candidate("000A","10"),candidate("000B","10"))).rule()).isEqualTo("SAME_PRICE");
+    assertThat(prices.select(scope(code),List.of(candidate("000A","10"),candidate("000B","99"))).candidate().supplierCode()).isEqualTo("000A");
     var result=preferred.select(List.of(candidate("000B","99")),"COMMERCIAL",code,null,null,LocalDate.of(2026,10,1),SupplierPriceCandidate::supplierName,SupplierPriceCandidate::supplierCode);
-    assertThat(result.row()).isNull();
+    assertThat(result.row().supplierCode()).isEqualTo("000B");
     assertThat(primary.resolve("COMMERCIAL",code,null,null,LocalDate.of(2026,10,1)).getSupplierCode()).isEqualTo("000A");
     assertThat(shapes.resolve(shapeRequest(code,"COMMERCIAL","2026-10")).selectedSupplierCode()).isEqualTo("000A");
     assertThat(prices.activeRatios(scope(code))).extracting(SupplierSupplyRatio::getId).doesNotContain(old);
     assertThat(jdbc.queryForObject("SELECT supply_ratio FROM lp_supplier_supply_ratio WHERE id=?",BigDecimal.class,old)).isEqualByComparingTo("0.8");
-    price(code,"000B","99"); var req=request(code,"210","2026-10"); assertThat(fixed.read(context("2026-10"),Set.of(req)).values()).isEmpty();
+    price(code,"000B","99"); var req=request(code,"210","2026-10");
+    assertThat(fixed.read(context("2026-10"),Set.of(req)).values().get(req).selection().fact().price()).isEqualByComparingTo("99");
   }
   @Test void nullAndMissingRemainEligibleButManualFallbackCanNeverRestoreZero() {
     String code=code(); save("COMMERCIAL",row(code,"000A",null),row(code,"000B","0"));
@@ -183,7 +188,7 @@ class SupplierSupplyRatioSelectionIntegrationTest {
     jdbc.update("INSERT INTO lp_supplier_price_decision(scope_key,fingerprint,business_unit_type,oa_no,oa_form_item_id,period_month,pricing_date,org_code,material_code,price_type,decision,confirmed_by,confirmed_at) VALUES(?,?,'COMMERCIAL','MRP03',1,'2026-10','2026-10-01','210',?,'FIXED','FALLBACK_HIGH','finance',NOW())",r.scopeKey(),r.fingerprint(),code);
     assertThat(prices.select(scope(code),candidates()).candidate().supplierCode()).isEqualTo("000C");
     assertThat(prices.select(scope(code,"220","2026-10","COMMERCIAL"),candidates()).candidate()).isNull();
-    save("COMMERCIAL",row(code,"000B",null)); assertThat(prices.select(scope(code),candidates()).candidate()).isNull();
+    save("COMMERCIAL",row(code,"000A",null),row(code,"000B",null)); assertThat(prices.select(scope(code),candidates()).candidate()).isNull();
     assertThat(prices.select(scope(code),candidates()).review().candidates()).hasSize(3);
   }
   @Test void equalRatiosKeepPriceTiePrimaryTieAndShapeTiePoliciesDistinct() {
@@ -220,7 +225,7 @@ class SupplierSupplyRatioSelectionIntegrationTest {
     var receipt=monthly.adopt(c,new MonthlyAdoptionPlan(Map.of(req,selected),List.of(new MonthlyAdoptionPlan.Use("root",req,BigDecimal.ONE)),Set.of()));
     var adopted=receipt.plan().selections().get(req); var before=jdbc.queryForMap("SELECT * FROM lp_material_monthly_price WHERE id=?",adopted.monthlyPriceId());
     var sourceBefore=jdbc.queryForList("SELECT * FROM lp_price_fixed_item WHERE material_code=? ORDER BY id",code);
-    save("COMMERCIAL",row(code,"000A","0"));
+    save("COMMERCIAL",row(code,"000A","0"),row(code,"000B","0.2"));
     var reused=monthly.resolveCandidates(context("2026-10"),Set.of(req)).values().get(req).selection();
     assertThat(reused.monthlyPriceId()).isEqualTo(adopted.monthlyPriceId()); assertThat(reused.fact()).isEqualTo(adopted.fact());
     assertThat(monthly.readByIds("COMMERCIAL",Set.of(adopted.monthlyPriceId())).get(adopted.monthlyPriceId()).fact()).isEqualTo(adopted.fact());
@@ -231,14 +236,14 @@ class SupplierSupplyRatioSelectionIntegrationTest {
   @Test void committedImportRetriesOnlyItsWaitingProductAndKeepsWithdrawnPricesRetryable() {
     String code=code(); String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
     LocalDate date=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingDate();
-    save("COMMERCIAL",row(code,"000A","1")); price(code,"000A","10");
+    save("COMMERCIAL",row(code,"000A","1"),row(code,"000B","0")); price(code,"000A","10");
     var scope=new SupplierPriceScope("COMMERCIAL","MRP03-RETRY",9003L,month,date,"210",code,"FIXED");
     String key=SupplierPriceSelectionService.scopeKey(scope);
     jdbc.update("INSERT INTO lp_supplier_price_decision(scope_key,fingerprint,business_unit_type,oa_no,oa_form_item_id,period_month,pricing_date,org_code,material_code,price_type,decision,confirmed_by,confirmed_at) VALUES(?,'fixture','COMMERCIAL','MRP03-RETRY',9003,?,?, '210',?,'FIXED','WAIT_IMPORT','finance',NOW())",key,month,date,code);
     reset(workbench);
     when(workbench.generate(eq("MRP03-RETRY"),eq(9003L),any())).thenAnswer(invocation -> {
       // This boundary stands for the quotation workbench; its actual supplier choice still uses SQL.
-      var selected=prices.select(scope,List.of(candidate("000A","10")));
+      var selected=prices.select(scope,List.of(candidate("000A","10"),candidate("000B","30")));
       var result=new com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse();
       if(selected.candidate()==null) {
         var gap=new com.sanhua.marketingcost.entity.PricePrepareGap(); gap.setMaterialCode(code); gap.setPriceType("FIXED");
@@ -246,12 +251,12 @@ class SupplierSupplyRatioSelectionIntegrationTest {
       }
       return result;
     });
-    save("COMMERCIAL",row(code,"000A","0"));
+    save("COMMERCIAL",row(code,"000A","0"),row(code,"000B","0"));
     assertThat(sql.getMapper(SupplierPriceDecisionMapper.class).latest(key).getRetryStatus()).isEqualTo("WAITING");
     verify(workbench,times(1)).generate(eq("MRP03-RETRY"),eq(9003L),any());
-    save("COMMERCIAL",row(code(),"000A","1")); save("COMMERCIAL",row(code,"000A","0"));
+    save("COMMERCIAL",row(code(),"000A","1")); save("COMMERCIAL",row(code,"000A","0"),row(code,"000B","0"));
     verify(workbench,times(1)).generate(eq("MRP03-RETRY"),eq(9003L),any());
-    save("COMMERCIAL",row(code,"000A","1"));
+    save("COMMERCIAL",row(code,"000A","1"),row(code,"000B","0"));
     assertThat(sql.getMapper(SupplierPriceDecisionMapper.class).latest(key).getRetryStatus()).isEqualTo("RESOLVED");
     verify(workbench,times(2)).generate(eq("MRP03-RETRY"),eq(9003L),any());
     verifyNoMoreInteractions(workbench);

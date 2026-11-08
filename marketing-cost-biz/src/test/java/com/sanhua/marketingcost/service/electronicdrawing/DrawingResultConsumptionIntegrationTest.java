@@ -8,7 +8,6 @@ import com.sanhua.marketingcost.entity.DrawingVerificationTask;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.integration.drawing.*;
 import com.sanhua.marketingcost.mapper.*;
-import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -28,7 +27,11 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @Tag("integration")
 @AutoConfigureMockMvc
-class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
+class DrawingResultConsumptionIntegrationTest extends com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase {
+  @org.springframework.test.context.DynamicPropertySource
+  static void pricingMonth(org.springframework.test.context.DynamicPropertyRegistry registry) {
+    registry.add("monthly.reprice.go-live-months.COMMERCIAL", CostPricingPeriodUtils::currentPricingMonth);
+  }
   @Autowired MockMvc mvc;
   @Autowired DrawingResultConsumptionService consumer;
   @Autowired DrawingVerificationService verifications;
@@ -42,10 +45,184 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
   @Autowired ElectronicDrawingWorkflowOrchestrator workflow;
   @Autowired com.sanhua.marketingcost.service.QuoteCostingWorkbenchService workbench;
   @Autowired ElectronicDrawingSourceImportService sourceImporter;
+  @Autowired QuoteBomSupplementVersionMapper sourceVersions;
+  @Autowired QuoteBomSupplementDetailMapper sourceDetails;
+  @Autowired ElectronicDrawingSourceNodeRepository sourceNodes;
+  @Autowired com.sanhua.marketingcost.service.QuoteEffectiveBomApplicationService effectiveBom;
+  @Autowired com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
+  @Autowired com.sanhua.marketingcost.service.technicaldata.TechnicalDataVersionContentCodec technicalCodec;
+  @Autowired QuoteTechDataVersionMapper technicalVersions;
+  private boolean manufacturingFixture;
   @MockBean CurrentU9BomGateway u9;
   @MockBean DrawingVerificationClient client;
-  private String key, month;
-  private Long itemId;
+  protected String key, month;
+  protected Long itemId;
+
+  @Test
+  void freshDrawingAlsoRetainsRealManufacturingSupplementInputs() {
+    manufacturingFixture = true;
+    freshMonthAndQuoteReuseCompleteApprovedBomAfterLatestRawDrawingComparison();
+  }
+
+  @Test
+  void changedQuantityScalesCompleteBomButRetainsPerPartManufacturingInputs() {
+    manufacturingFixture = true;
+    freshMonthAndQuoteReuseCompleteApprovedBomAfterLatestRawDrawingComparison();
+    var current = nextContext();
+    var prior = jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? ORDER BY id", current.sourceVersionId());
+    doAnswer(call -> {
+      var body = payload("quantity-" + UUID.randomUUID());
+      ((com.fasterxml.jackson.databind.node.ObjectNode) body.path("data").path(key + "-DRAW-MX").path("params").path("items").get(0)).put("qty", "4");
+      return codec.parse(body.toString());
+    }).when(client).verify(any());
+    var task = verifications.restart(current, null, verifications.current(current).orElseThrow().getId()).orElseThrow();
+    assertThat(consumer.consume(task.getId()).consumptionState()).isEqualTo("COMPLETE");
+    var changed = nextContext();
+    assertThat(changed.published()).isTrue();
+    assertThat(jdbc.queryForList("SELECT qty_per_top FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? AND node_source_type='TECH_RAW' ORDER BY qty_per_top", BigDecimal.class, changed.sourceVersionId()))
+        .usingElementComparator(BigDecimal::compareTo).containsExactly(new BigDecimal(".001875"), new BigDecimal(".060"));
+    assertThat(manufacturingInputs.byParentPath(changed.oaFormItemId(), changed.accountingMonth()).values())
+        .hasSize(2).allSatisfy(input -> assertThat(input.material().quantityPerParent()).isEqualByComparingTo(".015"));
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? ORDER BY id", current.sourceVersionId())).isEqualTo(prior);
+  }
+
+  @Test
+  void addedDrawingNodeDoesNotDiscardUnchangedManufacturingSupplements() {
+    manufacturingFixture = true;
+    freshMonthAndQuoteReuseCompleteApprovedBomAfterLatestRawDrawingComparison();
+    var current = nextContext();
+    material(key + "-NEW", key + "-NEW-DRAW", "采购件");
+    doAnswer(call -> {
+      var body = payload("addition-" + UUID.randomUUID());
+      var rows = (com.fasterxml.jackson.databind.node.ArrayNode) body.path("data").path(key + "-DRAW-MX").path("params").path("items");
+      var added = rows.get(0).deepCopy();
+      ((com.fasterxml.jackson.databind.node.ObjectNode) added).put("code", key + "-NEW-DRAW");
+      rows.add(added);
+      return codec.parse(body.toString());
+    }).when(client).verify(any());
+    var task = verifications.restart(current, null, verifications.current(current).orElseThrow().getId()).orElseThrow();
+    var outcome = consumer.consume(task.getId());
+    assertThat(outcome.consumptionState()).isEqualTo("COMPLETE");
+    var changed = nextContext();
+    assertThat(changed.sourceVersionId()).isNotEqualTo(current.sourceVersionId());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? AND node_source_type='TECH_RAW'", Integer.class, changed.sourceVersionId())).isEqualTo(2);
+    assertThat(manufacturingInputs.byParentPath(changed.oaFormItemId(), changed.accountingMonth())).hasSize(2);
+  }
+
+  private ElectronicDrawingWorkContext nextContext() {
+    Long nextItem = jdbc.queryForObject("SELECT i.id FROM oa_form_item i JOIN oa_form f ON f.id=i.oa_form_id WHERE f.oa_no=?", Long.class, key + "-NEXT");
+    return contexts.load(nextItem, "COMMERCIAL", "210", CostPricingPeriodUtils.currentPricingMonth());
+  }
+
+  @Test
+  void freshMonthAndQuoteReuseCompleteApprovedBomAfterLatestRawDrawingComparison() {
+    String currentMonth = month;
+    month = java.time.YearMonth.parse(month).minusMonths(1).toString();
+    jdbc.update("UPDATE oa_form SET customer=?,accounting_period_month=? WHERE oa_no=?", key, month, key);
+    jdbc.update("UPDATE lp_quote_bom_preparation_record SET cost_period_month=? WHERE oa_form_item_id=?", month, itemId);
+    var oldTask = start();
+    assertThat(consumer.consume(oldTask.getId()).consumptionState()).isEqualTo("COMPLETE");
+    var oldContext = contexts.load(itemId, "COMMERCIAL", "210", month);
+    Long oldSource = oldContext.sourceVersionId();
+    var oldVersion = sourceVersions.selectById(oldSource);
+    var savedNodes = sourceNodes.findByVersionId(oldSource);
+    var savedDetails = sourceDetails.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
+        .<com.sanhua.marketingcost.entity.QuoteBomSupplementDetail>lambdaQuery()
+        .eq(com.sanhua.marketingcost.entity.QuoteBomSupplementDetail::getSupplementVersionId, oldSource));
+    // 模拟已批准的完整树比原始图库多一项补录，而原始 PDF 结果始终不改写。
+    var supplement = new com.sanhua.marketingcost.entity.QuoteBomSupplementDetail();
+    org.springframework.beans.BeanUtils.copyProperties(savedDetails.stream().filter(row -> row.getLevel() == 1).findFirst().orElseThrow(), supplement, "id");
+    supplement.setLineNo(99); supplement.setPath("/" + key + "/SUPPLEMENT/");
+    supplement.setQtyPerParent(new BigDecimal("7")); supplement.setQtyPerTop(new BigDecimal("7"));
+    supplement.setNodeSourceType("TECHNICAL_RAW"); supplement.setManualFlag(1);
+    sourceDetails.insert(supplement);
+    int manufacturingRows = manufacturingFixture ? installManufacturing(oldContext, savedDetails) : 0;
+    oldVersion.setVersionStatus("APPROVED"); oldVersion.setReviewedAt(java.time.LocalDateTime.now());
+    oldVersion.setReuseValidUntil(java.time.YearMonth.parse(month).plusMonths(6).atEndOfMonth());
+    sourceVersions.updateById(oldVersion);
+    contexts.completePublication(oldContext, oldVersion.getCompositionFingerprint(), java.time.LocalDateTime.now());
+    var oldRows = jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? ORDER BY id", oldSource);
+    var originalEvidence = results.findById(oldTask.getCurrentResultId()).getRawSummaryJson();
+
+    String nextOa = key + "-NEXT";
+    jdbc.update("INSERT INTO oa_form(oa_no,accounting_period_month,business_unit_type,customer) VALUES(?,?,'COMMERCIAL',?)", nextOa, currentMonth, key);
+    Long nextForm = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, nextOa);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,sunl_model,product_name,business_unit_type) VALUES(?,?,?,'热力膨胀阀','COMMERCIAL')", nextForm, key, key);
+    Long nextItem = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, nextForm);
+    var nextTask = verifications.start(contexts.load(nextItem, "COMMERCIAL", "210", currentMonth), null).orElseThrow();
+    var outcome = consumer.consume(nextTask.getId());
+    assertThat(outcome.consumptionState()).isEqualTo("COMPLETE");
+    var adopted = contexts.load(nextItem, "COMMERCIAL", "210", currentMonth);
+    assertThat(adopted.published()).as("相同图库必须沿用完整批准BOM，不再要求补录").isTrue();
+    var nextVersion = sourceVersions.selectById(adopted.sourceVersionId());
+    assertThat(nextVersion.getReusedFromVersionId()).isEqualTo(oldSource);
+    assertThat(nextVersion.getDrawingResultId()).isEqualTo(nextTask.getCurrentResultId());
+    assertThat(nextVersion.getDrawingResultId()).isNotEqualTo(oldTask.getCurrentResultId());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=?", Integer.class, nextVersion.getId()))
+        .isEqualTo(savedDetails.size() + 1 + manufacturingRows);
+    assertThat(jdbc.queryForObject("SELECT qty_per_top FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? AND path=?", BigDecimal.class,
+        nextVersion.getId(), supplement.getPath())).isEqualByComparingTo("7");
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? ORDER BY id", oldSource)).isEqualTo(oldRows);
+    assertThat(results.findById(oldTask.getCurrentResultId()).getRawSummaryJson()).isEqualTo(originalEvidence);
+    assertThat(sourceNodes.findByVersionId(oldSource)).hasSize(savedNodes.size());
+    var tree = effectiveBom.getEffectiveBom(nextOa, nextItem);
+    assertThat(tree.nodes()).as("普通工作台必须读到完整BOM，不能再报先取得图库明细").isNotEmpty();
+    assertThat(tree.blockIssues()).noneMatch(issue -> issue.issueCode().contains("TECH_DATA_SOURCE_NOT_CONFIRMED"));
+    if (manufacturingFixture) {
+      var inputs = manufacturingInputs.byParentPath(nextItem, currentMonth);
+      assertThat(inputs).hasSize(2);
+      assertThat(inputs.values()).allSatisfy(input -> {
+        assertThat(input.material().grossWeightKg()).isEqualByComparingTo(".015");
+        assertThat(input.material().netWeightKg()).isEqualByComparingTo(".010");
+        assertThat(input.material().netLengthMm()).isEqualByComparingTo("120");
+      });
+    }
+    verify(client, times(2)).verify(any());
+  }
+
+  private int installManufacturing(ElectronicDrawingWorkContext context,
+      List<com.sanhua.marketingcost.entity.QuoteBomSupplementDetail> rows) {
+    jdbc.update("INSERT INTO lp_quote_tech_task(task_no,oa_form_id,oa_no,accounting_month,business_unit_type,applicable_org_code,assignee_user_id,assignee_name,task_status,active_flag) VALUES(?,?,?,?,'COMMERCIAL','210',1,'Test','APPROVED',0)", key, context.oaFormId(), key, month);
+    Long task = jdbc.queryForObject("SELECT id FROM lp_quote_tech_task WHERE task_no=?", Long.class, key);
+    jdbc.update("INSERT INTO lp_quote_tech_product(task_id,oa_form_item_id,material_no,quote_no,accounting_month,source_snapshot_json,source_fingerprint,product_status,active_flag) VALUES(?,?,?,?,?,'{}',REPEAT('a',64),'APPROVED',0)", task, itemId, key, key, month);
+    Long product = jdbc.queryForObject("SELECT id FROM lp_quote_tech_product WHERE task_id=?", Long.class, task);
+    var version = new com.sanhua.marketingcost.entity.QuoteTechDataVersion();
+    version.setProductId(product); version.setVersionNo(1); version.setVersionStatus("DRAFT"); version.setContentSchemaVersion(2);
+    technicalVersions.insert(version);
+    material(key + "-RAW", key + "-RAW-DRAW", "采购件");
+    jdbc.update("UPDATE lp_material_master_raw SET unit='kg' WHERE material_code=?", key + "-RAW");
+    jdbc.update("UPDATE lp_material_master_raw SET shape_attr='制造件' WHERE material_code=?", key + "-PART");
+    var inputs = new java.util.ArrayList<com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial>();
+    for (var parent : rows.stream().filter(row -> "E_DRAWING".equals(row.getNodeSourceType())
+        && row.getSourceElectronicNodeId() != null).toList()) {
+      String itemKey = "RAW:" + parent.getSourceElectronicNodeId();
+      var input = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial(
+          itemKey, parent.getSourceElectronicNodeId().toString(), context.sourceVersionId(), parent.getMaterialCode(),
+          key + "-RAW", key + "-RAW-DRAW", new BigDecimal(".010"), new BigDecimal(".015"), "kg", null,
+          new BigDecimal(".015"), new BigDecimal("120"),
+          new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingNodeEvidence(
+              "Test", parent.getDrawingNo(), parent.getQtyPerParent(), new BigDecimal("10"), "g", "铜棒", null, "NO_SCRAP_CONFIRMED", List.of()));
+      inputs.add(input);
+      var raw = new com.sanhua.marketingcost.entity.QuoteBomSupplementDetail();
+      org.springframework.beans.BeanUtils.copyProperties(parent, raw, "id");
+      raw.setLineNo(100 + inputs.size()); raw.setLevel(parent.getLevel() + 1);
+      raw.setPath(parent.getPath() + "TECH:" + version.getId() + ":" + itemKey + "/");
+      raw.setParentCode(parent.getMaterialCode()); raw.setMaterialCode(key + "-RAW"); raw.setUnit("kg");
+      raw.setQtyPerParent(input.quantityPerParent()); raw.setQtyPerTop(parent.getQtyPerTop().multiply(input.quantityPerParent()));
+      raw.setNodeSourceType("TECH_RAW"); raw.setShapeAttr("采购件"); raw.setManualFlag(1);
+      sourceDetails.insert(raw);
+      parent.setShapeAttr("制造件"); sourceDetails.updateById(parent);
+    }
+    version.setManufacturingJson(technicalCodec.manufacturingJson(
+        new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.Manufacturing(inputs, null)));
+    version.setReferenceSnapshotJson(technicalCodec.referenceSnapshotJson(List.of()));
+    version.setSourceFactsJson("{\"productSourceJson\":\"{}\",\"modules\":[]}");
+    version.setContentFingerprint(technicalCodec.fingerprint(version, List.of(), List.of(), List.of(), List.of()));
+    technicalVersions.updateById(version);
+    for (String status : List.of("FROZEN", "SUBMITTED", "APPROVED"))
+      jdbc.update("UPDATE lp_quote_tech_data_version SET version_status=? WHERE id=?", status, version.getId());
+    return inputs.size();
+  }
 
   @BeforeEach
   void fixture() {
@@ -639,7 +816,8 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
       properties.setRequestTimeout(java.time.Duration.ofSeconds(5));
       var actualClient =
           new HttpDrawingVerificationClient(
-              properties, codec, new com.fasterxml.jackson.databind.ObjectMapper());
+              properties, codec, new com.fasterxml.jackson.databind.ObjectMapper(),
+              new com.sanhua.marketingcost.integration.drawing.DrawingVerificationCallGuard(jdbc.getDataSource()));
       doAnswer(call -> actualClient.verify(call.getArgument(0))).when(client).verify(any());
       var task = start();
       var confirmed = payload(id);
@@ -715,7 +893,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
         itemId);
   }
 
-  private com.fasterxml.jackson.databind.node.ObjectNode payload(String id) {
+  protected com.fasterxml.jackson.databind.node.ObjectNode payload(String id) {
     return DrawingVerificationFixtures.drawing(
         id,
         key + "-DRAW-MX",

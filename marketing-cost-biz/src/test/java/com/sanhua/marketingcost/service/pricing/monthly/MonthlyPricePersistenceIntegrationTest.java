@@ -38,11 +38,15 @@ class MonthlyPricePersistenceIntegrationTest {
   private static final MySQLContainer<?> MYSQL = new MySQLContainer<>(org.testcontainers.utility.DockerImageName
       .parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
       .withDatabaseName("mpp_storage_test").withUsername("root").withPassword("mpp-test-only")
-      .withConfigurationOverride("monthly-pricing/mysql");
+      .withConfigurationOverride("monthly-pricing/mysql")
+      .withLabel("sales-cost.task", System.getProperty("mpp.mysql.task", "monthly-material-pricing"))
+      .withLabel("sales-cost.run", "monthly-price-storage-" + java.util.UUID.randomUUID())
+      .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   private static JdbcTemplate jdbc;
   private static TransactionTemplate transaction;
   private static MonthlyPriceStorage storage;
   private static MonthlyPriceStorageMapper mapper;
+  private static MonthlyPriceLinkMapper links;
   private static HouseholdInquiryStorage household;
 
   @BeforeAll static void database() {
@@ -61,7 +65,7 @@ class MonthlyPricePersistenceIntegrationTest {
         "{\"productFees\":{\"included\":false,\"unitMouldFee\":0}}");
   }
 
-  @AfterAll static void stop() { MYSQL.stop(); }
+  @AfterAll static void stop() { if (!Boolean.getBoolean("mpp.mysql.retain")) MYSQL.stop(); }
 
   static void storage() throws Exception {
     if (storage != null) return;
@@ -77,8 +81,8 @@ class MonthlyPricePersistenceIntegrationTest {
     transaction = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
     transaction.setIsolationLevelName("ISOLATION_REPEATABLE_READ");
     transaction.setTimeout(3);
-    storage = new MonthlyPriceStorage(mapper, new MonthlyPriceDocumentCodec(new ObjectMapper()),
-        new SqlSessionTemplate(factory.getObject()).getMapper(MonthlyPriceLinkMapper.class));
+    links = new SqlSessionTemplate(factory.getObject()).getMapper(MonthlyPriceLinkMapper.class);
+    storage = new MonthlyPriceStorage(mapper, new MonthlyPriceDocumentCodec(new ObjectMapper()), links);
     household = new HouseholdInquiryStorage(new SqlSessionTemplate(factory.getObject()).getMapper(HouseholdInquiryStorageMapper.class),
         new MonthlyPriceDocumentCodec(new ObjectMapper()));
   }
@@ -86,7 +90,7 @@ class MonthlyPricePersistenceIntegrationTest {
   static boolean migrated;
   static synchronized void migrate() throws Exception {
     if(migrated)return;
-    for(String file:List.of(MIGRATION,"db/V344__monthly_material_price_single_table.sql","db/V354__invoice_price_import.sql","db/V360__finance_correction_monthly_price.sql")) {
+    for(String file:List.of(MIGRATION,"db/V344__monthly_material_price_single_table.sql","db/V354__invoice_price_import.sql","db/V360__finance_correction_monthly_price.sql","db/V364__household_inquiry_header_schema.sql","db/V365__household_monthly_source_revision.sql","db/V366__household_model_specification_match.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource(file),"/tmp/mpp-storage.sql");
       var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_storage_test < /tmp/mpp-storage.sql");
       assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
@@ -245,6 +249,95 @@ class MonthlyPricePersistenceIntegrationTest {
     });
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"2,false", "4,false", "2,true", "4,true"})
+  void preparationReferencesAndAdoptionUseCompatibleLockOrder(int isolation, boolean sameFamily) throws Exception {
+    migrate(); storage();
+    var manager = new DataSourceTransactionManager(jdbc.getDataSource());
+    var seed = new TransactionTemplate(manager);
+    seed.setIsolationLevel(Connection.TRANSACTION_REPEATABLE_READ);
+    var prefix = "BIND-" + java.util.UUID.randomUUID();
+    var references = seed.execute(tx -> {
+      var result = new java.util.ArrayList<MonthlyPriceStorage.PreparationReference>();
+      for (int i = 0; i < 2; i++) {
+        var family = new MonthlyPriceFamilyKey(YearMonth.of(2026,10), "COMMERCIAL",
+            prefix + (sameFamily ? "" : "-" + i), null, "件", "CNY", TaxBasis.EXCLUDED, null);
+        String organization = i == 0 ? "210" : "220";
+        var applicability = MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of(organization),
+            QuantityInterval.all(), ConditionDomain.any()));
+        var fact = MonthlyAdoptionPlan.PriceFact.normal(new BigDecimal("12.123456789012345678"),
+            MonthlyAdoptionPlan.SourceEvidence.ofJson("{\"sourceKind\":\"FIXED\"}"), Set.of());
+        storage.lockFamilies(List.of(family));
+        var saved = storage.insertPrice(family, applicability, fact, null, "{\"requestId\":\"binding-order\"}", "test");
+        jdbc.update("""
+            INSERT INTO lp_price_prepare_item(prepare_no,oa_no,top_product_code,material_code,
+              item_type,business_unit_type,period_month,price_org_code)
+            VALUES(?,?,'TOP',?,'NORMAL','COMMERCIAL','2026-10',?)
+            """, prefix, prefix, family.materialCode(), organization);
+        long itemId = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+        result.add(new MonthlyPriceStorage.PreparationReference(itemId,
+            new MonthlyPriceRequest(family, organization, NonCuConditions.empty(), BigDecimal.ONE),
+            new MonthlyAdoptionPlan.Selection(saved.id(), applicability, fact)));
+      }
+      return result;
+    });
+    // Derive the inverse order from the real index columns, not from the implementation comparator.
+    var databaseOrder = jdbc.queryForList("""
+        SELECT id FROM lp_material_monthly_price WHERE material_code LIKE ?
+        ORDER BY family_hash,applicability_hash
+        """, Long.class, prefix + "%");
+    assertThat(databaseOrder).hasSize(2);
+    references.sort(java.util.Comparator.comparingInt(ref -> -databaseOrder.indexOf(ref.selection().monthlyPriceId())));
+    var originalReferences = List.copyOf(references);
+    var originals = jdbc.queryForList("SELECT * FROM lp_material_monthly_price WHERE material_code LIKE ? ORDER BY id", prefix + "%");
+    var firstLinked = new java.util.concurrent.CountDownLatch(1);
+    var linkCount = new java.util.concurrent.atomic.AtomicInteger();
+    var scheduledLinks = org.mockito.Mockito.mock(MonthlyPriceLinkMapper.class,
+        org.mockito.AdditionalAnswers.delegatesTo(links));
+    org.mockito.Mockito.doAnswer(call -> {
+      int changed = links.attachPreparation(call.getArgument(0), call.getArgument(1), call.getArgument(2), call.getArgument(3));
+      if (linkCount.incrementAndGet() == 1) {
+        firstLinked.countDown();
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (jdbc.queryForObject("""
+            SELECT COUNT(*) FROM performance_schema.data_lock_waits w
+            JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID
+            WHERE l.OBJECT_SCHEMA=DATABASE() AND l.OBJECT_NAME='lp_material_monthly_price'
+            """, Integer.class) == 0) {
+          assertThat(System.nanoTime()).isLessThan(deadline);
+          Thread.sleep(5);
+        }
+      }
+      return changed;
+    }).when(scheduledLinks).attachPreparation(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyLong(),
+        org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
+    var scheduledStorage = new MonthlyPriceStorage(mapper, new MonthlyPriceDocumentCodec(new ObjectMapper()), scheduledLinks);
+    var binding = new TransactionTemplate(manager);
+    binding.setIsolationLevel(isolation); binding.setTimeout(15);
+    var adoption = new TransactionTemplate(manager);
+    adoption.setIsolationLevel(Connection.TRANSACTION_REPEATABLE_READ); adoption.setTimeout(15);
+    try (var pool = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      var checking = pool.submit(() -> {
+        assertThat(firstLinked.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        adoption.executeWithoutResult(tx -> storage.lockFamilies(references.stream().map(ref -> ref.request().family()).toList()));
+        return true;
+      });
+      binding.executeWithoutResult(tx -> scheduledStorage.attachPreparations("COMMERCIAL", null, references));
+      assertThat(checking.get(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+    } finally {
+      String evidence = System.getProperty("reprice.test.evidence");
+      if (evidence != null) new ObjectMapper().writeValue(
+          java.nio.file.Path.of(evidence, "price-binding-locks-" + isolation + "-" + sameFamily + ".json").toFile(),
+          jdbc.queryForList("SHOW ENGINE INNODB STATUS"));
+    }
+    assertThat(references).containsExactlyElementsOf(originalReferences);
+    assertThat(linkCount).hasValue(2);
+    for (var ref : references) assertThat(storage.preparationLink("COMMERCIAL", ref.itemId()).monthlyPriceId())
+        .isEqualTo(ref.selection().monthlyPriceId());
+    assertThat(jdbc.queryForList("SELECT * FROM lp_material_monthly_price WHERE material_code LIKE ? ORDER BY id", prefix + "%"))
+        .usingRecursiveComparison().isEqualTo(originals);
+  }
+
   @Test void preparationCostAndVersionMetadataUseTheSameSavedMonthlyIdentity() throws Exception {
     migrate(); storage();
     transaction.executeWithoutResult(status -> {
@@ -254,10 +347,9 @@ class MonthlyPricePersistenceIntegrationTest {
       String runNo=java.util.UUID.randomUUID().toString();
       jdbc.update("INSERT INTO lp_quote_cost_run_version(cost_run_no,oa_no,oa_form_item_id,product_code,pricing_month,result_period,business_unit_type) VALUES(?,'MPP02',1,'TOP','2026-10','2026-10','COMMERCIAL')",runNo);
       long version=jdbc.queryForObject("SELECT LAST_INSERT_ID()",Long.class);
-      jdbc.update("INSERT INTO lp_cost_run_part_item(oa_no,oa_form_item_id,product_code,part_code,business_unit_type,price_org_code,cost_run_version_id,cost_run_no) VALUES('MPP02',1,'TOP',?,'COMMERCIAL','210',?,?)",saved.family().materialCode(),version,runNo);
+      jdbc.update("INSERT INTO lp_cost_run_part_item(oa_no,oa_form_item_id,product_code,part_code,business_unit_type,price_org_code,cost_run_version_id,cost_run_no,monthly_price_id,monthly_pricing_type) VALUES('MPP02',1,'TOP',?,'COMMERCIAL','210',?,?,?,?)",saved.family().materialCode(),version,runNo,saved.id(),saved.pricingType().name());
       long costPart=jdbc.queryForObject("SELECT LAST_INSERT_ID()",Long.class);
       storage.attachPreparation("COMMERCIAL",preparation,saved.id(),saved.pricingType());
-      storage.attachCostPart("COMMERCIAL",costPart,saved.id(),saved.pricingType());
       assertThat(storage.preparationLink("COMMERCIAL",preparation).monthlyPriceId()).isEqualTo(saved.id());
       assertThat(storage.costPartLink("COMMERCIAL",costPart).monthlyPriceId()).isEqualTo(saved.id());
       String snapshot="{\"fees\":{\"mould\":null,\"depreciation\":0},\"totalCost\":999999999999.123456}";
@@ -387,7 +479,10 @@ class MonthlyPricePersistenceIntegrationTest {
       }
       jdbc.update("INSERT INTO lp_cost_run_part_item(oa_no,oa_form_item_id,product_code,part_code,business_unit_type,price_org_code,cost_run_version_id,cost_run_no) VALUES('MPP02',1,'TOP',?,'COMMERCIAL','210',?,?)",saved.family().materialCode(),version,runNo);
       long part=jdbc.queryForObject("SELECT LAST_INSERT_ID()",Long.class);
-      assertThatThrownBy(() -> storage.attachCostPart("COMMERCIAL",part,saved.id(),saved.pricingType()))
+      assertThatThrownBy(() -> jdbc.update("UPDATE lp_cost_run_part_item SET monthly_price_id=?,monthly_pricing_type=? WHERE id=?",saved.id(),saved.pricingType().name(),part))
+          .hasStackTraceContaining("MPP_PRICE_LINK_SCOPE");
+      Long sourceVersion=version;
+      assertThatThrownBy(() -> jdbc.update("INSERT INTO lp_cost_run_part_item(oa_no,oa_form_item_id,product_code,part_code,business_unit_type,price_org_code,cost_run_version_id,cost_run_no,monthly_price_id,monthly_pricing_type) VALUES('MPP02',1,'TOP',?,'COMMERCIAL','210',?,?,?,?)",saved.family().materialCode(),sourceVersion,runNo,saved.id(),saved.pricingType().name()))
           .hasStackTraceContaining("MPP_PRICE_LINK_SCOPE");
       status.setRollbackOnly();
     });
@@ -549,7 +644,7 @@ class MonthlyPricePersistenceIntegrationTest {
 
   @Test void storageQueriesHavePhysicalIndexesAndNoCascadingHistoryDeletes() throws Exception {
     migrate();
-    assertIndex("lp_material_monthly_price","uk_monthly_price_identity",List.of("family_hash","applicability_hash","invoice_revision","finance_revision"));
+    assertIndex("lp_material_monthly_price","uk_monthly_price_identity",List.of("family_hash","applicability_hash","invoice_revision","finance_revision","household_revision"));
     assertIndex("lp_material_monthly_price","idx_monthly_price_query",List.of("business_unit_type","pricing_month","material_code","id"));
     assertIndex("lp_material_monthly_price","idx_monthly_price_source",List.of("household_source_id","id"));
     assertIndex("lp_household_inquiry_price","uk_household_current",List.of("business_unit_type","current_material"));

@@ -24,6 +24,25 @@ class HouseholdInquiryWorkbookParserTest {
   static byte[] bytes(Workbook book) throws Exception { try(book;var stream=new ByteArrayOutputStream()){book.write(stream);return stream.toByteArray();} }
   static HouseholdInquiryWorkbookParser.WorkbookData parse(Workbook book) throws Exception { return new HouseholdInquiryWorkbookParser().parse(bytes(book),"synthetic.xls"); }
 
+  @Test void novemberWorkbookReadsOriginalInquiryAndRateByHeaderNotTheExampleCustomerColumn() throws Exception {
+    byte[] source=getClass().getResourceAsStream("/household-inquiry/real-20261107.xlsx").readAllBytes();
+    var parsed=new HouseholdInquiryWorkbookParser().parse(source,"家用询价单2026.11.7.xlsx");
+    assertThat(parsed.errors()).isEmpty();
+    assertThat(parsed.rows()).hasSize(125);assertThat(parsed.duplicates()).hasSize(1);
+    assertThat(parsed.rows().stream().filter(value->value.materialCode()==null)).hasSize(8);
+    var repeated=parsed.rows().stream().filter(value->value.materialCode()==null && "DPF-TS1010-053".equals(value.specification())).findFirst().orElseThrow();
+    assertThat(repeated.sourceRows()).containsExactly(124,127);
+    assertThat(repeated.cells()).anyMatch(cell->cell.cell().equals("D124") && cell.value().equals("3"));
+    assertThat(repeated.cells()).anyMatch(cell->cell.cell().equals("D127") && cell.value().equals("1"));
+    var row=parsed.rows().stream().filter(value->"208200575".equals(value.materialCode())).findFirst().orElseThrow();
+    assertThat(row.unitPrice()).isEqualTo("18.9343");
+    assertThat(row.householdRate()).isEqualTo("0.085");
+    assertThat(row.financialReference().get("F").value()).isEqualTo("57.4");
+    assertThat(row.financialReference().get("G").value()).isEqualTo("0.8");
+    assertThat(row.financialReference().get("W").formula()).isEqualTo("E3+(($W$1-$V$1)*F3/1000+($W$2-V2)*G3/1000)/1.13");
+    assertThat(new BigDecimal(row.financialReference().get("W").value())).isCloseTo(new BigDecimal("20.4631096903637"),within(new BigDecimal("0.000000000001")));
+  }
+
   @Test void readsOnlyTheActualSeventeenRowsAgainstIndependentOracle() throws Exception {
     byte[] source=getClass().getResourceAsStream("/household-inquiry/real-20261023.xls").readAllBytes();
     var actual=new HouseholdInquiryWorkbookParser().parse(source,"original.xls");
@@ -58,10 +77,26 @@ class HouseholdInquiryWorkbookParserTest {
       assertThat(error.message()).isNotBlank();
     });
   }
-  @ParameterizedTest @CsvSource({"0,A","4,E","13,N"})
+  @ParameterizedTest @CsvSource({"4,E","13,N"})
   void missingRequiredCellsAreErrorsEvenWithOtherReferencesPresent(int column,String name) throws Exception {
     var book=workbook();book.getSheetAt(0).getRow(2).removeCell(book.getSheetAt(0).getRow(2).getCell(column));
     var result=parse(book);assertThat(result.errors()).singleElement().satisfies(error -> assertThat(error.column()).isEqualTo(name));
+  }
+  @Test void missingCodeUsesSpecificationButOtherCellErrorsAndMissingIdentityStillReject() throws Exception {
+    for(String value:List.of("", "#N/A", "NA")) {
+      var book=workbook();book.getSheetAt(0).getRow(2).getCell(0).setCellValue(value);
+      var parsed=parse(book);assertThat(parsed.errors()).isEmpty();assertThat(parsed.rows().getFirst().materialCode()).isNull();
+    }
+    var noIdentity=workbook();noIdentity.getSheetAt(0).getRow(2).getCell(0).setBlank();noIdentity.getSheetAt(0).getRow(2).getCell(2).setBlank();
+    assertThat(parse(noIdentity).errors()).singleElement().satisfies(error->assertThat(error.column()).isEqualTo("A/C"));
+    var bad=workbook();bad.getSheetAt(0).getRow(2).getCell(0).setCellErrorValue(FormulaError.VALUE.getCode());
+    assertThat(parse(bad).errors()).isNotEmpty();
+  }
+  @Test void missingCodeDuplicateWithDifferentPriceOrMetalWeightCannotBeChosenArbitrarily() throws Exception {
+    var book=workbook();var sheet=book.getSheetAt(0);sheet.getRow(2).getCell(0).setBlank();
+    var next=sheet.createRow(3);next.createCell(0).setBlank();next.createCell(1).setCellValue("线圈");next.createCell(2).setCellValue("SPEC");
+    next.createCell(4).setCellValue(99);next.createCell(13).setCellValue(8.5);
+    assertThat(parse(book).errors()).singleElement().satisfies(error->assertThat(error.column()).isEqualTo("C"));
   }
   @ParameterizedTest @CsvSource({"4,1e-2147483647","13,1e-2147483647","4,1e2147483647","13,1e2147483647","4,100e2147483647","13,100e2147483647"})
   void extremeExponentsAreRowErrorsRatherThanAnUncaughtArithmeticFailure(int column,String value) throws Exception {
@@ -99,7 +134,8 @@ class HouseholdInquiryWorkbookParserTest {
     assertThat(parse(book).errors()).singleElement().satisfies(e -> assertThat(e.column()).isEqualTo("E"));
   }
   @Test void titleHeadersAndWorksheetMustAllMatchTheExplicitSchema() throws Exception {
-    var wrongSheet=workbook();wrongSheet.setSheetName(0,"other");assertThatThrownBy(() -> parse(wrongSheet)).hasMessageContaining("10月线圈询价");
+    var renamed=workbook();renamed.setSheetName(0,"other");assertThat(parse(renamed).errors()).isEmpty();
+    var ambiguous=workbook();ambiguous.cloneSheet(0);assertThatThrownBy(() -> parse(ambiguous)).hasMessageContaining("仅有一个");
     var title=workbook();title.getSheetAt(0).getRow(0).getCell(1).setCellValue("unrelated");assertThatThrownBy(() -> parse(title)).hasMessageContaining("标题");
     var header=workbook();header.getSheetAt(0).getRow(1).getCell(13).setCellValue("两项费用比例");assertThatThrownBy(() -> parse(header)).hasMessageContaining("N2");
   }

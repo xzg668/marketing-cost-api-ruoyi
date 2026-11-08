@@ -159,10 +159,10 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     QuoteBomStatusItemResponse checked = launch.checked();
     if (checked != null && QuoteBomStatusCode.NO_BOM.getCode().equals(checked.getBomStatus())) {
       electronic = electronicDrawingFallbackService.attempt(launch.form(), launch.item(), launch.month());
-    } else if (checked != null && Set.of("ELECTRONIC_DRAWING_EXCEL", "ELECTRONIC_DRAWING_PDF")
+    } else if (checked != null && Set.of("ELECTRONIC_DRAWING_EXCEL", "ELECTRONIC_DRAWING_PDF", "ELECTRONIC_DRAWING_BOM")
         .contains(checked.getBomSource() == null ? "" : checked.getBomSource())) {
-      // 只有 U9 已确认缺失、当前实际来源为图库时，才接续其已组好的修订。
-      electronic = electronicDrawingFallbackService.resumeComposed(launch.form(), launch.item(), launch.month());
+      // 图库来源须先比较本次明细；同料号或已有已审核月度 BOM 不能替代这一步。
+      electronic = electronicDrawingFallbackService.attempt(launch.form(), launch.item(), launch.month());
     }
     var result = electronic;
     return transaction.execute(status -> finishLaunch(launch, result));
@@ -204,7 +204,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
           effectiveBomCostingService.prepareCurrent(form.getOaNo(), item.getId());
       generated = true;
       buildBatchId = build.buildBatchId();
-    } else if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
+    } else if ((electronic == null || !electronic.attempted() || electronic.costingCanContinue())
+        && isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
       QuoteProductBomPreparationPreview preparation =
           bomPreparationService.prepareByOaFormItem(
               item.getId(), CostPricingPeriodUtils.currentPricingDate());

@@ -50,6 +50,55 @@ class TechnicalDataSubmissionRemarkTest {
     assertThat(result.length()).as("九模块样例通过紧凑格式控制长度，未截断任何明细").isLessThan(1100);
   }
 
+  @Test void sharedPriceOnlySubmissionUsesTheFrozenReferenceInsteadOfRequiringDuplicatePrices() throws Exception {
+    var submission = sharedPriceFixture(false);
+    assertThat(remarks.generate("1064100050090", submission)).contains("301240123", "引用已有补录价格").doesNotContain("无明细");
+    assertThat(remarks.generateBrief("1064100050090", submission)).contains("引用1项已有价格");
+  }
+
+  @Test void mixedPriceSubmissionDescribesBothPersonalAndSharedItems() throws Exception {
+    var submission = sharedPriceFixture(true);
+    assertThat(remarks.generate("1064100050090", submission)).contains("不含税单价", "301240123", "引用已有补录价格");
+    assertThat(remarks.generateBrief("1064100050090", submission)).contains("自填2项", "引用1项");
+  }
+
+  @Test void emptyPriceWithoutValidFrozenSharedSourceStillFails() throws Exception {
+    var submission = sharedPriceFixture(false);
+    var root = tree(submission);
+    for (var module : root.at("/details/modules")) if ("PRICE".equals(module.path("moduleType").asText()))
+      ((ObjectNode) module).putNull("referenceSnapshotJson");
+    submission.setContentSnapshotJson(root.toString());
+    assertThatThrownBy(() -> remarks.generate("P1", submission)).hasMessageContaining("无法生成补录说明");
+    assertThatThrownBy(() -> remarks.generateBrief("P1", submission)).hasMessageContaining("无法生成补录说明");
+  }
+
+  private QuoteTechSubmission sharedPriceFixture(boolean mixed) throws Exception {
+    var submission = fixture(); submission.setModuleTypesJson("[\"PRICE\"]"); var root = tree(submission);
+    if (!mixed) ((ObjectNode) root.at("/supplements/prices")).putArray("items");
+    var reference = json.readTree("""
+        {"requirements":{"items":[{"materialNo":"301240123","status":"SHARED","organizationCode":"210","unit":"千克","currency":"CNY"}],"issues":[]},
+         "owners":[{"materialNo":"301240123","productId":14,"versionId":7,"organizationCode":"210","unit":"千克","currency":"CNY"}]}
+        """);
+    for (var module : root.at("/details/modules")) if ("PRICE".equals(module.path("moduleType").asText()))
+      ((ObjectNode) module).put("referenceSourceType", "TECH_PRICE_SHARED").put("referenceSnapshotJson", reference.toString());
+    submission.setContentSnapshotJson(root.toString()); return submission;
+  }
+
+  @Test void threeProductsWithSevenModulesAndSharedPricesProduceOneValidOaRemark() throws Exception {
+    var own = fixture(); var shared1 = sharedPriceFixture(false); var shared2 = sharedPriceFixture(false);
+    String scope = "[\"PROFILE\",\"MANUFACTURING\",\"PACKAGE\",\"AUXILIARY\",\"SOLDER\",\"SALARY\",\"PRICE\"]";
+    for (var entry : List.of(own, shared1, shared2)) entry.setModuleTypesJson(scope);
+    String legacy = remarks.generateBrief("1064100050088", own) + remarks.generateBrief("1064100050090", shared1) + remarks.generateBrief("1064100050089", shared2);
+    assertThat(legacy.length()).isGreaterThan(200);
+    var entries = List.of(new TechnicalDataSubmissionRemark.SubmittedProduct("1064100050088", own),
+        new TechnicalDataSubmissionRemark.SubmittedProduct("1064100050090", shared1),
+        new TechnicalDataSubmissionRemark.SubmittedProduct("1064100050089", shared2));
+    String remark = remarks.generateDocument(entries);
+    com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowClient.validateRemark(remark);
+    assertThat(remark).contains("3个产品", "制造件", "价格", "自填2项", "引用2项", "补录工作台");
+    assertThat(tree(shared1).at("/supplements/prices/items")).isEmpty();
+  }
+
   @Test void onlyIncludesThisPersonsSubmittedModulesInBusinessOrder() throws Exception {
     var submission = fixture();
     submission.setModuleTypesJson("[\"NET_LOSS\",\"SALARY\"]");

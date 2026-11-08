@@ -218,8 +218,8 @@ public final class PreparedFormulaInputs {
       identities = copyMap(identities, FactorIdentity.class);
       managedFactors = Set.copyOf(managedFactors);
       privatePrices = copies(privatePrices, FactorMonthlyPrice.class);
-      if (factors != null && factors.customerCopperPricePerTon() != null)
-        throw new IllegalArgumentException("公共公式P0不能包含客户Cu");
+      if (factors != null && factors.hasCustomerMaterialPrices())
+        throw new IllegalArgumentException("公共公式P0不能包含客户材料基价");
     }
 
     @Override public Map<Long, FactorIdentity> identities() {
@@ -299,9 +299,20 @@ public final class PreparedFormulaInputs {
 
   /** Quote-local projection; the captured public Financial inputs remain unchanged. */
   public PreparedFormulaInputs withCustomerCopper(BigDecimal copperPerTon, Scrap customerScrap) {
+    return withCustomerMetals(copperPerTon, null, customerScrap);
+  }
+
+  public PreparedFormulaInputs withCustomerMetals(BigDecimal copperPerTon, BigDecimal zincPerTon, Scrap customerScrap) {
     var factors = financial.factors();
     return new PreparedFormulaInputs(catalog, financial, customerScrap,
-        factors == null ? null : factors.withCustomerCopperPerTon(copperPerTon));
+        factors == null ? null : factors.withCustomerMetalsPerTon(copperPerTon, zincPerTon));
+  }
+
+  public PreparedFormulaInputs withCustomerMaterials(
+      com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices prices, Scrap customerScrap) {
+    var factors = financial.factors();
+    return new PreparedFormulaInputs(catalog, financial, customerScrap,
+        factors == null ? null : factors.withCustomerMaterials(prices));
   }
 
   public Catalog catalog() { return catalog; }

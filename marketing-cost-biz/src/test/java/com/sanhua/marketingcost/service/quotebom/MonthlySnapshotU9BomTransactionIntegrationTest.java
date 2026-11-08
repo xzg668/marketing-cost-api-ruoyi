@@ -43,7 +43,10 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
       .withDatabaseName("quote_monthly_transaction_test")
       .withUsername("test")
       .withPassword("test")
-      .withConfigurationOverride("monthly-pricing/mysql");
+      .withConfigurationOverride("monthly-pricing/mysql")
+      .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","monthly-bom-tests"))
+      .withLabel("sales-cost.run",java.util.UUID.randomUUID().toString())
+      .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   private static AnnotationConfigApplicationContext spring;
   private static JdbcTemplate jdbc;
   private static TransactionTemplate costing;
@@ -249,7 +252,73 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
   @AfterAll
   static void stop() {
     if (spring != null) spring.close();
-    MYSQL.stop();
+    if (!Boolean.getBoolean("mpp.mysql.retain")) MYSQL.stop();
+  }
+
+  @Test void batchReadPreservesEveryOccurrenceAndOrderAcrossSqlChunksWithoutWriting() {
+    var ids=new java.util.ArrayList<Long>();
+    var originals=new java.util.LinkedHashMap<Long,java.util.List<com.sanhua.marketingcost.entity.BomRawHierarchy>>();
+    for(int i=0;i<129;i++) {
+      var month=java.time.YearMonth.of(2026,1).plusMonths(i).toString();
+      long id=costing.execute(tx -> gateway.read(context(month)).monthlySnapshotId());
+      ids.add(id);
+      var first=new com.sanhua.marketingcost.entity.BomRawHierarchy();first.setId(100L);first.setMaterialCode("REPEATED");
+      first.setPath("/root/A/");first.setQtyPerTop(new java.math.BigDecimal("1.1234567890123456"));
+      var second=new com.sanhua.marketingcost.entity.BomRawHierarchy();second.setId(101L);second.setMaterialCode("REPEATED");
+      second.setPath("/root/B/");second.setQtyPerTop(new java.math.BigDecimal("-1"));
+      costing.executeWithoutResult(tx -> details.save(id,java.util.List.of(first,second)));
+      originals.put(id,details.load(id));
+    }
+    var before=jdbc.queryForList("SELECT * FROM lp_quote_bom_monthly_snapshot_detail ORDER BY id");
+    var counted=org.mockito.Mockito.spy(jdbc);
+    var batchReader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(),null,null);
+    ids.add(ids.getFirst());ids.add(Long.MAX_VALUE);
+    var loaded=batchReader.loadBatch(ids);
+    assertThat(loaded).hasSize(130);
+    for(var entry:originals.entrySet()) assertThat(loaded.get(entry.getKey())).usingRecursiveComparison().isEqualTo(entry.getValue());
+    assertThat(loaded.get(Long.MAX_VALUE)).isEmpty();
+    org.mockito.Mockito.verify(counted,org.mockito.Mockito.times(2)).query(
+        org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowCallbackHandler.class),
+        org.mockito.ArgumentMatchers.any(Object[].class));
+    loaded.get(ids.getFirst()).getFirst().setMaterialCode("LOCAL-MUTATION");
+    assertThat(details.load(ids.getFirst()).getFirst().getMaterialCode()).isEqualTo("REPEATED");
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_monthly_snapshot_detail ORDER BY id")).isEqualTo(before);
+  }
+
+  @Test void emptyOrInvalidBatchCannotReadUnrelatedBomAndInvalidJsonCannotBecomeAnEmptyTree() {
+    var counted=org.mockito.Mockito.spy(jdbc);
+    var reader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper(),null,null);
+    assertThat(reader.loadBatch(java.util.List.of())).isEmpty();
+    assertThatThrownBy(() -> reader.loadBatch(java.util.List.of(0L))).hasMessageContaining("ID必须大于0");
+    org.mockito.Mockito.verifyNoInteractions(counted);
+    long id=costing.execute(tx -> gateway.read(context("2026-09")).monthlySnapshotId());
+    jdbc.update("INSERT INTO lp_quote_bom_monthly_snapshot_detail(monthly_snapshot_id,line_no,raw_node_json) VALUES(?,0,?)",id,"\"not-a-node\"");
+    assertThatThrownBy(() -> reader.loadBatch(java.util.List.of(id))).isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+
+  @Test void preparedBomIsDetachedAndReleasedAfterFailureWhileEmptyDrawingSnapshotCanStillBeFilled() {
+    long id=costing.execute(tx -> gateway.read(context("2026-09")).monthlySnapshotId());
+    long drawing=costing.execute(tx -> gateway.read(context("2026-10")).monthlySnapshotId());
+    var row=new com.sanhua.marketingcost.entity.BomRawHierarchy();row.setId(100L);row.setMaterialCode("ORIGINAL");
+    costing.executeWithoutResult(tx -> details.save(id,java.util.List.of(row)));
+    var counted=org.mockito.Mockito.spy(jdbc);
+    var reader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper(),null,null);
+    var loaded=reader.loadBatch(java.util.List.of(id,drawing));
+    org.mockito.Mockito.clearInvocations(counted);
+    assertThatThrownBy(() -> reader.useLoaded(loaded, () -> {
+      loaded.get(id).getFirst().setMaterialCode("CALLER-MUTATION");
+      reader.load(id).getFirst().setMaterialCode("CONSUMER-MUTATION");
+      assertThat(reader.load(id).getFirst().getMaterialCode()).isEqualTo("ORIGINAL");
+      org.mockito.Mockito.verifyNoInteractions(counted);
+      assertThatThrownBy(() -> reader.useLoaded(loaded, () -> null)).hasMessageContaining("不能嵌套");
+      costing.executeWithoutResult(tx -> details.save(drawing,java.util.List.of(row)));
+      assertThat(reader.load(drawing)).hasSize(1);
+      throw new IllegalStateException("fixture failure");
+    })).hasMessage("fixture failure");
+    org.mockito.Mockito.clearInvocations(counted);
+    assertThat(reader.load(id).getFirst().getMaterialCode()).isEqualTo("ORIGINAL");
+    org.mockito.Mockito.verify(counted).query(org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowCallbackHandler.class),org.mockito.ArgumentMatchers.any(Object[].class));
   }
 
   private static String resource(String path) throws Exception {

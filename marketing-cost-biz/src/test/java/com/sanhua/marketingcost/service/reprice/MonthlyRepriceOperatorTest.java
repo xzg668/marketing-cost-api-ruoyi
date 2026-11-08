@@ -32,12 +32,13 @@ class MonthlyRepriceOperatorTest {
     var workflow=mock(MonthlyRepriceWorkflowMapper.class);
     var control=mock(MonthlyQuotationControl.class);
     var batch=new MonthlyRepriceBatch();
-    batch.setRepriceNo("saved-batch");batch.setCheckResultJson("{\"problems\":[]}");
+    batch.setId(1L);batch.setRepriceNo("saved-batch");batch.setCheckResultJson("{\"problems\":[]}");
     when(workflow.active("COMMERCIAL")).thenReturn(batch);
     when(workflow.problems("saved-batch")).thenReturn(List.of());
     var service=new MonthlyRepriceWorkflowService(control,mock(MonthlyRepriceContractService.class),
-        mock(MonthlyRepriceContractMapper.class),workflow,mock(MonthlyRepriceCheckService.class),
-        new MonthlyRepriceProperties(),mock(PlatformTransactionManager.class));
+        mock(MonthlyRepriceContractMapper.class),workflow,mock(MonthlyRepricePublicationService.class),
+        new MonthlyRepriceProperties(),mock(PlatformTransactionManager.class),
+        mock(com.sanhua.marketingcost.mapper.MonthlyRepriceUncalculatedMapper.class));
     var view=service.current();
     assertThat(view.canOperate()).isTrue();
     assertThat(view.batch().getCheckResultJson()).isEqualTo("{\"problems\":[]}");

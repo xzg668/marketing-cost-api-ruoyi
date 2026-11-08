@@ -257,6 +257,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     var request = batch.request().deepCopy();
     request.set("remark", client.preview(new OaTechnicalReturnClient.Request(document.requestId(), document.processCode(),
         batch.request().path("userid").asText(), targets, context.workbenchUrl(document.formId()))).get("remark"));
+    request.withObject("/otherParams").put("src", "save");
     // 全部验证通过后才覆盖待发送意见；当前发送次数用于并发与重复点击去重。
     for (long message : linked) {
       var scope = payload(message);
@@ -391,15 +392,10 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     var first = requireTask(request.targets().getFirst().taskId(), actor, false);
     var document = context.document(first.getOaFormId());
     jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, document.formId());
-    if (Boolean.TRUE.equals(jdbc.queryForObject("""
-        SELECT EXISTS(SELECT 1 FROM lp_oa_technical_batch WHERE oa_form_id=? AND operation='I05'
-          AND status IN ('PREPARED','SENDING','REJECT_READY','RETURN_FAILED','OA_ACCEPTED','UNKNOWN'))
-        """, Boolean.class, document.formId()))) {
-      throw invalid("本单已有退回等待 OA 完成，请先处理原退回");
-    }
     var node = access.quoterNode(document.formId());
     if (node.actorId() != actor.userId()) throw invalid("当前账号与 OA 报价员身份不一致");
     var rejection = client.previewRejection(document.requestId(), node.employeeNo(), document.rejectToNodeId());
+    endFailedReturns(document.formId(), request, actor);
     String id = UUID.randomUUID().toString();
     batches.insert(id, "I05", document.formId(), actor.userId(), request.requestKey(), fingerprint);
     List<OaTechnicalReturnClient.Target> commands = new ArrayList<>();
@@ -418,6 +414,73 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
                 commands,
                 context.workbenchUrl(document.formId()))), rejection);
     return id;
+  }
+
+  /** OA 可人工干预后重新办理；明确失败的旧请求不再占用整单，原报文和回执保留。 */
+  private void endFailedReturns(long formId, Request request, TechnicalDataActor actor) {
+    var ids = jdbc.queryForList("""
+        SELECT id FROM lp_oa_technical_batch WHERE oa_form_id=? AND operation='I05'
+          AND status IN ('PREPARED','SENDING','REJECT_READY','RETURN_FAILED','OA_ACCEPTED','UNKNOWN')
+        ORDER BY created_at,id
+        """, String.class, formId);
+    var failed = new ArrayList<OaTechnicalBatchRepository.Batch>();
+    for (String id : ids) {
+      var batch = batches.find(id, true);
+      if (!"RETURN_FAILED".equals(batch.status()) || !"REJECT".equals(batch.returnStep())
+          || batch.result() == null || !Set.of(OaWorkflowResult.Status.REJECTED, OaWorkflowResult.Status.NOT_SENT).contains(batch.result().status())) {
+        throw invalid(pendingReturnMessage(batch));
+      }
+      failed.add(batch);
+    }
+    var selected = request.targets().stream().map(Target::taskId).collect(java.util.stream.Collectors.toSet());
+    var restored = new TreeSet<Long>();
+    for (var batch : failed) {
+      for (long message : batches.messageIds(batch.id())) {
+        var scope = payload(message);
+        var task = tasks.selectByIdForUpdate(scope.path("taskId").asLong());
+        var person = recipients.findById(scope.path("recipientId").asLong());
+        if (person == null || !person.active() || !"RETURN_PENDING".equals(person.todoStatus())
+            || !Objects.equals(person.returnMessageId(), message)
+            || !Objects.equals(person.latestSubmissionId(), scope.path("submissionId").asLong())) continue;
+        var submission = submissions.selectById(person.latestSubmissionId());
+        if (task == null || submission == null || !TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus()))
+          throw invalid("原退回的技术资料已变化，请刷新后核实当前提交记录");
+        String state = "APPROVED".equals(submission.getSubmissionStatus()) ? "DONE" : "SUBMITTED";
+        recipients.state(person.id(), person.latestSubmissionId(), "RETURN_PENDING", state, null);
+        restored.add(task.getId());
+        audit.record(task, null, submission.getId(), "FAILED_RETURN_CLOSED", "RETURN_PENDING", state,
+            "重新发起退回，结束原失败请求：" + batch.result().message(), actor, request.requestKey(),
+            "I05-CLOSED:" + batch.id() + ":" + message);
+      }
+      if (jdbc.update("UPDATE lp_oa_technical_batch SET status=?,updated_at=NOW(3) WHERE id=? AND status='RETURN_FAILED'",
+          batch.result().status().name(), batch.id()) != 1) throw invalid("原退回状态已变化，请刷新后重试");
+      batches.finishMessages(batches.find(batch.id(), false));
+      jdbc.update("""
+          UPDATE lp_oa_integration_message SET status='REJECTED',error_code='OA_RETURN_FAILED',
+            error_message='原退回明确失败，已由新退回请求接续',processed_at=NOW(3)
+          WHERE technical_batch_id=? AND direction='INBOUND' AND status='WAITING_HANDLER'
+          """, batch.id());
+    }
+    for (long taskId : restored) {
+      // 所选产品在本事务的 prepareProductReturn 中一次性更新，保留客户端看到的任务版本。
+      if (!selected.contains(taskId)) {
+        recipients.refreshTask(taskId);
+        workflow.refreshFinance(tasks.selectById(taskId).getOaFlowId());
+      }
+    }
+  }
+
+  private String pendingReturnMessage(OaTechnicalBatchRepository.Batch batch) {
+    String message = switch (batch.status()) {
+      case "UNKNOWN" -> "本单原退回的 OA 结果尚未确认，请先核实原请求";
+      case "REJECT_READY" -> "本单已回传技术员，流程退回尚未完成，请继续原退回";
+      case "OA_ACCEPTED" -> "OA 已受理本单原退回，请刷新原退回结果";
+      case "PREPARED", "SENDING" -> "本单原退回正在处理，请刷新原退回结果";
+      default -> "本单原退回记录不完整，请先核实原请求";
+    };
+    var result = batch.result();
+    return result == null || result.message() == null ? message : message + "：" + result.message()
+        + (result.errorCode() == null ? "" : "（" + result.errorCode() + "）");
   }
 
   /** 退回范围是整个产品；按原负责人归组发送，不能遗漏该产品的补录模块。 */

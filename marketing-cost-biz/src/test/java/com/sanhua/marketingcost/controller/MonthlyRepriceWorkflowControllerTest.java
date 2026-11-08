@@ -16,6 +16,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 class MonthlyRepriceWorkflowControllerTest {
+  private static final com.sanhua.marketingcost.dto.MonthlyRepriceUncalculated.RetrySelection SELECTED=
+      new com.sanhua.marketingcost.dto.MonthlyRepriceUncalculated.RetrySelection(List.of(1L),List.of());
   @Configuration @EnableMethodSecurity static class Config {
     @Bean PermissionService ss(){return new PermissionService();}
     @Bean MonthlyRepriceWorkflowService workflow(){return mock(MonthlyRepriceWorkflowService.class);}
@@ -27,7 +29,8 @@ class MonthlyRepriceWorkflowControllerTest {
     try(var context=new AnnotationConfigApplicationContext(Config.class)){
       auth(authority);var controller=context.getBean(MonthlyRepriceWorkflowController.class);
       assertThatThrownBy(controller::start).isInstanceOf(AccessDeniedException.class);
-      assertThatThrownBy(()->controller.retry("batch")).isInstanceOf(AccessDeniedException.class);
+      assertThatThrownBy(()->controller.retry("batch",SELECTED)).isInstanceOf(AccessDeniedException.class);
+      assertThatThrownBy(()->controller.recheck("batch")).isInstanceOf(AccessDeniedException.class);
       assertThatThrownBy(()->controller.confirm("batch",new MonthlyRepriceWorkflowController.Confirmation(1))).isInstanceOf(AccessDeniedException.class);
       verifyNoInteractions(context.getBean(MonthlyRepriceWorkflowService.class));
     }
@@ -36,9 +39,10 @@ class MonthlyRepriceWorkflowControllerTest {
   void adminAndDirectorCanReadAndUseAllThreeCommands(String authority){
     try(var context=new AnnotationConfigApplicationContext(Config.class)){
       auth(authority);var controller=context.getBean(MonthlyRepriceWorkflowController.class);
-      controller.current();controller.start();controller.retry("batch");controller.confirm("batch",new MonthlyRepriceWorkflowController.Confirmation(7));
+      controller.current();controller.start();controller.retry("batch",SELECTED);controller.recheck("batch");controller.confirm("batch",new MonthlyRepriceWorkflowController.Confirmation(7));
       var workflow=context.getBean(MonthlyRepriceWorkflowService.class);
-      verify(workflow).current();verify(workflow).start();verify(workflow).retry("batch");verify(workflow).confirm("batch",7);
+      verify(workflow).current();verify(workflow).start();verify(workflow).retry("batch",SELECTED);verify(workflow).confirm("batch",7);
+      verify(workflow).recheck("batch");
     }
   }
   private static void auth(String authority){SecurityContextHolder.getContext().setAuthentication(

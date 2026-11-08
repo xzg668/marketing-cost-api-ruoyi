@@ -13,6 +13,39 @@ public final class MonthlyPreparationEvidence {
 
   public MonthlyPreparationEvidence(MonthlyPriceDocumentCodec codec) { this.codec = codec; }
 
+  /** New repricing writes only. Keep aggregate layout and every value; compact known envelopes. */
+  public String compact(PricePrepareItem row) {
+    String original = row.getInputSnapshotJson();
+    if (original == null || original.isBlank()) return original;
+    if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType())) return codec.compact(original);
+    try {
+      var root = json.readTree(original);
+      if (!(root instanceof ObjectNode object)
+          || !java.util.Set.of("MAKE_PART_V1", "PACKAGE_PRICE_V1").contains(root.path("calculatorVersion").asText()))
+        return original;
+      compactText(object, "monthlyInputs");
+      for (var value : object.path("rows")) {
+        compactText((ObjectNode) value, "rawInputSnapshotJson");
+        compactText((ObjectNode) value, "scrapInputSnapshotJson");
+      }
+      for (var value : object.path("components")) {
+        var input = value.path("inputs");
+        if (input.isObject() && input.has("schemaVersion") && input.has("document"))
+          ((ObjectNode) value).set("inputs", json.readTree(codec.compact(input.toString())));
+      }
+      return json.writeValueAsString(object);
+    } catch (java.io.IOException failure) { throw new IllegalArgumentException("准备计算底稿损坏", failure); }
+  }
+
+  private void compactText(ObjectNode row, String field) throws java.io.IOException {
+    var value = row.get(field);
+    if (value == null || value.isNull()) return;
+    if (!value.isTextual()) throw new IllegalArgumentException("准备计算底稿信封必须保存为文本：" + field);
+    var input = json.readTree(value.textValue());
+    if (input.isObject() && input.has("schemaVersion") && input.has("document"))
+      row.put(field, codec.compact(value.textValue()));
+  }
+
   public MonthlyPreparationInputs capture(PricePrepareItem row, MonthlyAdoptionPlan plan, String path) {
     return MonthlyPreparationPrice.KIND.equals(row.getResultRefType())
         ? MonthlyPreparationInputs.captureDirect(plan, path)

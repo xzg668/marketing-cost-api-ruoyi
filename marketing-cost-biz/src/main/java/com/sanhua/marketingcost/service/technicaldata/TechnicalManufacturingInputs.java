@@ -17,9 +17,12 @@ public class TechnicalManufacturingInputs {
   private final TechnicalDataVersionContentCodec codec;
   private final QuoteBomSupplementDetailMapper details;
   private final ElectronicDrawingManufacturingInputs drawingInputs;
+  private final com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse;
   public TechnicalManufacturingInputs(TechnicalDataCostingSources sources,
       TechnicalDataVersionContentCodec codec, QuoteBomSupplementDetailMapper details,
-      ElectronicDrawingManufacturingInputs drawingInputs) {
+      ElectronicDrawingManufacturingInputs drawingInputs,
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse) {
+    this.drawingReuse = drawingReuse;
     this.sources = sources;
     this.codec = codec;
     this.details = details;
@@ -29,6 +32,7 @@ public class TechnicalManufacturingInputs {
   public Map<String, Input> byParentPath(Long itemId, String month) {
     var selected = sources.preparationSources(itemId, month);
     var result = new LinkedHashMap<>(drawingInputs.read(selected.get("DRAWING_BOM")));
+    result.putAll(drawingReuse.costingInputs(itemId, month));
     var source = selected.get("MANUFACTURING");
     if (source == null) return Map.copyOf(result);
     var content = codec.manufacturing(source.version());

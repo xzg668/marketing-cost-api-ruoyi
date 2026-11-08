@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 /** Binds existing quotation price inputs to immutable monthly facts, without adopting on reads. */
 @Component
 public final class MonthlyQuotationPrices {
+  public static final int MAX_BATCH_OBJECTS = 64;
   public enum Purpose { MATERIAL, SCRAP, PACKAGE }
 
   /** Null tax means the legacy consumer uses the source's amount column without a tax conversion. */
@@ -17,6 +18,11 @@ public final class MonthlyQuotationPrices {
 
   public record Bound(MonthlyPriceRequest request, Candidate candidate) {}
 
+  /** Consumer provenance and supplier review remain local even when saved price facts are shared. */
+  public record Demand(Context context, List<Item> items) {
+    public Demand { Objects.requireNonNull(context); items = List.copyOf(items); }
+  }
+
   public record Batch(Map<Item, Bound> values, Map<Item, Problem> problems,
       Map<MonthlyPriceRequest, Candidate> candidates) {
     public Batch {
@@ -24,6 +30,62 @@ public final class MonthlyQuotationPrices {
       problems = Map.copyOf(problems);
       candidates = Map.copyOf(candidates);
     }
+  }
+
+  /** Only saved facts can serve the first planning read; new candidates stay consumer-local. */
+  public record Prepared(Demand demand, Batch batch) {
+    public Prepared { Objects.requireNonNull(demand); Objects.requireNonNull(batch); }
+  }
+  private static final class InitialRead {
+    private Prepared value;
+    InitialRead(Prepared value) { this.value=value; }
+  }
+  private final ThreadLocal<InitialRead> prepared = new ThreadLocal<>();
+
+  public List<Prepared> prepareBatch(List<Demand> demands) {
+    var stable = List.copyOf(demands);
+    var batches = readBatch(stable, false);
+    var result = new ArrayList<Prepared>(stable.size());
+    for (int i = 0; i < stable.size(); i++) {
+      var demand = stable.get(i);
+      result.add(new Prepared(demand, batches.get(i)));
+    }
+    return List.copyOf(result);
+  }
+
+  public <T> T usePrepared(Prepared input, java.util.function.Supplier<T> work) {
+    if (prepared.get() != null) throw new IllegalStateException("批量取价不能嵌套");
+    prepared.set(new InitialRead(Objects.requireNonNull(input)));
+    try { return work.get(); } finally { prepared.remove(); }
+  }
+
+  private Batch takePrepared(Context context, Collection<Item> items) {
+    var initial = prepared.get();
+    if (initial == null || initial.value == null) return null;
+    var input = initial.value;
+    // Only the first actual read can consume it. All retries and final adoption projection are fresh.
+    initial.value = null;
+    var expected = input.demand().context();
+    if (!Objects.equals(context.businessUnitType(), expected.businessUnitType())
+        || !Objects.equals(context.oaNo(), expected.oaNo())
+        || !Objects.equals(context.oaFormItemId(), expected.oaFormItemId())
+        || !Objects.equals(context.productCode(), expected.productCode())
+        || !Objects.equals(context.month(), expected.month())
+        || !Objects.equals(context.priceAsOfTime(), expected.priceAsOfTime())
+        || !Objects.equals(context.consumerOrg(), expected.consumerOrg())
+        || !Objects.equals(context.annualUsage(), expected.annualUsage()))
+      throw new IllegalArgumentException("批量取价资料不属于当前客户、产品、月份或取价条件");
+    if (!new HashSet<>(items).equals(new HashSet<>(input.demand().items()))) return null;
+    if (!input.batch().problems().isEmpty()
+        || input.batch().candidates().values().stream().anyMatch(value -> value.selection().monthlyPriceId() == null))
+      return null;
+    return input.batch();
+  }
+
+  public static Item item(QuotationPriceSession.Input input) {
+    return new Item(input.materialCode(), input.organization(), input.unit(), input.specification(),
+        input.taxBasis(), input.supplier(), input.conditions(), input.basisQuantity(),
+        Purpose.valueOf(input.purpose().name()));
   }
 
   private final MonthlyMaterialPrices prices;
@@ -35,17 +97,55 @@ public final class MonthlyQuotationPrices {
   }
 
   public Batch read(Context context, Collection<Item> items) {
-    Objects.requireNonNull(context);
+    var captured = takePrepared(context, items);
+    return captured != null ? captured : readBatch(List.of(new Demand(context, List.copyOf(items)))).getFirst();
+  }
+
+  /**
+   * One bounded lookup of the complete request union, with original-order consumer results.
+   * This is a read operation, not a cache or first-use adoption. Each call reads current saved facts.
+   * Missing sources are resolved in each consumer's own approval/price-purpose context.
+   */
+  public List<Batch> readBatch(List<Demand> demands) {
+    return readBatch(demands, true);
+  }
+
+  private List<Batch> readBatch(List<Demand> demands, boolean resolveMissing) {
+    var stable = List.copyOf(demands);
+    if (stable.size() > MAX_BATCH_OBJECTS)
+      throw new IllegalArgumentException("月价读取每批最多 " + MAX_BATCH_OBJECTS + " 个产品对象");
+    if (stable.isEmpty()) return List.of();
+    var requested = stable.stream().map(demand -> requests(demand.context(), demand.items())).toList();
+    var all = new LinkedHashSet<MonthlyPriceRequest>();
+    requested.forEach(items -> items.values().forEach(all::addAll));
+    var saved = prices.lookup(all);
+    var result = new ArrayList<Batch>(stable.size());
+    for (int i = 0; i < stable.size(); i++)
+      result.add(read(stable.get(i).context(), requested.get(i), saved, resolveMissing));
+    return List.copyOf(result);
+  }
+
+  private static Map<Item, List<MonthlyPriceRequest>> requests(Context context, Collection<Item> items) {
     var requests = new LinkedHashMap<Item, List<MonthlyPriceRequest>>();
     for (var item : items) {
       Objects.requireNonNull(item.purpose(), "Price purpose is required");
       requests.putIfAbsent(item, requests(context, item));
     }
-    var all = new LinkedHashSet<MonthlyPriceRequest>();
-    requests.values().forEach(all::addAll);
-    var saved = prices.lookup(all);
+    return requests;
+  }
+
+  private Batch read(Context context, Map<Item, List<MonthlyPriceRequest>> requests, Lookup saved, boolean resolveMissing) {
     var found = new LinkedHashMap<MonthlyPriceRequest, Candidate>();
-    saved.values().forEach((request, selection) -> found.put(request, new Candidate(selection, null)));
+    var pending = new ArrayDeque<MonthlyPriceRequest>();
+    requests.values().forEach(pending::addAll);
+    while (!pending.isEmpty()) {
+      var request = pending.removeFirst();
+      var selected = saved.values().get(request);
+      if (selected != null && found.putIfAbsent(request, new Candidate(selected, null)) == null)
+        pending.addAll(selected.fact().dependencies());
+    }
+    // Prefetch never resolves a current source early or retains its approval while other customers run.
+    if (!resolveMissing) return bind(requests, found, Map.of(), false);
     var problems = new LinkedHashMap<MonthlyPriceRequest, Problem>();
     for (var purpose : Purpose.values()) {
       var missing = new LinkedHashSet<MonthlyPriceRequest>();

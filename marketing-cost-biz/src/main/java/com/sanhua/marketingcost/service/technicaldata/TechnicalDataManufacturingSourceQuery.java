@@ -43,10 +43,13 @@ public class TechnicalDataManufacturingSourceQuery {
   private final OaMessageCodec codec;
   private final QuoteBomSupplementVersionMapper versions;
   private final MaterialMasterRawMapper materials;
+  private final com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse;
 
   public TechnicalDataManufacturingSourceQuery(ElectronicDrawingSourceNodeRepository sources,
       ElectronicDrawingBomScope scope, OaMessageCodec codec,
-      QuoteBomSupplementVersionMapper versions, MaterialMasterRawMapper materials) {
+      QuoteBomSupplementVersionMapper versions, MaterialMasterRawMapper materials,
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse) {
+    this.drawingReuse = drawingReuse;
     this.sources = sources; this.scope = scope; this.codec = codec; this.versions = versions;
     this.materials = materials;
   }
@@ -68,6 +71,7 @@ public class TechnicalDataManufacturingSourceQuery {
     if (rows.isEmpty()) return assessment(context, List.of(), "当前图库来源版本没有明细，请重新检查");
     try {
       var plan = scope.inspect(context, rows, effectiveDate);
+      var reused = drawingReuse.read(context).stream().map(row -> row.nodeId()).collect(java.util.stream.Collectors.toSet());
       var materialWeights = missingDrawingWeights(context, plan);
       var result = new ArrayList<Node>();
       for (var source : rows) {
@@ -75,6 +79,11 @@ public class TechnicalDataManufacturingSourceQuery {
         if (branch == null || branch.state() == ElectronicDrawingBomScope.State.EXCLUDED
             || branch.state() == ElectronicDrawingBomScope.State.PURCHASE) continue;
         State state = State.valueOf(branch.state().name());
+        String message = branch.message();
+        if (state == State.MISSING_RAW && reused.contains(source.getId())) {
+          state = State.DRAWING_READY;
+          message = "图库节点未变化，沿用已确认的制造件原材料补录";
+        }
         var children = branch.subBom() == null ? List.<U9Node>of() : branch.subBom().nodes();
         BigDecimal netWeight = source.getReferenceWeight();
         String weightUnit = source.getReferenceWeightUnit();
@@ -86,7 +95,7 @@ public class TechnicalDataManufacturingSourceQuery {
             source.getSourceName(), source.getDrawingCode(), source.getMaterial(), source.getQty(),
             netWeight, weightUnit,
             branch.material() == null ? source.getResolvedMaterialCode() : branch.material().materialCode(),
-            state, branch.message(), List.copyOf(children)));
+            state, message, List.copyOf(children)));
       }
       return assessment(context, result, null);
     } catch (IllegalArgumentException | IllegalStateException exception) {

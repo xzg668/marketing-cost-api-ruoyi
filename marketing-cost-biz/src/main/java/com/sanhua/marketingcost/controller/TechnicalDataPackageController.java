@@ -30,10 +30,12 @@ public class TechnicalDataPackageController {
 
   private final TechnicalDataPackageApplicationService applicationService;
   private final TechnicalDataActorProvider actorProvider;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataBomPriceCheck bomCheck;
 
   public TechnicalDataPackageController(
       TechnicalDataPackageApplicationService applicationService,
-      TechnicalDataActorProvider actorProvider) {
+      TechnicalDataActorProvider actorProvider, com.sanhua.marketingcost.service.technicaldata.TechnicalDataBomPriceCheck bomCheck) {
+    this.bomCheck = bomCheck;
     this.applicationService = applicationService;
     this.actorProvider = actorProvider;
   }
@@ -67,7 +69,12 @@ public class TechnicalDataPackageController {
   public CommonResult<TechnicalDataPackageResponse> save(
       @PathVariable Long productId,
       @RequestBody TechnicalDataPackageSaveRequest request) {
-    return execute(() -> applicationService.save(productId, request, actorProvider.current()));
+    return execute(() -> {
+      var actor = actorProvider.current();
+      applicationService.save(productId, request, actor);
+      bomCheck.afterSaved(productId, actor);
+      return applicationService.get(productId, null, actor);
+    });
   }
 
   private static <T> CommonResult<T> execute(Supplier<T> supplier) {

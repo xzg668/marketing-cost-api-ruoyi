@@ -144,12 +144,18 @@ public class TechnicalDataCostingSources {
   /** 本任务准备阶段可读取图库和补录数量；跨报价仍须原任务全部提交且财务确认。 */
   @Transactional
   public Map<String, Source> preparationSources(Long itemId, String month) {
+    return preparationSources(itemId, month, Set.of("DRAWING_BOM", "PACKAGE", "SOLDER", "MANUFACTURING"));
+  }
+
+  /** 读取材料数量时只检查调用方实际使用的模块；已有 BOM 展示不重新要求制造件补录。 */
+  @Transactional
+  public Map<String, Source> preparationSources(Long itemId, String month, Set<String> requiredTypes) {
     var context = context(itemId, month);
     var item = items.selectById(itemId);
     Map<String, Source> selected = new LinkedHashMap<>();
     for (var fact : publicSources.checkDataSources(context)) {
       String type = fact.moduleType().name();
-      if (!Set.of("DRAWING_BOM", "PACKAGE", "SOLDER", "MANUFACTURING").contains(type)
+      if (!requiredTypes.contains(type)
           || fact.availability() == TechnicalDataAvailability.AVAILABLE) continue;
       if (fact.availability() != TechnicalDataAvailability.MISSING) {
         throw error(context, type, "TECH_DATA_SOURCE_NOT_CONFIRMED", fact.reason());

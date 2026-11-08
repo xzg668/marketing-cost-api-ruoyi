@@ -3,7 +3,7 @@ package com.sanhua.marketingcost.service.pricing;
 import java.math.BigDecimal;
 import java.util.Objects;
 
-/** 一次物料计算的完整输入。板换SUS两侧共用，P1只额外覆盖Cu。 */
+/** 一次物料计算的完整输入；客户材料基价只用于本报价的P1。 */
 public record PriceFactorContext(
     String materialCode,
     PriceMonthSelection months,
@@ -11,8 +11,25 @@ public record PriceFactorContext(
     @com.fasterxml.jackson.annotation.JsonFormat(
             shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
         BigDecimal customerCopperPricePerTon,
-    BoardPriceInputs boardInputs) {
+    BoardPriceInputs boardInputs,
+    @com.fasterxml.jackson.annotation.JsonFormat(
+            shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
+        BigDecimal customerZincPricePerTon,
+    CustomerMaterialPrices customerMaterialPrices) {
   public static final String COPPER = "AVG|1#CU";
+  public static final String ZINC = "AVG|1#ZN";
+
+  /** Existing snapshots and callers retain the captured Cu/Zn representation. */
+  public PriceFactorContext(String materialCode, PriceMonthSelection months,
+      FactorPriceSnapshot financial, BigDecimal copper, BoardPriceInputs board, BigDecimal zinc) {
+    this(materialCode, months, financial, copper, board, zinc, null);
+  }
+
+  /** Saved historical contexts have no customer zinc value. */
+  public PriceFactorContext(String materialCode, PriceMonthSelection months,
+      FactorPriceSnapshot financial, BigDecimal customerCopperPricePerTon, BoardPriceInputs boardInputs) {
+    this(materialCode, months, financial, customerCopperPricePerTon, boardInputs, null);
+  }
 
   public PriceFactorContext(
       String materialCode,
@@ -40,15 +57,38 @@ public record PriceFactorContext(
     if (customerCopperPricePerTon != null && customerCopperPricePerTon.signum() <= 0) {
       throw new IllegalArgumentException("客户Cu必须大于0：" + materialCode);
     }
+    if (customerZincPricePerTon != null && customerZincPricePerTon.signum() <= 0) {
+      throw new IllegalArgumentException("客户Zn必须大于0：" + materialCode);
+    }
   }
 
   public PriceFactorContext withCustomerCopperPerTon(BigDecimal copperPerTon) {
+    Objects.requireNonNull(copperPerTon, "客户Cu缺失：" + materialCode);
+    if (customerMaterialPrices != null) {
+      var prices = customerMaterialPrices;
+      return withCustomerMaterials(new CustomerMaterialPrices(copperPerTon, prices.zinc(),
+          prices.silver(), prices.tin(), prices.sus304(), prices.sus316()));
+    }
     return new PriceFactorContext(
         materialCode,
         months,
         financial,
-        Objects.requireNonNull(copperPerTon, "客户Cu缺失：" + materialCode),
-        boardInputs);
+        copperPerTon,
+        boardInputs, customerZincPricePerTon, customerMaterialPrices);
+  }
+
+  public PriceFactorContext withCustomerMetalsPerTon(BigDecimal copperPerTon, BigDecimal zincPerTon) {
+    return new PriceFactorContext(materialCode, months, financial, copperPerTon, boardInputs, zincPerTon);
+  }
+
+  public PriceFactorContext withCustomerMaterials(CustomerMaterialPrices prices) {
+    return new PriceFactorContext(materialCode, months, financial, null, boardInputs, null,
+        Objects.requireNonNull(prices));
+  }
+
+  public boolean hasCustomerMaterialPrices() {
+    return customerCopperPricePerTon != null || customerZincPricePerTon != null
+        || customerMaterialPrices != null && !customerMaterialPrices.isEmpty();
   }
 
   public PriceFactorContext financialOnly() {
@@ -57,7 +97,8 @@ public record PriceFactorContext(
 
   public PriceFactorContext withBoardInputs(BoardPriceInputs inputs) {
     return new PriceFactorContext(
-        materialCode, months, financial, customerCopperPricePerTon, inputs);
+        materialCode, months, financial, customerCopperPricePerTon, inputs, customerZincPricePerTon,
+        customerMaterialPrices);
   }
 
   /** 保留公式因素及报价共用的财务Cu基准和完整来源；发布身份、修订和客户条件仍保留。 */
@@ -86,13 +127,15 @@ public record PriceFactorContext(
             financial.publishedAt(),
             financial.publicationNote());
     return new PriceFactorContext(
-        materialCode, months, selected, customerCopperPricePerTon, boardInputs);
+        materialCode, months, selected, customerCopperPricePerTon, boardInputs, customerZincPricePerTon,
+        customerMaterialPrices);
   }
 
   public String inputSource(String canonicalKey) {
+    if (customerMaterialPricePerTon(canonicalKey) != null) return "OA_LOCKED";
     if (boardInputs != null && boardInputs.customerPricePerTon(canonicalKey) != null)
       return "CUSTOMER_SUS";
-    if (COPPER.equals(canonicalCopperAlias(canonicalKey)) && customerCopperPricePerTon != null)
+    if (customerMetalPricePerTon(canonicalKey) != null)
       return "OA_LOCKED";
     return "FINANCE_FACTOR";
   }
@@ -101,9 +144,12 @@ public record PriceFactorContext(
   public BigDecimal requiredPrice(
       String canonicalKey, FactorPriceUnit targetUnit, boolean taxIncluded) {
     String key = canonicalCopperAlias(canonicalKey);
-    BigDecimal customerSus = boardInputs == null ? null : boardInputs.customerPricePerTon(key);
+    BigDecimal customerSus = BoardStainlessGrade.fromFactorKey(key) == null
+        ? null : customerMaterialPricePerTon(key);
+    if (customerSus == null)
+      customerSus = boardInputs == null ? null : boardInputs.customerPricePerTon(key);
     if (customerSus != null) {
-      if (!taxIncluded) throw new IllegalArgumentException("客户SUS基价为含税价");
+      if (!taxIncluded) throw new IllegalArgumentException("客户材料基价为含税价");
       return FactorPriceUnit.CNY_TON.convert(customerSus, targetUnit);
     }
     var factor = financial.factors().get(key);
@@ -123,10 +169,11 @@ public record PriceFactorContext(
     }
     try {
       FactorPriceUnit sourceUnit = FactorPriceUnit.require(factor.unit());
-      if (COPPER.equals(key) && customerCopperPricePerTon != null) {
+      BigDecimal customerMetal = customerMetalPricePerTon(key);
+      if (customerMetal != null) {
         // 客户字段已明确为含税元/吨；财务来源值及其单元格始终保留在financial中。
-        if (!taxIncluded) throw new IllegalArgumentException("客户Cu为含税价");
-        return FactorPriceUnit.CNY_TON.convert(customerCopperPricePerTon, targetUnit);
+        if (!taxIncluded) throw new IllegalArgumentException("客户材料基价为含税价");
+        return FactorPriceUnit.CNY_TON.convert(customerMetal, targetUnit);
       }
       return sourceUnit.convert(factor.price(), targetUnit);
     } catch (IllegalArgumentException error) {
@@ -135,10 +182,22 @@ public record PriceFactorContext(
     }
   }
 
+  private BigDecimal customerMetalPricePerTon(String canonicalKey) {
+    String key = canonicalCopperAlias(canonicalKey);
+    BigDecimal customer = customerMaterialPricePerTon(key);
+    if (customer != null) return customer;
+    return COPPER.equals(key) ? customerCopperPricePerTon : ZINC.equals(key) ? customerZincPricePerTon : null;
+  }
+
+  private BigDecimal customerMaterialPricePerTon(String key) {
+    if (customerMaterialPrices == null) return null;
+    // Stainless overrides belong to board rules; commercial formulas cannot inherit them.
+    if (BoardStainlessGrade.fromFactorKey(key) != null
+        && !"220".equals(financial.scope().priceOrgCode())) return null;
+    return customerMaterialPrices.pricePerTon(key);
+  }
+
   private static String canonicalCopperAlias(String canonicalKey) {
-    if (canonicalKey != null
-        && (canonicalKey.equalsIgnoreCase("AVG|CU") || canonicalKey.equalsIgnoreCase(COPPER)))
-      return COPPER;
-    return canonicalKey;
+    return CustomerMaterialPrices.canonicalKey(canonicalKey);
   }
 }

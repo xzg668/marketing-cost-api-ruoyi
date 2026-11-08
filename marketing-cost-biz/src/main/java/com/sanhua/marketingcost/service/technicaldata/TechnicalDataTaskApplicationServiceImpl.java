@@ -501,7 +501,8 @@ public class TechnicalDataTaskApplicationServiceImpl
           contentCodec.solder(visible.get("SOLDER")),contentCodec.netLoss(visible.get("NET_LOSS")),
           contentCodec.prices(visible.get("PRICE")),null,contentCodec.plateMaterial(profileVersion));
       boolean ownDraft=submission==null && modules.stream().anyMatch(module -> readPolicy.ownsDraft(module,actor));
-      String state=ownDraft?product.getProductStatus():visible.isEmpty()?"PENDING":"SUBMITTED";
+      String state=ownDraft?product.getProductStatus():visible.isEmpty()?"PENDING":
+          modules.stream().anyMatch(module -> "RETURNED".equals(module.getModuleStatus())) ? "RETURNED" : "SUBMITTED";
       Long latest=visible.values().stream().filter(version -> !"DRAFT".equals(version.getVersionStatus()))
           .map(QuoteTechDataVersion::getId).max(Long::compareTo).orElse(null);
       result.put(product.getId(),new TechnicalDataProductResponse(
@@ -531,7 +532,10 @@ public class TechnicalDataTaskApplicationServiceImpl
       var own = products.stream().flatMap(product -> product.modules().stream())
           .filter(module -> module.required() && Objects.equals(module.assigneeUserId(), actor.userId()))
           .map(TechnicalDataModuleResponse::moduleStatus).toList();
-      if (own.isEmpty()) return products.stream().anyMatch(product -> product.latestSubmittedVersionId() != null) ? "SUBMITTED" : "PENDING";
+      if (own.isEmpty()) {
+        if (Set.of("RETURN_PENDING", "PARTIALLY_RETURNED").contains(task.getTaskStatus())) return task.getTaskStatus();
+        return products.stream().anyMatch(product -> product.latestSubmittedVersionId() != null) ? "SUBMITTED" : "PENDING";
+      }
       if (own.stream().allMatch(state -> Set.of("SUBMITTED", "APPROVED").contains(state))) return "SUBMITTED";
       if (own.contains("FROZEN")) return "PREPARED";
       if (own.contains("RETURNED")) return "PARTIALLY_RETURNED";

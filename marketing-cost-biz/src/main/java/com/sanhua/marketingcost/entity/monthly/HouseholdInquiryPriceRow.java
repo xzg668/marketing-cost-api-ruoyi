@@ -31,4 +31,7 @@ public class HouseholdInquiryPriceRow {
   private String taxBasis;
   private String fileKey;
   private String fileSha256;
+  public String getMatchKey() {
+    return com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryKey.of(materialCode,specification);
+  }
 }

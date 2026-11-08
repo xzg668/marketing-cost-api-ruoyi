@@ -29,6 +29,26 @@ class SecurityQuoteEffectiveBomActorProviderTest {
   }
 
   @Test
+  void oaSupplementPrincipalSuppliesItsAuthenticatedUserIdWithoutUsernameLookup() {
+    var principal = new com.sanhua.marketingcost.integration.oa.oauth.OaOAuthPrincipal("12211062", "孟天豪", 888L, 7L);
+    var authentication = new UsernamePasswordAuthenticationToken(principal, null, List.of());
+    authentication.setDetails(Map.of("userId", 99L));
+    SecurityContextHolder.getContext().setAuthentication(authentication);
+    assertThat(provider.currentUserId()).isEqualTo(888L);
+    verifyNoInteractions(userService);
+  }
+
+  @Test
+  void oaPrincipalWithoutUserIdCannotFallBackToAnotherIdentity() {
+    var principal = new com.sanhua.marketingcost.integration.oa.oauth.OaOAuthPrincipal("12211062", "孟天豪", null, 7L);
+    var authentication = new UsernamePasswordAuthenticationToken(principal, null, List.of());
+    authentication.setDetails(Map.of("userId", 99L));
+    SecurityContextHolder.getContext().setAuthentication(authentication);
+    assertThatThrownBy(provider::currentUserId).isInstanceOf(IllegalStateException.class).hasMessageContaining("用户ID");
+    verifyNoInteractions(userService);
+  }
+
+  @Test
   void collaborationOrJwtDetailUserIdTakesPriority() {
     UsernamePasswordAuthenticationToken authentication =
         new UsernamePasswordAuthenticationToken("collaborator:88", null, List.of());

@@ -10,6 +10,12 @@ import com.sanhua.marketingcost.service.impl.PlateCommercialMakeBomExpansionServ
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
@@ -22,7 +28,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class MonthlyBomSnapshotDetailService {
 
   private static final String DEFAULT_BOM_PURPOSE = "主制造";
+  private static final int READ_CHUNK = 128;
 
+  private final ThreadLocal<Map<Long, List<BomRawHierarchy>>> prepared = new ThreadLocal<>();
   private final JdbcTemplate jdbc;
   private final ObjectMapper json;
   private final BomRawHierarchyMapper hierarchyMapper;
@@ -39,11 +47,50 @@ public class MonthlyBomSnapshotDetailService {
 
   public List<BomRawHierarchy> load(Long snapshotId) {
     if (snapshotId == null) return List.of();
-    return jdbc.query(
-        "SELECT raw_node_json FROM lp_quote_bom_monthly_snapshot_detail "
-            + "WHERE monthly_snapshot_id = ? ORDER BY line_no",
-        (rs, rowNum) -> decode(rs.getString(1)),
-        snapshotId);
+    var loaded = prepared.get();
+    if (loaded != null && loaded.containsKey(snapshotId)) return detached(loaded.get(snapshotId));
+    return loadBatch(List.of(snapshotId)).get(snapshotId);
+  }
+
+  /** Scoped immutable snapshot reads; shared input cannot be changed by a consumer's BOM merger. */
+  public <T> T useLoaded(Map<Long, List<BomRawHierarchy>> loaded, java.util.function.Supplier<T> work) {
+    if (prepared.get() != null) throw new IllegalStateException("批量BOM读取范围不能嵌套");
+    if (loaded.size() > 64) throw new IllegalArgumentException("批量BOM执行每次最多64个快照");
+    var owned = new LinkedHashMap<Long, List<BomRawHierarchy>>();
+    // Empty snapshots may be legitimately filled by the existing approved drawing path.
+    loaded.forEach((id, rows) -> { if (!rows.isEmpty()) owned.put(id, detached(rows)); });
+    prepared.set(owned);
+    try { return work.get(); }
+    finally { prepared.remove(); }
+  }
+
+  private List<BomRawHierarchy> detached(List<BomRawHierarchy> rows) {
+    return rows.stream().map(row -> {
+      var copy = new BomRawHierarchy(); org.springframework.beans.BeanUtils.copyProperties(row, copy); return copy;
+    }).toList();
+  }
+
+  /**
+   * Reads only the snapshots already selected by each consumer's BOM scope. No source acquisition
+   * or snapshot creation occurs here. SQL is bounded; duplicate occurrences and saved order remain.
+   * Decoded nodes belong to this call and are never kept in a process-wide cache.
+   */
+  public Map<Long, List<BomRawHierarchy>> loadBatch(Collection<Long> snapshotIds) {
+    var ids = new ArrayList<>(new LinkedHashSet<>(snapshotIds));
+    if (ids.stream().anyMatch(id -> id == null || id <= 0))
+      throw new IllegalArgumentException("月度BOM快照ID必须大于0");
+    var rows = new LinkedHashMap<Long, List<BomRawHierarchy>>();
+    ids.forEach(id -> rows.put(id, new ArrayList<>()));
+    for (int start = 0; start < ids.size(); start += READ_CHUNK) {
+      var chunk = ids.subList(start, Math.min(start + READ_CHUNK, ids.size()));
+      var marks = String.join(",", Collections.nCopies(chunk.size(), "?"));
+      jdbc.query("SELECT monthly_snapshot_id,raw_node_json FROM lp_quote_bom_monthly_snapshot_detail "
+              + "WHERE monthly_snapshot_id IN (" + marks + ") ORDER BY monthly_snapshot_id,line_no",
+          (org.springframework.jdbc.core.RowCallbackHandler) rs ->
+              rows.get(rs.getLong(1)).add(decode(rs.getString(2))), chunk.toArray());
+    }
+    rows.replaceAll((id, values) -> List.copyOf(values));
+    return Collections.unmodifiableMap(rows);
   }
 
   /** Called within the same transaction that claims/completes the monthly header. */

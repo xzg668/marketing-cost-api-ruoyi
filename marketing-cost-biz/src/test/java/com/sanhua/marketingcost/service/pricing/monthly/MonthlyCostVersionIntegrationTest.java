@@ -32,7 +32,10 @@ import org.testcontainers.utility.*;
 @Tag("integration")
 class MonthlyCostVersionIntegrationTest {
   static final MySQLContainer<?> MYSQL=new MySQLContainer<>(DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
-      .withDatabaseName("mpp_cost_version_test").withUsername("root").withPassword("mpp-linked-test-only").withConfigurationOverride("monthly-pricing/mysql");
+      .withDatabaseName("mpp_cost_version_test").withUsername("root").withPassword("mpp-linked-test-only").withConfigurationOverride("monthly-pricing/mysql")
+      .withLabel("sales-cost.task", System.getProperty("mpp.mysql.task", "monthly-reprice-reuse-20261105-r02"))
+      .withLabel("sales-cost.run", "monthly-cost-version-" + UUID.randomUUID())
+      .withReuse(Boolean.getBoolean("mpp.mysql.retain"));
   static com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader financeReader;static JdbcTemplate jdbc;static MonthlyOriginalLinkedPriceSource source;static AtomicInteger prepared=new AtomicInteger();
   static PriceLinkedItemMapper rules;static OriginalLinkedRuleSnapshot snapshots;static FinanceEffectivePriceService effective;static org.springframework.transaction.support.TransactionTemplate transaction;
   static MonthlyMaterialPriceService operation;static MonthlyPriceDocumentCodec codec;static AtomicInteger sourceCalls=new AtomicInteger();
@@ -44,8 +47,9 @@ class MonthlyCostVersionIntegrationTest {
       });
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/original-linked-source-schema.sql")).execute(ds);
+    jdbc.execute("CREATE TABLE lp_material_master_raw(id BIGINT PRIMARY KEY AUTO_INCREMENT,material_code VARCHAR(64),organization_code VARCHAR(32),active_flag INT,material_model VARCHAR(255),material_spec VARCHAR(512))");
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_cost_version_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyOriginalLinkedSourceMapper.class);for(var mapper:List.of(PriceLinkedItemMapper.class,PriceRangeFactorRuleMapper.class,FinanceEffectivePriceMapper.class,MaterialPriceMonthMapper.class))configuration.addMapper(mapper);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -60,7 +64,7 @@ class MonthlyCostVersionIntegrationTest {
     var storage=new MonthlyPriceStorage(sql.getMapper(MonthlyPriceStorageMapper.class),codec,sql.getMapper(MonthlyPriceLinkMapper.class));operation=new MonthlyMaterialPriceService(storage,new DataSourceTransactionManager(ds),codec,(context,requests,dependencies)->{sourceCalls.incrementAndGet();return source.read(context,requests);});
     initializeCostStorage();
   }
-  @AfterAll static void stop(){MYSQL.stop();}
+  @AfterAll static void stop(){if(!Boolean.getBoolean("mpp.mysql.retain"))MYSQL.stop();}
   static Context context(String bu,String month,String org){return new Context(bu,"MPP05-LINKED",1L,"TOP",YearMonth.parse(month),YearMonth.parse(month).atDay(23).atStartOfDay(),"fixture",org);}
   static MonthlyPriceRequest request(String code,String bu,String month,String org,NonCuConditions terms){return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.parse(month),bu,code,"SPEC","件","CNY",TaxBasis.EXCLUDED,null),org,terms,BigDecimal.ONE);}
   static String code(){return "MPP05-linked-"+UUID.randomUUID();}
@@ -107,7 +111,7 @@ class MonthlyCostVersionIntegrationTest {
     var inquiryStorage=new HouseholdInquiryStorage(sql.getMapper(HouseholdInquiryStorageMapper.class),codec);
     inquiries=new HouseholdInquiryService(sql.getMapper(com.sanhua.marketingcost.mapper.household.HouseholdInquiryQueryMapper.class),inquiryStorage,
         new HouseholdInquiryWorkbookParser(),new HouseholdInquiryFiles(java.nio.file.Files.createTempDirectory("mpp08-inquiries-").toString()),codec,manager,new ObjectMapper());
-    household=new HouseholdMonthlyPriceSource(inquiryStorage,codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class));
+    household=new HouseholdMonthlyPriceSource(inquiryStorage,codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class), financeReader);
     operation=new MonthlyMaterialPriceService(priceStorage,manager,codec,(context,requests,dependencies)->{
       var hh=household.read(context,requests);var remaining=new HashSet<>(requests);remaining.removeAll(hh.values().keySet());
       var normal=source.read(context,remaining);var values=new HashMap<>(normal.values());values.putAll(hh.values());
@@ -115,16 +119,21 @@ class MonthlyCostVersionIntegrationTest {
     });
     versionMapper=sql.getMapper(QuoteCostRunVersionMapper.class);prepareMapper=sql.getMapper(PricePrepareItemMapper.class);
     versionService=new QuoteCostRunVersionServiceImpl(versionMapper,new QuoteCostRunVersionNoGeneratorImpl(versionMapper,null),new com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider("COST_V3"));
-    costing=new MonthlyCostVersionService(versionMapper,sql.getMapper(MonthlyCostVersionMapper.class),prepareMapper,sql.getMapper(CostRunPartItemMapper.class),sql.getMapper(CostRunCostItemMapper.class),operation,priceStorage,codec,MonthlyScenarioTestSupport.create(null),manager);
+    costing=new MonthlyCostVersionService(versionMapper,sql.getMapper(MonthlyCostVersionMapper.class),prepareMapper,sql.getMapper(CostRunPartItemMapper.class),sql.getMapper(CostRunCostItemMapper.class),operation,priceStorage,codec,MonthlyScenarioTestSupport.create(null),manager,
+        new com.sanhua.marketingcost.service.costing.MonthlyCostSnapshotDocuments(codec,operation));
     jdbc.update("INSERT INTO lp_quote_tech_data_version(id) VALUES(7)");
   }
   record Fixture(QuoteCostRunVersion version,MonthlyAdoptionPlan plan,Ordinary ordinary,EffectiveTechnicalDataInput technical,
-      BigDecimal copper,Map<String,PreparationBinding> bindings,long linkedRuleId) {}
+      BigDecimal copper,Map<String,PreparationBinding> bindings,long linkedRuleId) {
+    com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices customerPrices() {
+      return com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.copperAndZinc(copper, null);
+    }
+  }
   static BigDecimal d(String v){return new BigDecimal(v);}
   static void household(String code,String price) throws Exception {
     try(var stream=MonthlyCostVersionIntegrationTest.class.getResourceAsStream("/household-inquiry/real-20261023.xls");var book=org.apache.poi.ss.usermodel.WorkbookFactory.create(stream);var bytes=new java.io.ByteArrayOutputStream()){
       var sheet=book.getSheet("10月线圈询价");for(int row=sheet.getLastRowNum();row>2;row--)if(sheet.getRow(row)!=null)sheet.removeRow(sheet.getRow(row));
-      sheet.getRow(2).getCell(0).setCellValue(code);sheet.getRow(2).getCell(4).setCellValue(price);book.write(bytes);
+      sheet.getRow(2).getCell(0).setCellValue(code);sheet.getRow(2).getCell(4).setCellValue(price);sheet.getRow(2).getCell(5).setCellValue(0);sheet.getRow(2).getCell(6).setCellValue(0);book.write(bytes);
       var preview=inquiries.preview("COMMERCIAL","test",bytes.toByteArray(),"mpp08-controlled-input.xls","2026-10");
       inquiries.publish("COMMERCIAL","test",new PublishRequest(preview.previewId(),preview.publishRequestId(),preview.previewFingerprint()));
     }
@@ -214,6 +223,77 @@ class MonthlyCostVersionIntegrationTest {
     for(var b:f.bindings().values())assertThat(priceStorage.preparationLink("COMMERCIAL",b.financialItemId()).monthlyPriceId()).isNull();
     assertThat(save(f).version().getStatus()).isEqualTo("RUNNING");
   }
+
+  @Test void bulkRowsKeepApplicationMetadataTimeWhenMysqlSessionUsesAnotherZone() throws Exception {
+    var f=fixture("2","92000",true);
+    String originalZone=jdbc.queryForObject("SELECT @@GLOBAL.time_zone",String.class);
+    String differentZone=java.time.ZonedDateTime.now().getOffset().equals(java.time.ZoneOffset.UTC)?"+12:00":"+00:00";
+    try {
+      // This class owns a fresh database. New DriverManager connections inherit this setting.
+      jdbc.update("SET GLOBAL time_zone=?",differentZone);
+      var earliest=LocalDateTime.now().minusSeconds(1);
+      var stored=save(f);
+      var latest=LocalDateTime.now().plusSeconds(1);
+      assertThat(stored.parts()).allSatisfy(part->{
+        assertThat(part.getCreatedAt()).isBetween(earliest,latest);
+        assertThat(part.getUpdatedAt()).isBetween(earliest,latest);
+      });
+      assertThat(stored.costs()).allSatisfy(cost->{
+        assertThat(cost.getCreatedAt()).isBetween(earliest,latest);
+        assertThat(cost.getUpdatedAt()).isBetween(earliest,latest);
+      });
+    } finally { jdbc.update("SET GLOBAL time_zone=?",originalZone); }
+  }
+
+  @Test void repeatedMaterialPathsAcrossInsertChunksRetainEveryRowAndRollbackAsOneCustomer() throws Exception {
+    var original=fixture("2","92000",true);
+    var first=original.ordinary().materials().getFirst();
+    var firstUse=original.plan().uses().stream().filter(use->use.path().equals(first.path())).findFirst().orElseThrow();
+    var uses=new java.util.ArrayList<>(original.plan().uses());
+    var lines=new java.util.ArrayList<>(original.ordinary().materials());
+    var bindings=new HashMap<>(original.bindings());
+    for(int i=1;i<131;i++) {
+      String path="root/CU-"+i;
+      uses.add(new MonthlyAdoptionPlan.Use(path,firstUse.request(),BigDecimal.ONE));
+      lines.add(new MaterialLine(path,first.materialCode(),BigDecimal.ONE,first.monthlyPriceIds(),
+          first.financeAmount(),first.customerAmount(),null));
+      bindings.put(path,new PreparationBinding(
+          prepare(original.version(),firstUse.request(),original.version().getFinancePricePrepareNo(),path,BigDecimal.ONE,d("100")),
+          prepare(original.version(),firstUse.request(),original.version().getOaPricePrepareNo(),path,BigDecimal.ONE,d("92"))));
+    }
+    var o=original.ordinary();
+    var ordinary=new Ordinary(lines,o.nonBomMaterial(),o.directLabor(),o.indirectLabor(),o.lossRate(),o.manufactureRate(),
+        o.coefficient(),o.managementRate(),o.salesRate(),o.financeRate(),o.otherIndependentFees(),o.details());
+    var expanded=new Fixture(original.version(),new MonthlyAdoptionPlan(original.plan().selections(),uses,
+        original.plan().suppressedPaths(),original.plan().ordinaryScopeRequests()),ordinary,original.technical(),original.copper(),Map.copyOf(bindings),original.linkedRuleId());
+    jdbc.execute("CREATE TRIGGER mpp05_bulk_failure BEFORE INSERT ON lp_cost_run_cost_item FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='MPP05_BULK_ROLLBACK'");
+    try { assertThatThrownBy(()->save(expanded)).hasMessageContaining("MPP05_BULK_ROLLBACK"); }
+    finally { jdbc.execute("DROP TRIGGER mpp05_bulk_failure"); }
+    long id=original.version().getId();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_cost_run_part_item WHERE cost_run_version_id=?",Long.class,id)).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_cost_run_cost_item WHERE cost_run_version_id=?",Long.class,id)).isZero();
+    assertThat(priceStorage.versionSnapshot("COMMERCIAL",id).jianjiSnapshotJson()).isNull();
+    for(var binding:bindings.values()) {
+      assertThat(priceStorage.preparationLink("COMMERCIAL",binding.financialItemId()).monthlyPriceId()).isNull();
+      assertThat(priceStorage.preparationLink("COMMERCIAL",binding.customerItemId()).monthlyPriceId()).isNull();
+    }
+    var saved=save(expanded);
+    assertThat(saved.parts()).hasSize(132);
+    assertThat(saved.parts().stream().filter(part->part.getPartCode().equals(first.materialCode())).toList())
+        .hasSize(131).allSatisfy(part->{
+          assertThat(part.getQty()).isEqualByComparingTo(BigDecimal.ONE);
+          assertThat(part.getUnitPrice()).isEqualByComparingTo("100");
+          assertThat(part.getAmount()).isEqualByComparingTo("100");
+        });
+    assertThat(saved.parts()).allSatisfy(part->{
+      assertThat(part.getOaNo()).isEqualTo(original.version().getOaNo());
+      assertThat(part.getOaFormItemId()).isEqualTo(original.version().getOaFormItemId());
+      assertThat(part.getCostRunVersionId()).isEqualTo(id);
+      assertThat(priceStorage.costPartLink("COMMERCIAL",part.getId()).monthlyPriceId()).isNotNull();
+    });
+    assertThat(saved.parts().stream().map(com.sanhua.marketingcost.entity.CostRunPartItem::getPricePrepareItemId).distinct().count()).isEqualTo(132);
+    assertThat(saved.snapshot().calculation().cuMaterialAdjustment()).isEqualByComparingTo("-1048");
+  }
   @Test void legacyHistoryReadsItsOriginalAmountsAndHasNoSyntheticMonthlySnapshot(){
     var v=versionService.createRunning("OLD",1L,"TOP","2025-01","2025-01",null,"COMMERCIAL");v.setAlgorithmVersion("LEGACY");v.setStatus("SUCCESS");v.setTotalCost(d("12.345678"));versionMapper.updateById(v);
     var read=costing.read("COMMERCIAL",v.getId());assertThat(read.snapshot()).isNull();assertThat(read.version().getTotalCost()).isEqualByComparingTo("12.345678");
@@ -232,6 +312,72 @@ class MonthlyCostVersionIntegrationTest {
     assertThat(stored.costs().stream().filter(item->item.getCostCode().equals("WATER_POWER")).findFirst().orElseThrow())
       .satisfies(row->{assertThat(row.getAmount()).isEqualByComparingTo("2");assertThat(row.getSourceId()).isEqualTo(7L);assertThat(row.getRemark()).contains("FINAL_QUOTE");});
     assertThat(costing.read("COMMERCIAL",f.version().getId()).snapshot().calculation().ordinaryInputs().details()).containsExactly(detail);
+  }
+
+  @Test void sharedNumbersBindBothCustomersOwnPreparationsProfileAndHistory() throws Exception {
+    var first = fixture("2", "92000", true);
+    var second = anotherCustomer(first, 82L, 8L);
+    var third = anotherCustomer(first, 83L, 9L);
+    var numbers = MonthlyProductCost.calculate(MonthlyProductCost.resolve(first.plan(), first.ordinary(), first.technical()).inputs());
+    var a = costing.saveCalculatedMaterials("COMMERCIAL", first.version().getId(), first.plan(), first.ordinary(), first.technical(), first.customerPrices(), first.bindings(), numbers);
+    var savedA = codec.encode(a.snapshot());
+    var b = costing.saveCalculatedMaterials("COMMERCIAL", second.version().getId(), second.plan(), second.ordinary(), second.technical(), second.customerPrices(), second.bindings(), numbers);
+    var independent = save(third);
+    assertThat(b.snapshot().calculation().totalCost()).isEqualByComparingTo(independent.snapshot().calculation().totalCost());
+    assertThat(b.snapshot().calculation().ordinary()).isEqualTo(independent.snapshot().calculation().ordinary());
+    assertThat(b.snapshot().calculation().household()).isEqualTo(independent.snapshot().calculation().household());
+    assertThat(b.snapshot().calculation().cuMaterialAdjustment()).isEqualByComparingTo("-8");
+    assertThat(b.snapshot().calculation().finalQuoteAmount()).isEqualByComparingTo("259.627207");
+    assertThat(b.snapshot().oaFormItemId()).isEqualTo(82L);
+    assertThat(b.snapshot().preparations()).isEqualTo(second.bindings());
+    assertThat(b.snapshot().calculation().technicalInput().versionId()).isEqualTo(8L);
+    assertThat(b.snapshot().calculation().fees()).allSatisfy(fee -> assertThat(fee.profileVersionId()).isEqualTo(8L));
+    assertThat(b.parts()).allSatisfy(part -> {
+      assertThat(part.getOaNo()).isEqualTo(second.version().getOaNo());
+      assertThat(part.getCostRunVersionId()).isEqualTo(second.version().getId());
+    });
+    assertThat(b.costs().stream().filter(row -> row.getCostCode().startsWith("OTHER_EXP_TECH_")))
+        .allSatisfy(row -> assertThat(row.getSourceId()).isEqualTo(8L));
+    assertThat(codec.encode(costing.read("COMMERCIAL", first.version().getId()).snapshot())).isEqualTo(savedA);
+    assertThat(codec.encode(costing.read("COMMERCIAL", second.version().getId()).snapshot())).isEqualTo(codec.encode(b.snapshot()));
+  }
+
+  @Test void sharedBindingRejectsAnotherOasPreparationAndChangedInputsWithoutPartialOutput() throws Exception {
+    var first = fixture("1", "100000", true); var second = anotherCustomer(first, 84L, 10L);
+    var numbers = MonthlyProductCost.calculate(MonthlyProductCost.resolve(first.plan(), first.ordinary(), first.technical()).inputs());
+    assertThatThrownBy(() -> costing.saveCalculatedMaterials("COMMERCIAL", second.version().getId(), second.plan(),
+        second.ordinary(), second.technical(), second.customerPrices(), first.bindings(), numbers)).hasMessageContaining("Preparation does not belong");
+    var o = second.ordinary();
+    var changed = new Ordinary(o.materials(), d("1"), o.directLabor(), o.indirectLabor(), o.lossRate(),
+        o.manufactureRate(), o.coefficient(), o.managementRate(), o.salesRate(), o.financeRate(), o.otherIndependentFees());
+    assertThatThrownBy(() -> costing.saveCalculatedMaterials("COMMERCIAL", second.version().getId(), second.plan(),
+        changed, second.technical(), second.customerPrices(), second.bindings(), numbers)).hasMessageContaining("inputs differ");
+    assertThat(priceStorage.versionSnapshot("COMMERCIAL", second.version().getId()).jianjiSnapshotJson()).isNull();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_cost_run_part_item WHERE cost_run_version_id=?", Long.class, second.version().getId())).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_cost_run_cost_item WHERE cost_run_version_id=?", Long.class, second.version().getId())).isZero();
+    for (var binding : second.bindings().values())
+      assertThat(priceStorage.preparationLink("COMMERCIAL", binding.financialItemId()).monthlyPriceId()).isNull();
+    assertThat(costing.saveCalculatedMaterials("COMMERCIAL", second.version().getId(), second.plan(), second.ordinary(),
+        second.technical(), second.customerPrices(), second.bindings(), numbers).snapshot()).isNotNull();
+  }
+
+  static Fixture anotherCustomer(Fixture first, long item, long profile) {
+    jdbc.update("INSERT INTO lp_quote_tech_data_version(id) VALUES(?)", profile);
+    int n = fixtureNumber.incrementAndGet(); String month = first.version().getPricingMonth();
+    var version = versionService.createRunning("OWN-OA-" + item, item, "TOP", month, month, "FIN-OWN-" + n, "COMMERCIAL");
+    version.setFinancePricePrepareNo("FIN-OWN-" + n); version.setOaPricePrepareNo("OA-OWN-" + n); versionMapper.updateById(version);
+    var bindings = new HashMap<String, PreparationBinding>();
+    var pairs = MonthlyScenarioTestSupport.create(null).calculate(first.plan().selections(), first.copper());
+    for (var use : first.plan().uses()) {
+      var pair = pairs.get(first.plan().selections().get(use.request()).monthlyPriceId());
+      bindings.put(use.path(), new PreparationBinding(
+          prepare(version, use.request(), version.getFinancePricePrepareNo(), use.path(), use.cumulativeQuantity(), pair.financialPrice()),
+          prepare(version, use.request(), version.getOaPricePrepareNo(), use.path(), use.cumulativeQuantity(), pair.customerPrice())));
+    }
+    var t = first.technical();
+    var technical = new EffectiveTechnicalDataInput(item, profile, 1, month, t.sourceType(), "own-" + item, t.retrievedAt(),
+        false, false, false, null, null, null, List.of(), List.of(), List.of(), t.productFees(), null);
+    return new Fixture(version, first.plan(), first.ordinary(), technical, first.copper(), bindings, first.linkedRuleId());
   }
 
 }

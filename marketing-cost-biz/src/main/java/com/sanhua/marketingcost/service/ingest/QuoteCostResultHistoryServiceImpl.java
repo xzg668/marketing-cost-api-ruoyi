@@ -1,26 +1,21 @@
 package com.sanhua.marketingcost.service.ingest;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.dto.MonthlyRepriceCostItemDto;
-import com.sanhua.marketingcost.dto.MonthlyRepricePartItemDto;
 import com.sanhua.marketingcost.dto.ingest.QuoteCostResultHistoryItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteCostResultHistoryResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteMonthlyCostResultDetailResponse;
 import com.sanhua.marketingcost.entity.MonthlyRepriceBatch;
-import com.sanhua.marketingcost.entity.MonthlyRepriceCostItem;
-import com.sanhua.marketingcost.entity.MonthlyRepricePartItem;
 import com.sanhua.marketingcost.entity.MonthlyRepriceResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceBatchMapper;
-import com.sanhua.marketingcost.mapper.MonthlyRepriceCostItemMapper;
-import com.sanhua.marketingcost.mapper.MonthlyRepricePartItemMapper;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceResultMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.service.MonthlyRepriceQueryService;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -53,8 +48,7 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
   private final QuoteCostRunVersionMapper versionMapper;
   private final MonthlyRepriceBatchMapper monthlyBatchMapper;
   private final MonthlyRepriceResultMapper monthlyResultMapper;
-  private final MonthlyRepricePartItemMapper monthlyPartItemMapper;
-  private final MonthlyRepriceCostItemMapper monthlyCostItemMapper;
+  private final MonthlyRepriceQueryService monthlyQuery;
 
   public QuoteCostResultHistoryServiceImpl(
       OaFormMapper formMapper,
@@ -62,15 +56,13 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
       QuoteCostRunVersionMapper versionMapper,
       MonthlyRepriceBatchMapper monthlyBatchMapper,
       MonthlyRepriceResultMapper monthlyResultMapper,
-      MonthlyRepricePartItemMapper monthlyPartItemMapper,
-      MonthlyRepriceCostItemMapper monthlyCostItemMapper) {
+      MonthlyRepriceQueryService monthlyQuery) {
     this.formMapper = formMapper;
     this.itemMapper = itemMapper;
     this.versionMapper = versionMapper;
     this.monthlyBatchMapper = monthlyBatchMapper;
     this.monthlyResultMapper = monthlyResultMapper;
-    this.monthlyPartItemMapper = monthlyPartItemMapper;
-    this.monthlyCostItemMapper = monthlyCostItemMapper;
+    this.monthlyQuery = monthlyQuery;
   }
 
   @Override
@@ -135,30 +127,13 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
       throw new QuoteIngestException("月度调价结果缺少明细标识，无法查看明细");
     }
 
+    result=monthlyResultMapper.publishedResult(result.getRepriceNo(),resultId);
+    if(result==null || !"SUCCESS".equals(result.getCalcStatus()))
+      throw new QuoteIngestException("该月度结果尚无已确认成本");
     QuoteMonthlyCostResultDetailResponse response = new QuoteMonthlyCostResultDetailResponse();
     response.setResult(toMonthlyHistory(result));
-    response.setPartItems(
-        monthlyPartItemMapper
-            .selectList(
-                Wrappers.lambdaQuery(MonthlyRepricePartItem.class)
-                    .eq(MonthlyRepricePartItem::getRepriceNo, result.getRepriceNo())
-                    .eq(MonthlyRepricePartItem::getCalcObjectKey, result.getCalcObjectKey())
-                    .orderByAsc(MonthlyRepricePartItem::getLineNo)
-                    .orderByAsc(MonthlyRepricePartItem::getId))
-            .stream()
-            .map(MonthlyRepricePartItemDto::fromEntity)
-            .toList());
-    response.setCostItems(
-        monthlyCostItemMapper
-            .selectList(
-                Wrappers.lambdaQuery(MonthlyRepriceCostItem.class)
-                    .eq(MonthlyRepriceCostItem::getRepriceNo, result.getRepriceNo())
-                    .eq(MonthlyRepriceCostItem::getCalcObjectKey, result.getCalcObjectKey())
-                    .orderByAsc(MonthlyRepriceCostItem::getLineNo)
-                    .orderByAsc(MonthlyRepriceCostItem::getId))
-            .stream()
-            .map(MonthlyRepriceCostItemDto::fromEntity)
-            .toList());
+    response.setPartItems(monthlyQuery.listPublishedPartItems(result.getRepriceNo(), resultId));
+    response.setCostItems(monthlyQuery.listPublishedCostItems(result.getRepriceNo(), resultId));
     return response;
   }
 
@@ -168,6 +143,7 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
             Wrappers.lambdaQuery(QuoteCostRunVersion.class)
                 .eq(QuoteCostRunVersion::getOaNo, scope.oaNo())
                 .eq(QuoteCostRunVersion::getProductCode, scope.productCode())
+                .and(q->q.isNull(QuoteCostRunVersion::getRepriceNo).or().eq(QuoteCostRunVersion::getRepriceNo,""))
                 .in(QuoteCostRunVersion::getStatus, VISIBLE_QUOTE_STATUSES)
                 .isNotNull(QuoteCostRunVersion::getTotalCost)
                 .orderByAsc(QuoteCostRunVersion::getId))
@@ -177,18 +153,13 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
   }
 
   private List<MonthlyRepriceResult> confirmedMonthlyResults(Scope scope) {
-    List<MonthlyRepriceResult> candidates =
-        monthlyResultMapper
-            .selectList(
-                Wrappers.lambdaQuery(MonthlyRepriceResult.class)
-                    .eq(MonthlyRepriceResult::getOaNo, scope.oaNo())
-                    .eq(MonthlyRepriceResult::getProductCode, scope.productCode())
-                    .eq(MonthlyRepriceResult::getCalcStatus, "SUCCESS")
-                    .orderByAsc(MonthlyRepriceResult::getPricingMonth)
-                    .orderByAsc(MonthlyRepriceResult::getId))
+    List<MonthlyRepriceResult> candidates = new ArrayList<>(
+        monthlyResultMapper.publishedLegacyResults(scope.businessUnitType(),scope.oaNo(),scope.productCode())
             .stream()
             .filter(row -> ownedByScope(scope, row))
-            .toList();
+            .toList());
+    candidates.addAll(monthlyResultMapper.confirmedForSource(scope.businessUnitType(), scope.oaNo(),
+        scope.item().getId(), scope.productCode()));
     if (candidates.isEmpty()) {
       return List.of();
     }
@@ -205,7 +176,8 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
             .selectList(
                 Wrappers.lambdaQuery(MonthlyRepriceBatch.class)
                     .in(MonthlyRepriceBatch::getRepriceNo, repriceNos)
-                    .eq(MonthlyRepriceBatch::getStatus, MONTHLY_CONFIRMED)
+                    .and(q->q.eq(MonthlyRepriceBatch::getContractVersion,1).isNotNull(MonthlyRepriceBatch::getConfirmedAt)
+                        .or(old->old.isNull(MonthlyRepriceBatch::getContractVersion).eq(MonthlyRepriceBatch::getStatus,MONTHLY_CONFIRMED)))
                     .eq(MonthlyRepriceBatch::getBusinessUnitType, scope.businessUnitType()))
             .stream()
             .collect(
@@ -226,7 +198,8 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
     return monthlyBatchMapper.selectOne(
         Wrappers.lambdaQuery(MonthlyRepriceBatch.class)
             .eq(MonthlyRepriceBatch::getRepriceNo, repriceNo.trim())
-            .eq(MonthlyRepriceBatch::getStatus, MONTHLY_CONFIRMED)
+            .and(q->q.eq(MonthlyRepriceBatch::getContractVersion,1).isNotNull(MonthlyRepriceBatch::getConfirmedAt)
+                        .or(old->old.isNull(MonthlyRepriceBatch::getContractVersion).eq(MonthlyRepriceBatch::getStatus,MONTHLY_CONFIRMED)))
             .eq(MonthlyRepriceBatch::getBusinessUnitType, scope.businessUnitType())
             .last("LIMIT 1"));
   }
@@ -277,6 +250,7 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
     row.setResultType("MONTHLY_REPRICE");
     row.setResultTypeLabel("月度调价结果");
     row.setSourceId(result.getId());
+    row.setVersionId(result.getCostRunVersionId());
     row.setRepriceNo(result.getRepriceNo());
     row.setResultNo(result.getRepriceNo());
     row.setPeriodMonth(result.getPricingMonth());
@@ -365,6 +339,13 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
   }
 
   private boolean ownedByScope(Scope scope, MonthlyRepriceResult result) {
+    if (result != null && result.getReuseBatchId() != null) {
+      // New scopes require the exact saved source relation. A same-code replacement OA line is not ownership.
+      return scope.businessUnitType().equals(result.getBusinessUnitType())
+          && scope.productCode().equals(result.getProductCode())
+          && monthlyResultMapper.sourceMembership(result.getReuseBatchId(), result.getId(),
+              scope.oaNo(), scope.item().getId()) == 1;
+    }
     return result != null
         && scope.oaNo().equals(trimToNull(result.getOaNo()))
         && scope.productCode().equals(trimToNull(result.getProductCode()))

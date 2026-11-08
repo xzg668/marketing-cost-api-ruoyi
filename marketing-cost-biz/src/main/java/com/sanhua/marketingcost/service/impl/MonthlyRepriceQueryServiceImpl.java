@@ -14,6 +14,7 @@ import com.sanhua.marketingcost.dto.MonthlyRepricePageResponse;
 import com.sanhua.marketingcost.dto.MonthlyRepricePartItemDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceResultDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceResultQueryRequest;
+import com.sanhua.marketingcost.dto.MonthlyRepriceSourceDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceTaskDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceTaskQueryRequest;
 import com.sanhua.marketingcost.entity.MonthlyRepriceAuditLog;
@@ -32,6 +33,7 @@ import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.security.PermissionService;
 import com.sanhua.marketingcost.service.MonthlyRepriceQueryService;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -41,7 +43,6 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
 
   private static final String ROLE_BU_DIRECTOR = "BU_DIRECTOR";
   private static final String STATUS_CONFIRMED = "CONFIRMED";
-  private static final String NO_VISIBLE_STATUS = "__NO_VISIBLE_STATUS__";
   private static final String PERM_REVIEW = "price:monthly-reprice:review";
   private static final String PERM_OPERATE = "price:monthly-reprice:operate";
   private static final String PERM_CONFIRM = "price:monthly-reprice:confirm";
@@ -154,14 +155,41 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
     }
     orderResults(query, req.getSortBy(), req.getSortDirection());
     Page<MonthlyRepriceResult> page =
-        resultMapper.selectPage(new Page<>(page(req.getPage()), size(req.getPageSize())), query);
+        canViewUnconfirmed() ? resultMapper.selectPage(new Page<>(page(req.getPage()), size(req.getPageSize())), query)
+            : resultMapper.pagePublished(new Page<>(page(req.getPage()), size(req.getPageSize())), query);
     return new MonthlyRepricePageResponse<>(
-        page.getTotal(), page.getRecords().stream().map(MonthlyRepriceResultDto::fromEntity).toList());
+        page.getTotal(), page.getRecords().stream().map(result -> {
+          validateResultFormat(batch, result);
+          var dto = MonthlyRepriceResultDto.fromEntity(result);
+          dto.setScopeVersion(batch.getScopeVersion());
+          return dto;
+        }).toList());
+  }
+
+  @Override
+  public MonthlyRepricePageResponse<MonthlyRepriceSourceDto> pageSources(
+      String repriceNo, Long resultId, Integer requestedPage, Integer pageSize) {
+    var result = visibleResult(repriceNo, resultId);
+    // Historical results keep their saved OA reference. Never infer a customer scope from live OA.
+    if (result.getReuseBatchId() == null) return new MonthlyRepricePageResponse<>(0, List.of());
+    int limit = Math.min(size(pageSize), 200);
+    long offset = ((long) page(requestedPage) - 1) * limit;
+    long count = resultMapper.countSources(result.getReuseBatchId(), resultId);
+    return new MonthlyRepricePageResponse<>(count,
+        resultMapper.pageSources(result.getReuseBatchId(), resultId, result.getSourceCostVersionId(), offset, limit));
   }
 
   @Override
   public List<MonthlyRepricePartItemDto> listPartItems(String repriceNo, Long resultId) {
     MonthlyRepriceResult result = visibleResult(repriceNo, resultId);
+    return partItems(result);
+  }
+
+  @Override public List<MonthlyRepricePartItemDto> listPublishedPartItems(String no,Long id) {
+    return partItems(publishedResult(no,id));
+  }
+
+  private List<MonthlyRepricePartItemDto> partItems(MonthlyRepriceResult result) {
     if (Integer.valueOf(1).equals(result.getContractVersion())) {
       var parts = storedResult(result).parts();
       return java.util.stream.IntStream.range(0,parts.size())
@@ -181,6 +209,14 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
   @Override
   public List<MonthlyRepriceCostItemDto> listCostItems(String repriceNo, Long resultId) {
     MonthlyRepriceResult result = visibleResult(repriceNo, resultId);
+    return costItems(result);
+  }
+
+  @Override public List<MonthlyRepriceCostItemDto> listPublishedCostItems(String no,Long id) {
+    return costItems(publishedResult(no,id));
+  }
+
+  private List<MonthlyRepriceCostItemDto> costItems(MonthlyRepriceResult result) {
     if (Integer.valueOf(1).equals(result.getContractVersion()))
       return storedResult(result).costs().stream().map(row -> MonthlyRepriceCostItemDto.fromSaved(result,row)).toList();
     return costItemMapper.selectList(
@@ -208,9 +244,12 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
     } else if (!canViewUnconfirmed()) {
       query.inSql(
           MonthlyRepriceAuditLog::getRepriceNo,
-          "SELECT reprice_no FROM lp_monthly_reprice_batch WHERE status = 'CONFIRMED'");
+          "SELECT reprice_no FROM lp_monthly_reprice_batch WHERE (contract_version=1 AND confirmed_at IS NOT NULL) OR (contract_version IS NULL AND status='CONFIRMED')");
     }
     eqText(query, MonthlyRepriceAuditLog::getPricingMonth, req.getPricingMonth());
+    if(!canViewUnconfirmed()) query.and(q->q.eq(MonthlyRepriceAuditLog::getOperationType,"CONFIRM")
+        .or().inSql(MonthlyRepriceAuditLog::getRepriceNo,
+            "SELECT reprice_no FROM lp_monthly_reprice_batch WHERE contract_version IS NULL AND status='CONFIRMED'"));
     eqText(query, MonthlyRepriceAuditLog::getBusinessUnitType, visibleBusinessUnit(req.getBusinessUnitType()));
     eqText(query, MonthlyRepriceAuditLog::getOperationType, req.getOperationType());
     likeText(query, MonthlyRepriceAuditLog::getOperatorName, req.getOperatorName());
@@ -231,7 +270,7 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
         batchMapper.selectOne(
             Wrappers.lambdaQuery(MonthlyRepriceBatch.class)
                 .eq(MonthlyRepriceBatch::getBusinessUnitType, businessUnitType)
-                .and(q -> q.eq(MonthlyRepriceBatch::getContractVersion, 1).ne(MonthlyRepriceBatch::getStatus, STATUS_CONFIRMED)
+                .and(q -> q.eq(MonthlyRepriceBatch::getContractVersion, 1).isNull(MonthlyRepriceBatch::getConfirmedAt)
                     .or(old -> old.isNull(MonthlyRepriceBatch::getContractVersion).in(MonthlyRepriceBatch::getStatus, LOCKING_STATUSES)))
                 .orderByDesc(MonthlyRepriceBatch::getUpdatedAt)
                 .last("LIMIT 1"));
@@ -275,7 +314,7 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
   }
 
   private MonthlyRepriceResult visibleResult(String repriceNo, Long resultId) {
-    visibleBatch(required("repriceNo", repriceNo));
+    MonthlyRepriceBatch batch = visibleBatch(required("repriceNo", repriceNo));
     if (resultId == null) {
       throw new IllegalArgumentException("resultId 必填");
     }
@@ -288,11 +327,42 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
     if (result == null) {
       throw new IllegalArgumentException("月度调价结果不存在：" + resultId);
     }
+    validateResultFormat(batch, result);
     // 明细下钻必须以结果行的 calcObjectKey 为边界，避免一个 OA 多产品时串明细。
     if (!StringUtils.hasText(result.getCalcObjectKey())) {
       throw new IllegalArgumentException("月度调价结果缺少 calcObjectKey，不能下钻明细：" + resultId);
     }
-    return result;
+    return canViewUnconfirmed() ? result : publishedResult(repriceNo,resultId);
+  }
+
+  private MonthlyRepriceResult publishedResult(String no,Long id) {
+    var batch=visibleBatch(required("repriceNo",no));
+    if(id==null)throw new IllegalArgumentException("resultId 必填");
+    var result=resultMapper.publishedResult(no,id);
+    if(result==null)throw new IllegalArgumentException("已确认的月度结果不存在");
+    validateResultFormat(batch,result);return result;
+  }
+
+  private void validateResultFormat(MonthlyRepriceBatch batch, MonthlyRepriceResult result) {
+    if (result.getContractVersion() != null && !Integer.valueOf(1).equals(result.getContractVersion()))
+      throw new IllegalStateException("不支持的月度结果保存格式");
+    if (batch.getScopeVersion() == null) {
+      if (result.getReuseBatchId() != null || result.getCustomerIdentitySource() != null
+          || result.getCustomerIdentityValue() != null || result.getMergedSourceCount() != null
+          || result.getComputeGroupId() != null)
+        throw new IllegalStateException("历史结果混入了新版客户身份");
+      return;
+    }
+    if (!Integer.valueOf(1).equals(result.getContractVersion())
+        || !Objects.equals(batch.getId(), result.getReuseBatchId())
+        || !Objects.equals(batch.getRepriceNo(), result.getRepriceNo())
+        || !Objects.equals(batch.getBusinessUnitType(), result.getBusinessUnitType())
+        || !Objects.equals(batch.getPricingMonth(), result.getPricingMonth())
+        || !("VERIFIED_CUSTOMER_CODE".equals(result.getCustomerIdentitySource())
+            || "OA_HEADER_CUSTOMER".equals(result.getCustomerIdentitySource()))
+        || !StringUtils.hasText(result.getCustomerIdentityValue())
+        || result.getMergedSourceCount() == null || result.getMergedSourceCount() < 1)
+      throw new IllegalStateException("月度结果的固定客户身份不完整或与批次不一致");
   }
 
   private MonthlyRepriceBatch findBatch(String repriceNo) {
@@ -313,9 +383,11 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
       throw new AccessDeniedException("不能查看其他业务单元的月度调价批次");
     }
     // 未确认批次属于发布前数据，只允许业务总监或明确授权的复核角色查看。
-    if (!STATUS_CONFIRMED.equals(normalize(batch.getStatus())) && !canViewUnconfirmed()) {
+    if (!(Integer.valueOf(1).equals(batch.getContractVersion()) ? batch.getConfirmedAt()!=null : STATUS_CONFIRMED.equals(normalize(batch.getStatus()))) && !canViewUnconfirmed()) {
       throw new AccessDeniedException("普通用户不能查看未确认的月度调价结果");
     }
+    if (batch.getScopeVersion() != null && !Integer.valueOf(1).equals(batch.getScopeVersion()))
+      throw new IllegalStateException("不支持的月度客户范围版本");
   }
 
   private void applyBatchStatusVisibility(
@@ -327,11 +399,9 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
       }
       return;
     }
-    if (StringUtils.hasText(status) && !STATUS_CONFIRMED.equals(status)) {
-      query.eq(MonthlyRepriceBatch::getStatus, NO_VISIBLE_STATUS);
-    } else {
-      query.eq(MonthlyRepriceBatch::getStatus, STATUS_CONFIRMED);
-    }
+    query.and(q->q.eq(MonthlyRepriceBatch::getContractVersion,1).isNotNull(MonthlyRepriceBatch::getConfirmedAt)
+        .or(old->old.isNull(MonthlyRepriceBatch::getContractVersion).eq(MonthlyRepriceBatch::getStatus,STATUS_CONFIRMED)));
+    if(StringUtils.hasText(status))query.eq(MonthlyRepriceBatch::getStatus,status);
   }
 
   private boolean canViewUnconfirmed() {

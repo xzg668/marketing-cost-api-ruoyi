@@ -33,12 +33,6 @@ public interface MonthlyPriceLinkMapper {
   int attachRepricePreparation(@Param("unit") String unit,@Param("no") String no,
       @Param("id") long id,@Param("price") long price,@Param("type") String type);
 
-  @Update("""
-      UPDATE lp_cost_run_part_item SET monthly_price_id=#{price},monthly_pricing_type=#{type}
-      WHERE id=#{id} AND business_unit_type=#{unit} AND monthly_price_id IS NULL
-      """)
-  int attachCostPart(@Param("unit") String unit,@Param("id") long id,@Param("price") long price,@Param("type") String type);
-
   @Select("SELECT id,monthly_price_id,monthly_pricing_type FROM lp_price_prepare_item WHERE id=#{id} AND business_unit_type=#{unit}")
   PriceLink preparation(@Param("unit") String unit,@Param("id") long id);
 

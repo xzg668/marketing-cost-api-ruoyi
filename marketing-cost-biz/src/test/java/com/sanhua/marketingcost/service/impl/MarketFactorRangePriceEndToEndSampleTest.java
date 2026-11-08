@@ -239,7 +239,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
             any()))
         .thenReturn(List.of(totalCostItem(EXPECTED_AMOUNT.multiply(new BigDecimal("2")))));
 
-    CostRunEngine costRunEngine = objectCalcService::calculate;
+    CostRunEngine costRunEngine = new CostRunEngineImpl(objectCalcService);
     QuoteCostRunWorkbenchServiceImpl workbench =
         quoteCostRunWorkbench(oaFormMapper, costRunEngine);
 

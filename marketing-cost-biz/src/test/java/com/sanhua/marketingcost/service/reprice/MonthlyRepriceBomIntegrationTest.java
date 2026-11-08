@@ -92,6 +92,9 @@ class MonthlyRepriceBomIntegrationTest {
 
   static MonthlyRepriceBatch launch() {
     var source=source("COMMERCIAL",301L);
+    jdbc.update("UPDATE oa_form SET customer='SAVED-CUSTOMER' WHERE id=1");
+    jdbc.update("UPDATE oa_form_item SET material_no='TOP',package_method='BOX' WHERE id=301");
+    jdbc.update("UPDATE lp_quote_cost_run_version SET product_code='TOP' WHERE id=?",source.sourceCostVersionId());
     jdbc.update("INSERT INTO lp_cost_run_part_item(oa_no,product_code,cost_run_version_id,part_code,qty,amount,price_org_code,material_organization_code) VALUES('MRP1130-TEST','TOP',?,'BASE',1,12.123456,'210','COMMERCIAL')",source.sourceCostVersionId());
     return service.enqueue("COMMERCIAL",MONTH);
   }
@@ -114,7 +117,7 @@ class MonthlyRepriceBomIntegrationTest {
     assertThat(details.load(id)).extracting(BomRawHierarchy::getMaterialName).containsOnly("V1");
     assertThat(jdbc.queryForList("SELECT * FROM lp_quote_cost_run_version")).isEqualTo(oldRows);
     verifyNoInteractions(STATUS);
-    var ready=ready(batch);service.confirm(batch.getRepriceNo(),ready.getCheckedRevision());
+    var ready=ready(batch);publications.confirm(batch.getRepriceNo(),ready.getCheckedRevision());
     var next=service.enqueue("COMMERCIAL",MONTH.plusMonths(1));
     var newer=repricing.prepare(next.getRepriceNo(),task(next).getId());
     assertThat(newer.ready()).isTrue();assertThat(newer.bom().getSyncRecordId()).isNotEqualTo(id);
@@ -200,8 +203,9 @@ class MonthlyRepriceBomIntegrationTest {
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_bom_monthly_snapshot_detail",Integer.class)).isEqualTo(5);
   }
 
-  @Test void changedProductIdentityAndAmbiguousSavedOrganizationAreExplicitFailures() {
+  @Test void legacyLiveProductIdentityAndAmbiguousSavedOrganizationAreExplicitFailures() {
     var batch=launch();var task=task(batch);item.setMaterialNo("OTHER");
+    jdbc.update("UPDATE lp_cost_run_task SET request_snapshot_json=JSON_REMOVE(request_snapshot_json,'$.scopeVersion','$.selectedInput','$.customerIdentity') WHERE id=?",task.getId());
     assertThatThrownBy(()->repricing.prepare(batch.getRepriceNo(),task.getId())).hasMessageContaining("身份已变化");
     item.setMaterialNo("TOP");jdbc.update("UPDATE lp_cost_run_part_item SET material_organization_code=NULL");
     assertThatThrownBy(()->repricing.prepare(batch.getRepriceNo(),task.getId())).hasMessageContaining("组织依据");
@@ -228,4 +232,37 @@ class MonthlyRepriceBomIntegrationTest {
     }
     return rows;
   }
+  @Test void acceptedCustomerAndPackagingRemainFixedBeforeFirstBomPreparation() throws Exception {
+    var batch=launch();var task=task(batch);
+    jdbc.update("UPDATE oa_form SET customer='LATER-CUSTOMER' WHERE id=1");
+    jdbc.update("UPDATE oa_form_item SET package_method='LATER-PACKAGE' WHERE id=301");
+    form.setCustomer("LATER-CUSTOMER");item.setPackageMethod("LATER-PACKAGE");
+    var result=repricing.prepare(batch.getRepriceNo(),task.getId());
+    assertThat(result.ready()).isTrue();
+    var request=new ObjectMapper().readTree(mapper.readTask(batch.getRepriceNo(),task.getId()).getRequestSnapshotJson());
+    assertThat(request.path("bomInput").path("context").path("customer").path("value").asText()).isEqualTo("SAVED-CUSTOMER");
+    assertThat(request.path("bomInput").path("item").path("packageMethod").asText()).isEqualTo("BOX");
+    verifyNoInteractions(FORMS,ITEMS);
+  }
+
+  @Test void corruptedSelectedCustomerCannotAcquireBomUnderAnotherIdentity() {
+    var batch=launch();var task=task(batch);
+    jdbc.update("UPDATE lp_cost_run_task SET request_snapshot_json=JSON_SET(request_snapshot_json,'$.selectedInput.form.customer','OTHER') WHERE id=?",task.getId());
+    assertThatThrownBy(()->repricing.prepare(batch.getRepriceNo(),task.getId())).hasMessageContaining("固定客户身份");
+    verifyNoInteractions(LIVE_U9);
+  }
+
+  @Test void unknownScopeCannotFallBackToLiveOaOrBypassValidationWithCachedBom() {
+    var batch=launch();var task=task(batch);
+    jdbc.update("UPDATE lp_cost_run_task SET request_snapshot_json=JSON_SET(request_snapshot_json,'$.scopeVersion',2) WHERE id=?",task.getId());
+    assertThatThrownBy(()->repricing.prepare(batch.getRepriceNo(),task.getId())).hasMessageContaining("不支持的月度客户范围版本");
+    verifyNoInteractions(FORMS,ITEMS,LIVE_U9);
+    jdbc.update("UPDATE lp_cost_run_task SET request_snapshot_json=JSON_SET(request_snapshot_json,'$.scopeVersion',1) WHERE id=?",task.getId());
+    assertThat(repricing.prepare(batch.getRepriceNo(),task.getId()).ready()).isTrue();
+    clearInvocations(LIVE_U9);
+    jdbc.update("UPDATE lp_cost_run_task SET request_snapshot_json=JSON_SET(request_snapshot_json,'$.scopeVersion','1') WHERE id=?",task.getId());
+    assertThatThrownBy(()->repricing.prepare(batch.getRepriceNo(),task.getId())).hasMessageContaining("不支持的月度客户范围版本");
+    verifyNoInteractions(FORMS,ITEMS,LIVE_U9);
+  }
+
 }

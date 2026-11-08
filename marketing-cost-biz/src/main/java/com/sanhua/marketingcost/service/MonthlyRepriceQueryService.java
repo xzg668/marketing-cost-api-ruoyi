@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.dto.MonthlyRepricePageResponse;
 import com.sanhua.marketingcost.dto.MonthlyRepricePartItemDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceResultDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceResultQueryRequest;
+import com.sanhua.marketingcost.dto.MonthlyRepriceSourceDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceTaskDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceTaskQueryRequest;
 import java.util.List;
@@ -30,6 +31,13 @@ public interface MonthlyRepriceQueryService {
   List<MonthlyRepricePartItemDto> listPartItems(String repriceNo, Long resultId);
 
   List<MonthlyRepriceCostItemDto> listCostItems(String repriceNo, Long resultId);
+
+  List<MonthlyRepricePartItemDto> listPublishedPartItems(String repriceNo, Long resultId);
+
+  List<MonthlyRepriceCostItemDto> listPublishedCostItems(String repriceNo, Long resultId);
+
+  MonthlyRepricePageResponse<MonthlyRepriceSourceDto> pageSources(
+      String repriceNo, Long resultId, Integer page, Integer pageSize);
 
   MonthlyRepricePageResponse<MonthlyRepriceAuditLogDto> pageAuditLogs(
       MonthlyRepriceAuditLogQueryRequest request);

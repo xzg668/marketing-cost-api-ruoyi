@@ -28,7 +28,7 @@ class MonthlyQuotationDifferenceTest {
   final List<PricePrepareItem> saved = new ArrayList<>();
   final Map<String, PreparationBinding> bindings = new HashMap<>();
 
-  @Test void zeroDifferenceStillMarksCopperAndHouseholdIsAlwaysZeroAndNoncontributing() {
+  @Test void zeroDifferenceStillMarksCopperAndHouseholdWithoutMetalExposureHasZeroDifference() {
     var a = request("A"); var h = request("HH");
     var normal = price(1, false, true, "10"); var household = price(2, true, false, "20");
     var plan = new MonthlyAdoptionPlan(Map.of(a, normal, h, household),
@@ -42,7 +42,7 @@ class MonthlyQuotationDifferenceTest {
     var copper = result.items().getFirst(); assertThat(copper.getCuAffected()).isEqualTo(1);
     assertThat(copper.getDiffAmount()).isZero();
     var hh = result.items().getLast(); assertThat(hh.getCuAffected()).isZero();
-    assertThat(hh.getDiffAmount()).isZero(); assertThat(hh.getContributesToAdjustment()).isZero();
+    assertThat(hh.getDiffAmount()).isZero(); assertThat(hh.getContributesToAdjustment()).isEqualTo(1);
     assertThat(hh.getOaAmount()).isEqualByComparingTo("60");
     verify(preparations).selectBatchIds(anyCollection()); verifyNoMoreInteractions(preparations);
   }
@@ -134,12 +134,12 @@ class MonthlyQuotationDifferenceTest {
     assertThat(result.adjustmentAmount()).isZero();
   }
 
-  @Test void nonCopperDifferenceFailsClosedInsteadOfInventingCopperDependency() {
+  @Test void differenceWithoutMaterialBaseDependencyIsRejected() {
     var a = request("A"); var selected = price(1, false, false, "10");
     preparePair("P/A", "A", "MONTHLY_PRICE", BigDecimal.ONE, d("10"), d("12"));
     var plan = new MonthlyAdoptionPlan(Map.of(a, selected), List.of(new Use("P/A", a, BigDecimal.ONE)), Set.of());
     var stored = stored(plan, List.of(new MaterialLine("P/A", "A", BigDecimal.ONE, List.of(1L), d("10"), d("12"), null)));
-    assertThatThrownBy(() -> service.difference(stored)).hasMessageContaining("Non-Cu");
+    assertThatThrownBy(() -> service.difference(stored)).hasMessageContaining("without a material base-price dependency");
   }
 
   Stored stored(MonthlyAdoptionPlan plan, List<MaterialLine> lines) {

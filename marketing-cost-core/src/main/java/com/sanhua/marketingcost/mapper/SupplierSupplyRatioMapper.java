@@ -48,6 +48,11 @@ public interface SupplierSupplyRatioMapper extends BaseMapper<SupplierSupplyRati
       @Param("unit") String unit, @Param("date") java.time.LocalDate date,
       @Param("codes") java.util.Collection<String> codes);
 
+  @Select("SELECT * FROM lp_supplier_supply_ratio WHERE business_unit_type=#{unit} "
+      + "AND material_code=#{material} AND is_active=1 AND deleted=0 ORDER BY id FOR UPDATE")
+  List<SupplierSupplyRatio> currentMaterialRelations(@Param("unit") String unit,
+      @Param("material") String material);
+
   @Select("SELECT * FROM lp_supplier_supply_ratio WHERE business_unit_type=#{businessUnitType} "
       + "AND material_code=#{materialCode} AND supplier_code=#{supplierCode} "
       + "AND is_active=1 AND deleted=0 ORDER BY id FOR UPDATE")

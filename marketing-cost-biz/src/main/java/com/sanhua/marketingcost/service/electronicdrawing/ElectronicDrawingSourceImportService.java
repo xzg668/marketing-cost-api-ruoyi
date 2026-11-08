@@ -36,6 +36,7 @@ public class ElectronicDrawingSourceImportService {
   private final DrawingVerificationResultMapper results;
   private final DrawingVerificationCodec codec;
   private final DrawingVerificationService verifications;
+  private final ElectronicDrawingBomReuse bomReuse;
 
   public ElectronicDrawingSourceImportService(
       ElectronicDrawingWorkflowContextPort contexts,
@@ -46,7 +47,8 @@ public class ElectronicDrawingSourceImportService {
       DrawingVerificationTaskMapper tasks,
       DrawingVerificationResultMapper results,
       DrawingVerificationCodec codec,
-      DrawingVerificationService verifications) {
+      DrawingVerificationService verifications,
+      ElectronicDrawingBomReuse bomReuse) {
     this.contexts = contexts;
     this.items = items;
     this.preparations = preparations;
@@ -56,6 +58,7 @@ public class ElectronicDrawingSourceImportService {
     this.results = results;
     this.codec = codec;
     this.verifications = verifications;
+    this.bomReuse = bomReuse;
   }
 
   @Transactional
@@ -110,8 +113,11 @@ public class ElectronicDrawingSourceImportService {
     }
     // 多组原文完整保存在结果中；只有核实归属的产品组成为本报价的 BOM 行。
     var sourceNodes = DrawingJsonNodes.forProduct(payload.summary(), task.getDrawingNo());
+    var reuse = bomReuse.compare(context, task.getDrawingNo(), payload.summary());
+    sourceNodes = bomReuse.retainedRows(reuse, sourceNodes);
     var now = now();
     var version = newVersion(context, task, resultId, scope, result.getReceivedAt(), now);
+    if (reuse != null) version.setReusedFromVersionId(reuse.previous().getId());
     if (versions.insert(version) != 1 || version.getId() == null) throw invalid("电子图库来源版本创建失败");
     sourceNodes.forEach(
         node -> {
@@ -120,7 +126,11 @@ public class ElectronicDrawingSourceImportService {
           node.setUpdatedAt(now);
         });
     nodes.insertAll(version.getId(), sourceNodes);
-    attach(context, version.getId());
+    bomReuse.copyApprovedBom(reuse, version, context, now);
+    var attached = contexts.attachSourceVersion(context, version.getId(), now);
+    if (reuse != null && reuse.reuseCompleteTree()) {
+      contexts.completePublication(attached, version.getCompositionFingerprint(), now);
+    }
     complete(task, resultId);
     logCommitted(task, version, false);
     return receipt(version, sourceNodes.size(), false);

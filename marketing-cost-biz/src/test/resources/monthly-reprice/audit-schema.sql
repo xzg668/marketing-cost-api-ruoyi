@@ -1,0 +1,31 @@
+-- Existing V126 audit table, omitted by the minimal historical test fixture.
+CREATE TABLE IF NOT EXISTS lp_monthly_reprice_audit_log (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  reprice_no VARCHAR(64) DEFAULT NULL COMMENT '月度调价批次号',
+  pricing_month VARCHAR(7) DEFAULT NULL COMMENT '调价月份 YYYY-MM',
+  business_unit_type VARCHAR(32) DEFAULT NULL COMMENT '业务单元',
+  operation_type VARCHAR(64) NOT NULL COMMENT '操作类型',
+  operation_name VARCHAR(128) NOT NULL COMMENT '操作名称',
+  operator_id VARCHAR(64) DEFAULT NULL COMMENT '操作人ID',
+  operator_name VARCHAR(128) DEFAULT NULL COMMENT '操作人姓名',
+  operator_role VARCHAR(128) DEFAULT NULL COMMENT '操作人角色',
+  operation_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+  target_type VARCHAR(64) DEFAULT NULL COMMENT '操作对象类型',
+  target_id VARCHAR(64) DEFAULT NULL COMMENT '操作对象ID',
+  target_key VARCHAR(255) DEFAULT NULL COMMENT '操作对象业务键',
+  before_json JSON DEFAULT NULL COMMENT '操作前快照',
+  after_json JSON DEFAULT NULL COMMENT '操作后快照',
+  change_summary VARCHAR(1000) DEFAULT NULL COMMENT '变更摘要',
+  request_ip VARCHAR(64) DEFAULT NULL COMMENT '请求IP',
+  request_user_agent VARCHAR(512) DEFAULT NULL COMMENT '请求UA',
+  request_id VARCHAR(128) DEFAULT NULL COMMENT '请求链路ID',
+  remark VARCHAR(1000) DEFAULT NULL COMMENT '备注',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  KEY idx_monthly_audit_reprice (reprice_no, operation_time),
+  KEY idx_monthly_audit_month_bu (pricing_month, business_unit_type, operation_time),
+  KEY idx_monthly_audit_operator (operator_id, operation_time),
+  KEY idx_monthly_audit_target (target_type, target_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='月度调价审计日志表';

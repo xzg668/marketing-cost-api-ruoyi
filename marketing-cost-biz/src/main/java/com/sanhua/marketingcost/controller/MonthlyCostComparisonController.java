@@ -41,6 +41,12 @@ public class MonthlyCostComparisonController {
       java.nio.file.Files.copy(file.path(),response.getOutputStream());
     }
   }
+  @GetMapping("/versions/{versionId}/sources")
+  @PreAuthorize(MonthlyRepriceQueryController.QUERY_PERMISSION)
+  public CommonResult<com.sanhua.marketingcost.dto.MonthlyRepricePageResponse<com.sanhua.marketingcost.dto.MonthlyRepriceSourceDto>> sources(
+      @PathVariable long versionId,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize) {
+    return CommonResult.success(service.historicalSources(versionId,page,pageSize));
+  }
   private static List<MonthlyCostComparison.Metric> metrics(String selection) {
     return selection==null?null:"NONE".equals(selection)?List.of():java.util.Arrays.stream(selection.split(","))
         .map(String::trim).map(MonthlyCostComparison.Metric::valueOf).toList();

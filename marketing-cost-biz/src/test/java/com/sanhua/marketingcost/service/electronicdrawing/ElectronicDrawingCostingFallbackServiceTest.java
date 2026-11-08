@@ -125,14 +125,6 @@ class ElectronicDrawingCostingFallbackServiceTest {
   }
 
   @Test
-  void noRevisionDoesNotAcquireDrawingAgainWhenResumingPublishedBom() {
-    var result = service.resumeComposed(form(), item("DRAW-001"), "2026-08");
-    assertThat(result.attempted()).isFalse();
-    verify(orchestrator, never()).process(any());
-    verify(preparation, never()).prepareSharedDrawing(any(), any());
-  }
-
-  @Test
   void submittedRawRevisionResumesCompositionWithoutAcquiringAnotherSource() {
     when(preparation.composedDrawingNo(10L, "2026-08", "COMMERCIAL", "210"))
         .thenReturn("REVISION-DRAWING");
@@ -140,13 +132,12 @@ class ElectronicDrawingCostingFallbackServiceTest {
         .thenReturn(
             new ElectronicDrawingWorkflowOrchestrator.WorkflowResult(
                 10L, 5, 92L, ElectronicDrawingWorkflowStage.PUBLISHED, "修订已发布", true, 12));
-    var result = service.resumeComposed(form(), item("OLD-DRAWING"), "2026-08");
+    var result = service.attempt(form(), item("OLD-DRAWING"), "2026-08");
     assertThat(result.costingCanContinue()).isTrue();
     var command =
         ArgumentCaptor.forClass(ElectronicDrawingWorkflowOrchestrator.WorkflowCommand.class);
     verify(orchestrator).process(command.capture());
     assertThat(command.getValue().drawingNo()).isEqualTo("REVISION-DRAWING");
-    verify(preparation, never()).prepareSharedDrawing(any(), any());
   }
 
   @Test
@@ -190,6 +181,25 @@ class ElectronicDrawingCostingFallbackServiceTest {
     form.setOaNo("OA-1");
     form.setBusinessUnitType("COMMERCIAL");
     return form;
+  }
+
+  @Test
+  void publishedBomStillRequestsLatestDrawingAndCannotContinueWhileItNeedsReview() {
+    var published = new ElectronicDrawingWorkContext(10L, 1, 1L, 20L, 1L, 10L, "EDP", "OA-1", "P-1",
+        null, "产品", null, "MODEL", "NON_BARE", "FULL_BOM", "2026-08", "210", "COMMERCIAL",
+        "COMMERCIAL", "210", true, true, "READY_FOR_COSTING", "PUBLISHED", null, null, "old-tree");
+    when(contexts.load(any(), any(), any(), any())).thenReturn(published);
+    var old = new com.sanhua.marketingcost.entity.DrawingVerificationTask();
+    old.setId(31L); old.setTaskState("RECEIVED"); old.setConsumptionState("COMPLETE");
+    var latest = new com.sanhua.marketingcost.entity.DrawingVerificationTask();
+    latest.setTaskState("WAIT_REVIEW"); latest.setDifferenceCount(1);
+    when(verifications.current(published)).thenReturn(java.util.Optional.of(old));
+    when(verifications.restart(published, null, 31L)).thenReturn(java.util.Optional.of(latest));
+    var result = service.attempt(form(), item("OLD-DRAWING"), "2026-08");
+    assertThat(result.costingCanContinue()).isFalse();
+    assertThat(result.stage()).isEqualTo(ElectronicDrawingWorkflowStage.WAIT_REVIEW);
+    verify(verifications).restart(published, null, 31L);
+    verify(orchestrator, never()).process(any());
   }
 
   private OaFormItem item(String drawing) {

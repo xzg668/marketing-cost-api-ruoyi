@@ -80,13 +80,16 @@ public class OaTechnicalReturnClient {
             + "。\n修改地址："
             + url;
     OaWorkflowClient.validateRemark(remark);
-    return OaTechnicalPeopleRequest.build(
+    var body = OaTechnicalPeopleRequest.build(
         json,
         properties.requireTechnicalPeopleDataKey(request.processCode()),
         request.requestId(),
         request.operatorEmployeeNo(),
         employees,
         remark);
+    // 退回前只保存人员和意见，不能先提交并推进当前 OA 办理节点。
+    body.withObject("/otherParams").put("src", "save");
+    return body;
   }
 
   public ObjectNode previewRejection(String requestId, String employeeNo, String rejectToNodeId) {

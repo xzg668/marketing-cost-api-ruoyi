@@ -81,7 +81,7 @@ class PreparedFormulaInputsTest {
     var rule=rule();rule.setFormulaExpr("0");rule.setTaxIncluded(1);var prepared=new PreparedFormulaInputs(new PreparedFormulaInputs.Catalog(List.of(),List.of(),List.of()),new PreparedFormulaInputs.Financial(null,Map.of(),Set.of()));var result=service().previewPrepared(rule,"2026-10",LocalDate.of(2026,10,23),prepared);assertThat(result.getError()).isNull();assertThat(result.getResult()).isZero();assertThat(result.getInputSnapshotJson()).isNotBlank();verifyNoInteractions(variables,rules,bindings,placeholders,identities,prices,finance);
   }
   @Test void customerCopperCannotEnterTheCapturedPublicP0(){
-    assertThatThrownBy(()->new PreparedFormulaInputs.Financial(financial().withCustomerCopperPerTon(new BigDecimal("200000")),Map.of(),Set.of())).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Cu");
+    assertThatThrownBy(()->new PreparedFormulaInputs.Financial(financial().withCustomerCopperPerTon(new BigDecimal("200000")),Map.of(),Set.of())).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("P0不能包含客户材料基价");
   }
   @Test void uncapturedScrapDependencyMustStopBeforeReadingItsCurrentMappingOrPrice(){
     var definition=variable("scrap_price","废料价","DERIVED","{\"strategy\":\"SCRAP_REF\"}");var prepared=new PreparedFormulaInputs(new PreparedFormulaInputs.Catalog(List.of(definition),List.of(),List.of()),capturedFinancial());var rule=rule();rule.setFormulaExpr("废料价");rule.setTaxIncluded(1);var result=service().previewPrepared(rule,"2026-10",LocalDate.of(2026,10,23),prepared);assertThat(result.getError()).isNotBlank();assertThat(result.getResult()).isNull();verifyNoInteractions(scrapReferences,scrapPrices,variables,rules,bindings,placeholders,identities,prices,finance);

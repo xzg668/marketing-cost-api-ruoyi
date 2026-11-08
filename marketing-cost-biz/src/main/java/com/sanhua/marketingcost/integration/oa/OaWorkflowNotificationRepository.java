@@ -58,6 +58,34 @@ public class OaWorkflowNotificationRepository {
         reply, messageId);
   }
 
+  public List<Long> pendingSubmissionNotifications(String batchId) {
+    return jdbc.queryForList("""
+        SELECT id FROM lp_oa_integration_message WHERE technical_batch_id=?
+          AND direction='INBOUND' AND interface_type='WORKFLOW_EVENT' AND status='WAITING_HANDLER' ORDER BY id
+        """, Long.class, batchId);
+  }
+
+  public void rejectSubmissionNotification(long id) {
+    jdbc.update("""
+        UPDATE lp_oa_integration_message SET status='REJECTED',error_code='OA_SUBMISSION_FAILED',
+          error_message='提交未成功，节点通知不作为退回依据' WHERE id=? AND status='WAITING_HANDLER'
+        """, id);
+  }
+
+  public boolean lockCurrentSubmission(String batchId) {
+    jdbc.queryForList("""
+        SELECT t.id FROM lp_quote_tech_task t JOIN lp_quote_tech_submission s ON s.task_id=t.id
+          JOIN lp_oa_integration_message m ON m.id=s.outbound_message_id
+        WHERE m.technical_batch_id=? ORDER BY t.id FOR UPDATE
+        """, Long.class, batchId);
+    return !Boolean.TRUE.equals(jdbc.queryForObject("""
+        SELECT EXISTS(SELECT 1 FROM lp_quote_tech_submission s
+          JOIN lp_oa_integration_message m ON m.id=s.outbound_message_id
+          JOIN lp_quote_tech_oa_recipient r ON r.id=s.recipient_id
+        WHERE m.technical_batch_id=? AND (r.active_flag<>1 OR r.latest_submission_id<>s.id))
+        """, Boolean.class, batchId));
+  }
+
   /** 技术审批后的报价员取实际 I02 操作人；成本退回取原成本提交人。 */
   public Quoter quoter(long formId, Long resultOperator) {
     List<Long> ids = resultOperator == null

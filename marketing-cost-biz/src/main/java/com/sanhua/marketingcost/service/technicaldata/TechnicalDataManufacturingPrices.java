@@ -45,6 +45,7 @@ public class TechnicalDataManufacturingPrices {
     if (!Set.of("PENDING", "NOT_REQUIRED", "EDITING", "READY", "RETURNED").contains(price.getModuleStatus())) return;
     // 已由别人办理或普通 BOM 检查分派的价格模块维持原归属和范围。
     if (price.getAssigneeUserId() != null && !Objects.equals(price.getAssigneeUserId(), actor.userId())) return;
+    if (TechnicalDataPriceRequirements.isComposedCheck(price)) return;
     if (Integer.valueOf(1).equals(price.getRequiredFlag()) && !ownsRequirement(price)) return;
     var checked = requirements.checkManufacturingReferences(task, product);
     boolean missing = checked.items().stream().anyMatch(row -> "MISSING".equals(row.status()));

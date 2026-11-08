@@ -35,6 +35,20 @@ class MonthlyRepriceMenuIntegrationTest extends OriginalPricingIntegrationTestBa
     assertThat(jdbc.queryForObject("SELECT path FROM sys_menu WHERE menu_id=40197",String.class)).isEqualTo("/cost/monthly-reprice");
     assertThat(jdbc.queryForObject("SELECT status FROM sys_menu WHERE menu_id=503",String.class)).isEqualTo("1");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_role_menu WHERE role_id IN (10,11) AND menu_id=40161",Integer.class)).isEqualTo(2);
+    var beforeNew=jdbc.queryForList("SELECT * FROM sys_menu WHERE menu_id<>40161 ORDER BY menu_id");
+    var oldGrants=jdbc.queryForList("SELECT role_id,menu_id FROM sys_role_menu ORDER BY role_id,menu_id");
+    var patch=new ResourceDatabasePopulator(new ClassPathResource("db/V362__monthly_reprice_uncalculated_menu.sql"));
+    patch.execute(jdbc.getDataSource());patch.execute(jdbc.getDataSource());
+    long id=jdbc.queryForObject("SELECT menu_id FROM sys_menu WHERE component='pages:MonthlyRepriceUncalculatedPage'",Long.class);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_menu",Integer.class)).isEqualTo(before+1);
+    assertThat(jdbc.queryForObject("SELECT menu_name FROM sys_menu WHERE menu_id=40161",String.class)).isEqualTo("再核算与调账");
+    assertThat(jdbc.queryForMap("SELECT parent_id,path,perms,status,visible FROM sys_menu WHERE menu_id=?",id))
+        .containsEntry("parent_id",40161L).containsEntry("path","/cost/uncalculated")
+        .containsEntry("perms","price:monthly-reprice:list").containsEntry("status","0").containsEntry("visible","0");
+    assertThat(jdbc.queryForList("SELECT * FROM sys_menu WHERE menu_id<>40161 AND menu_id<>? ORDER BY menu_id",id)).isEqualTo(beforeNew);
+    assertThat(jdbc.queryForList("SELECT role_id,menu_id FROM sys_role_menu WHERE menu_id<>? ORDER BY role_id,menu_id",id)).isEqualTo(oldGrants);
+    assertThat(jdbc.queryForList("SELECT role_id FROM sys_role_menu WHERE menu_id=? ORDER BY role_id",Long.class,id))
+        .isEqualTo(jdbc.queryForList("SELECT role_id FROM sys_role_menu WHERE menu_id=40197 ORDER BY role_id",Long.class));
   }
   private void apply(){new ResourceDatabasePopulator(new ClassPathResource("db/V351__monthly_reprice_1130_menu.sql")).execute(jdbc.getDataSource());}
 }

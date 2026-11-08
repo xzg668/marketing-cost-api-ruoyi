@@ -69,6 +69,53 @@ class MonthlyProductCostTest {
   static Ordinary zero(List<MaterialLine> lines) {
     return new Ordinary(lines,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,d("1.05"),d(".1"),d(".25"),d(".02"),BigDecimal.ZERO);
   }
+
+  @Test void sharedNumbersIgnorePrivatePreparationOrderButKeepEveryOccurrenceAndOwnOutputOrder() {
+    var r=request("B");var selected=selection(1,PriceFact.normal(d("3"),SourceEvidence.ofJson("{\"fixture\":1}"),Set.of()));
+    var plan=new MonthlyAdoptionPlan(Map.of(r,selected),List.of(new Use("root/A",r,d("1")),new Use("root/B",r,d("2"))),Set.of());
+    var first=new MaterialLine("root/A","B",d("1"),List.of(1L),d("3"),d("4"),null);
+    var second=new MaterialLine("root/B","B",d("2"),List.of(1L),d("6"),d("8"),null);
+    var a=MonthlyProductCost.resolve(plan,zero(List.of(first,second)),null);
+    var b=MonthlyProductCost.resolve(plan,zero(List.of(second,first)),null);
+    var result=b.bind(MonthlyProductCost.calculate(a.inputs()));
+    assertThat(result.ordinaryInputs().materials()).containsExactly(second,first);
+    assertThat(result.financeMaterialCost()).isEqualByComparingTo("9");
+    assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("3");
+    assertThat(result.effectiveUses()).containsExactlyElementsOf(plan.uses());
+  }
+  @ParameterizedTest @CsvSource({"20.463109690363685593,4.702675","18.9343,0","18.426335398230088496,-1.562518"})
+  void householdDifferenceUsesBothExpenseConversionsAndGroupedActualQuantityWithoutAnotherCoefficient(String customer,String expected) {
+    var request=request("208200575");
+    var plan=new MonthlyAdoptionPlan(Map.of(request,selection(1,household("18.9343",".085"))),
+        List.of(new Use("root/A",request,d("1.25")),new Use("root/B",request,d("1.25"))),Set.of());
+    var result=MonthlyProductCost.calculate(plan,zero(List.of()),null,Map.of(1L,d(customer)));
+    assertThat(result.household()).hasSize(1);assertThat(result.household().getFirst().quantity()).isEqualByComparingTo("2.5");
+    assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo(expected);
+    assertThat(result.finalQuoteAmount()).isEqualByComparingTo(result.totalCost().add(d(expected)));
+    var baseline=MonthlyProductCost.calculate(plan,zero(List.of()),null);
+    assertThat(result.totalCost()).isEqualByComparingTo(baseline.totalCost());
+    assertThat(result.householdSubtotal()).isEqualByComparingTo(baseline.householdSubtotal());
+  }
+
+  @Test void sharedHouseholdNumbersKeepExactCustomerPriceAndEachConsumersOwnPaths() {
+    var request=request("H");var selected=selection(1,household("18.9343",".085"));
+    var first=new MonthlyAdoptionPlan(Map.of(request,selected),List.of(new Use("root/A",request,d("2.5"))),Set.of());
+    var second=new MonthlyAdoptionPlan(Map.of(request,selected),List.of(new Use("root/B",request,d("1.25")),new Use("root/C",request,d("1.25"))),Set.of());
+    var price=d("20.463109690363685593");
+    var a=MonthlyProductCost.resolve(first,zero(List.of()),null,Map.of(1L,price));
+    var b=MonthlyProductCost.resolve(second,zero(List.of()),null,Map.of(1L,price));
+    var shared=MonthlyProductCost.calculate(a.inputs());var result=b.bind(shared);
+    assertThat(result.household().getFirst().paths()).containsExactly("root/B","root/C");
+    assertThat(result.household().getFirst().effectiveCustomerPrice()).isEqualByComparingTo(price);
+    assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("4.702675");
+    assertThat(result.household().getFirst().effectiveCustomerAmount().subtract(result.household().getFirst().amount()))
+        .isEqualByComparingTo(result.cuMaterialAdjustment());
+    var changed=MonthlyProductCost.resolve(second,zero(List.of()),null,Map.of(1L,price.add(d(".000000000000000001"))));
+    assertThatThrownBy(()->changed.bind(shared)).hasMessageContaining("inputs differ");
+    assertThatThrownBy(()->MonthlyProductCost.resolve(second,zero(List.of()),null,Map.of(1L,d("-1"))))
+        .hasMessageContaining("Invalid household customer price");
+  }
+
   @Test void householdAndSuppressedPathsCannotEnterOrdinaryBasesButOtherBranchesCan() {
     var h=request("H");var b=request("B");var hPrice=selection(1,household("20.9853",".085"));
     var bPrice=selection(2,PriceFact.normal(d("3"),SourceEvidence.ofJson("{\"source\":\"fixed\"}"),Set.of()));
@@ -158,6 +205,80 @@ class MonthlyProductCostTest {
     assertThatThrownBy(()->new OrdinaryDetail("OTHER_EXP_TECH_MOULD","模具费",null,null,d("1"),"public",1L,null,"EXPENSE")).hasMessageContaining("PROFILE");
     assertThatThrownBy(()->new OrdinaryDetail("TOTAL","总计",null,null,d("1"),null,null,null,"EXPENSE")).hasMessageContaining("final totals");
     assertThatThrownBy(()->new OrdinaryDetail("FINAL_QUOTE","最终报价",null,null,d("1"),null,null,null,"EXPENSE")).hasMessageContaining("final totals");
+  }
+
+  @Test void sharedNumbersKeepEachConsumersProfileAndOrdinaryDetailSources() throws Exception {
+    var plan = new MonthlyAdoptionPlan(Map.of(), List.of(), Set.of());
+    var original = zero(List.of());
+    var a = withDetail(original, 71L, d("12"));
+    var b = withDetail(original, 92L, d("12"));
+    var techA = technical(Arrays.asList(d("1"), null, d("2"), BigDecimal.ZERO));
+    var techB = new EffectiveTechnicalDataInput(2L, 88L, 3, "2026-10", techA.sourceType(),
+        "customer B", techA.retrievedAt(), false, false, false, null, null, null,
+        List.of(), List.of(), List.of(), techA.productFees(), null);
+    var ra = MonthlyProductCost.resolve(plan, a, techA);
+    var rb = MonthlyProductCost.resolve(plan, b, techB);
+    assertThat(rb.inputs()).isEqualTo(ra.inputs());
+    var numbers = MonthlyProductCost.calculate(ra.inputs());
+    var json = new ObjectMapper().findAndRegisterModules();
+    assertThat(json.writeValueAsString(numbers)).doesNotContain("sourceId", "profileVersionId", "customer B", "sourceVersionId");
+    var bound = rb.bind(numbers);
+    assertThat(bound).isEqualTo(MonthlyProductCost.calculate(plan, b, techB));
+    assertThat(bound.technicalInput()).isEqualTo(techB);
+    assertThat(bound.fees()).allSatisfy(fee -> assertThat(fee.profileVersionId()).isEqualTo(88L));
+    assertThat(bound.ordinaryInputs().details().getFirst().sourceId()).isEqualTo(92L);
+    assertThat(ra.bind(numbers).ordinaryInputs().details().getFirst().sourceId()).isEqualTo(71L);
+  }
+
+  @Test void equalTotalsCannotHideDifferentDetailInputsOrMissingFeeStates() {
+    var plan = new MonthlyAdoptionPlan(Map.of(), List.of(), Set.of());
+    var original = zero(List.of());
+    var a = MonthlyProductCost.resolve(plan, withDetail(original, 1L, d("12")), null);
+    var b = MonthlyProductCost.resolve(plan, withDetail(original, 1L, d("13")), null);
+    var values = MonthlyProductCost.calculate(a.inputs());
+    assertThat(MonthlyProductCost.calculate(b.inputs()).totalCost()).isEqualTo(values.totalCost());
+    assertThatThrownBy(() -> b.bind(values)).hasMessageContaining("inputs differ");
+    var explicit = MonthlyProductCost.resolve(plan, withDetail(original, 1L, d("12")),
+        technical(Arrays.asList(BigDecimal.ZERO, null, null, null)));
+    assertThatThrownBy(() -> explicit.bind(values)).hasMessageContaining("inputs differ");
+  }
+
+  @Test void sharedNumbersAllowEquivalentDecimalScalesWithoutLosingDetailPrecision() {
+    var plan = new MonthlyAdoptionPlan(Map.of(),List.of(),Set.of());
+    var a = MonthlyProductCost.resolve(plan,withDetail(zero(List.of()),1L,d("12.000000000000000001")),
+        technical(Arrays.asList(d("1.00"),null,null,null)));
+    var b = MonthlyProductCost.resolve(plan,withDetail(zero(List.of()),2L,d("12.00000000000000000100")),
+        technical(Arrays.asList(d("1.0000"),null,null,null)));
+    var numbers = MonthlyProductCost.calculate(a.inputs());
+    assertThat(b.bind(numbers).ordinaryInputs().details().getFirst().sourceId()).isEqualTo(2L);
+    var different = MonthlyProductCost.resolve(plan,withDetail(zero(List.of()),2L,d("12.000000000000000002")),
+        technical(Arrays.asList(d("1.0000"),null,null,null)));
+    assertThatThrownBy(() -> different.bind(numbers)).hasMessageContaining("inputs differ");
+  }
+
+  private static Ordinary withDetail(Ordinary input, long source, BigDecimal amount) {
+    return new Ordinary(input.materials(), input.nonBomMaterial(), input.directLabor(), input.indirectLabor(),
+        input.lossRate(), input.manufactureRate(), input.coefficient(), input.managementRate(), input.salesRate(),
+        input.financeRate(), input.otherIndependentFees(), List.of(new OrdinaryDetail("WATER_POWER", "水电费",
+            null, null, amount, "lp_quote_tech_data_version", source, "own source " + source, "EXPENSE")));
+  }
+
+  @Test void sharedNumbersContainNoPrivateBomPathsAndRebindEachConsumersPaths() throws Exception {
+    var h = request("H"); var b = request("B");
+    var prices = Map.of(h, selection(1, household("20", ".085")),
+        b, selection(2, PriceFact.normal(d("3"), SourceEvidence.ofJson("{\"source\":\"fixed\"}"), Set.of())));
+    var planA = new MonthlyAdoptionPlan(prices, List.of(new Use("root/OA_A_101", h, d("2")), new Use("root/OA_A_102", b, d("1"))), Set.of());
+    var planB = new MonthlyAdoptionPlan(prices, List.of(new Use("root/OA_B_201", h, d("2")), new Use("root/OA_B_202", b, d("1"))), Set.of());
+    var a = MonthlyProductCost.resolve(planA, zero(List.of(new MaterialLine("root/OA_A_102", "B", d("1"), List.of(2L), d("3"), d("4"), null))), null);
+    var bInput = zero(List.of(new MaterialLine("root/OA_B_202", "B", d("1"), List.of(2L), d("3"), d("4"), null)));
+    var resolvedB = MonthlyProductCost.resolve(planB, bInput, null);
+    assertThat(resolvedB.inputs()).isEqualTo(a.inputs());
+    var numbers = MonthlyProductCost.calculate(a.inputs());
+    assertThat(new ObjectMapper().writeValueAsString(numbers)).doesNotContain("OA_A_", "OA_B_");
+    var bound = resolvedB.bind(numbers);
+    assertThat(bound).isEqualTo(MonthlyProductCost.calculate(planB, bInput, null));
+    assertThat(bound.household().getFirst().paths()).containsExactly("root/OA_B_201");
+    assertThat(bound.ordinaryInputs().materials().getFirst().path()).isEqualTo("root/OA_B_202");
   }
 
 }

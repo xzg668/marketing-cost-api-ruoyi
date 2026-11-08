@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.costing;
 
+import com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.entity.*;
@@ -37,21 +39,51 @@ public class MonthlyCostVersionService {
   private final MonthlyPriceStorage storage;
   private final MonthlyPriceDocumentCodec codec;
   private final MonthlyPriceScenarios scenarios;
+  private final MonthlyCostSnapshotDocuments documents;
   private final TransactionTemplate transaction;
 
   public MonthlyCostVersionService(QuoteCostRunVersionMapper versions, MonthlyCostVersionMapper locks,
       PricePrepareItemMapper preparations, CostRunPartItemMapper parts, CostRunCostItemMapper costs,
       MonthlyMaterialPrices prices, MonthlyPriceStorage storage, MonthlyPriceDocumentCodec codec,
-      MonthlyPriceScenarios scenarios, PlatformTransactionManager transactions) {
+      MonthlyPriceScenarios scenarios, PlatformTransactionManager transactions, MonthlyCostSnapshotDocuments documents) {
     this.versions = versions; this.locks = locks; this.preparations = preparations; this.parts = parts;
     this.costs = costs; this.prices = prices; this.storage = storage; this.codec = codec;
     this.scenarios = scenarios; transaction = new TransactionTemplate(transactions);
+    this.documents = documents;
     transaction.setTimeout(30);
   }
 
   public Stored calculateAndSave(String unit, long versionId, MonthlyAdoptionPlan plan,
       Ordinary ordinary, EffectiveTechnicalDataInput technical, BigDecimal customerCopperPerTon,
       Map<String, PreparationBinding> bindings) {
+    return calculateAndSave(unit, versionId, plan, ordinary, technical, customerCopperPerTon, null, bindings);
+  }
+
+  public Stored calculateAndSave(String unit, long versionId, MonthlyAdoptionPlan plan,
+      Ordinary ordinary, EffectiveTechnicalDataInput technical, BigDecimal customerCopperPerTon,
+      BigDecimal customerZincPerTon, Map<String, PreparationBinding> bindings) {
+    return calculateAndSaveMaterials(unit, versionId, plan, ordinary, technical,
+        CustomerMaterialPrices.copperAndZinc(customerCopperPerTon, customerZincPerTon), bindings);
+  }
+
+  public Stored calculateAndSaveMaterials(String unit, long versionId, MonthlyAdoptionPlan plan,
+      Ordinary ordinary, EffectiveTechnicalDataInput technical, CustomerMaterialPrices customerPrices,
+      Map<String, PreparationBinding> bindings) {
+    return save(unit, versionId, plan, ordinary, technical, customerPrices, bindings, null);
+  }
+
+  /** Recheck this consumer's full material conditions before binding shared numerical output. */
+  public Stored saveCalculatedMaterials(String unit, long versionId, MonthlyAdoptionPlan plan,
+      Ordinary ordinary, EffectiveTechnicalDataInput technical, CustomerMaterialPrices customerPrices,
+      Map<String, PreparationBinding> bindings, Numbers calculated) {
+    return save(unit, versionId, plan, ordinary, technical, customerPrices, bindings,
+        Objects.requireNonNull(calculated));
+  }
+
+  private Stored save(String unit, long versionId, MonthlyAdoptionPlan plan,
+      Ordinary ordinary, EffectiveTechnicalDataInput technical, CustomerMaterialPrices customerPrices,
+      Map<String, PreparationBinding> bindings, Numbers shared) {
+    Objects.requireNonNull(customerPrices);
     checkUnit(unit);
     var normalizedBindings = new TreeMap<String, PreparationBinding>();
     var preparationIds = new HashSet<Long>();
@@ -102,7 +134,7 @@ public class MonthlyCostVersionService {
         var firstUse = codec.decode(codec.wrap(price.firstUseJson()), MonthlyMaterialPriceService.FirstUse.class);
         adoptionDates.put(price.id(), firstUse.origin().priceAsOfTime().toLocalDate());
       }
-      var pairedPrices = scenarios.calculate(plan.selections(), customerCopperPerTon, adoptionDates);
+      var pairedPrices = scenarios.calculateMaterials(plan.selections(), customerPrices, adoptionDates);
       var monthlyEvidence = new MonthlyPreparationEvidence(codec);
       var validation = new com.sanhua.marketingcost.service.impl.MonthlyPreparationValidation(
           new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(), codec);
@@ -135,7 +167,10 @@ public class MonthlyCostVersionService {
               || !use.request().priceOrgCode().equals(row.getPriceOrgCode())
               || row.getQuantity() == null || row.getQuantity().abs().compareTo(use.cumulativeQuantity()) != 0)
             throw new IllegalArgumentException("Preparation identity/quantity differs from adopted use");
-          storage.attachPreparation(unit, row.getId(), selection.monthlyPriceId(), selection.fact().type());
+          // The same transaction already read these immutable link columns in its bounded input query.
+          if(!Objects.equals(row.getMonthlyPriceId(),selection.monthlyPriceId())
+              || !selection.fact().type().name().equals(row.getMonthlyPricingType()))
+            storage.attachPreparation(unit, row.getId(), selection.monthlyPriceId(), selection.fact().type());
         }
         var pair = pairedPrices.get(selection.monthlyPriceId());
         requireDecimal(finance.getUnitPrice(), pair.financialPrice(), 8, "Preparation P0");
@@ -158,13 +193,16 @@ public class MonthlyCostVersionService {
         requireDecimal(customer.getAmount(), line.customerAmount(), 8, "Settlement customer amount");
         bound.put(line.path(), finance);
       }
-      var calculated = MonthlyProductCost.calculate(plan, ordinary, technical);
+      var resolved = MonthlyProductCost.resolve(plan, ordinary, technical,
+          pairedPrices.values().stream().collect(java.util.stream.Collectors.toMap(
+              MonthlyPriceScenarios.Pair::monthlyPriceId, MonthlyPriceScenarios.Pair::customerPrice)));
+      var calculated = resolved.bind(shared == null ? MonthlyProductCost.calculate(resolved.inputs()) : shared);
       var snapshot = new Snapshot(MonthlyProductCost.SNAPSHOT_VERSION, unit, versionId, version.getCostRunNo(),
           version.getOaNo(), Objects.requireNonNull(version.getOaFormItemId()), version.getProductCode(),
           version.getPricingMonth(), calculated, pairedPrices.values().stream()
               .sorted(Comparator.comparingLong(MonthlyPriceScenarios.Pair::monthlyPriceId)).toList(), stableBindings);
       storage.saveVersionSnapshot(unit, versionId, calculated.feePolicyVersion(), 1,
-          codec.unwrap(codec.encode(snapshot)));
+          documents.write(snapshot, shared != null));
       int partCount = saveParts(version, calculated, bound);
       int costCount = saveCosts(version, calculated);
       version.setAlgorithmVersion(calculated.algorithmVersion());
@@ -192,11 +230,45 @@ public class MonthlyCostVersionService {
     var version = versions.selectById(id);
     if (version == null || !unit.equals(version.getBusinessUnitType())) throw new IllegalArgumentException("Cost version not found");
     var row = storage.versionSnapshot(unit, id);
-    Snapshot snapshot = row.jianjiSnapshotJson() == null ? null : codec.decode(codec.wrap(row.jianjiSnapshotJson()), Snapshot.class);
+    Snapshot snapshot = row.jianjiSnapshotJson() == null ? null : documents.read(unit, codec.wrap(row.jianjiSnapshotJson()));
     validateSavedSnapshot(version, snapshot);
     return new Stored(version, snapshot,
         List.copyOf(parts.selectList(Wrappers.lambdaQuery(CostRunPartItem.class).eq(CostRunPartItem::getCostRunVersionId, id).orderByAsc(CostRunPartItem::getId))),
         List.copyOf(costs.selectList(Wrappers.lambdaQuery(CostRunCostItem.class).eq(CostRunCostItem::getCostRunVersionId, id).orderByAsc(CostRunCostItem::getLineNo))));
+  }
+
+  /** Bounded saved-output read. Restore shared historic facts once per page and index details once. */
+  public Map<Long, Stored> readBatch(String unit, List<Long> ids) {
+    checkUnit(unit);
+    if (ids.size()>64 || new HashSet<>(ids).size()!=ids.size() || ids.stream().anyMatch(id->id==null || id<=0))
+      throw new IllegalArgumentException("保存成本每批最多64个不同版本");
+    if (ids.isEmpty()) return Map.of();
+    var rows=versions.selectBatchIds(ids);
+    if (rows.size()!=ids.size() || rows.stream().anyMatch(v->!unit.equals(v.getBusinessUnitType())))
+      throw new IllegalArgumentException("Cost version not found in current business unit");
+    var encoded=new LinkedHashMap<Long,String>();
+    locks.snapshots(unit,ids).forEach(row->{
+      if(row.json()!=null) {
+        if(!Integer.valueOf(1).equals(row.version()))throw new IllegalStateException("保存成本快照版本不受支持");
+        encoded.put(row.id(),row.json());
+      }
+    });
+    var snapshots=documents.readBatch(unit,encoded);
+    var partIndex=parts.selectList(Wrappers.lambdaQuery(CostRunPartItem.class)
+        .in(CostRunPartItem::getCostRunVersionId,ids).orderByAsc(CostRunPartItem::getId)).stream()
+        .collect(java.util.stream.Collectors.groupingBy(CostRunPartItem::getCostRunVersionId));
+    var costIndex=costs.selectList(Wrappers.lambdaQuery(CostRunCostItem.class)
+        .in(CostRunCostItem::getCostRunVersionId,ids).orderByAsc(CostRunCostItem::getLineNo).orderByAsc(CostRunCostItem::getId)).stream()
+        .collect(java.util.stream.Collectors.groupingBy(CostRunCostItem::getCostRunVersionId));
+    var result=new LinkedHashMap<Long,Stored>();
+    for(var version:rows) {
+      var snapshot=snapshots.get(version.getId());
+      validateSavedSnapshot(version,snapshot);
+      result.put(version.getId(),new Stored(version,snapshot,
+          List.copyOf(partIndex.getOrDefault(version.getId(),List.of())),
+          List.copyOf(costIndex.getOrDefault(version.getId(),List.of()))));
+    }
+    return Map.copyOf(result);
   }
 
   /** Shared saved-version validation for history reads and atomic reprice association. */
@@ -208,7 +280,7 @@ public class MonthlyCostVersionService {
         || !version.getAlgorithmVersion().equals(snapshot.calculation().algorithmVersion())
         || !version.getFeePolicyVersion().equals(snapshot.calculation().feePolicyVersion())))
       throw new IllegalStateException("Cost snapshot ownership or version conflict");
-    if (snapshot == null && MonthlyProductCost.ALGORITHM_VERSION.equals(version.getAlgorithmVersion()))
+    if (snapshot == null && MonthlyProductCost.isMonthlyVersion(version.getAlgorithmVersion()))
       throw new IllegalStateException("Monthly cost version is missing its saved snapshot");
     if (snapshot != null) {
       requireDecimal(version.getFinanceMaterialCost(), snapshot.calculation().financeMaterialCost(), 6, "Stored material");
@@ -233,33 +305,35 @@ public class MonthlyCostVersionService {
   }
 
   private int saveParts(QuoteCostRunVersion version, Result result, Map<String, PricePrepareItem> bound) {
-    int count = 0;
+    var rows=new ArrayList<MonthlyCostVersionMapper.Part>();
     var adoptedById = new HashMap<Long, AdoptedPrice>();
     result.adoptedPrices().forEach(value -> adoptedById.putIfAbsent(value.selection().monthlyPriceId(), value));
     for (var line : result.ordinaryInputs().materials()) if (line.explanationOf() == null) {
       var preparation = bound.get(line.path());
       var part = part(version, preparation, line.materialCode(), line.quantity(), line.financeAmount());
       part.setUnitPrice(preparation.getUnitPrice());
-      if (parts.insert(part) != 1) throw new IllegalStateException("Cost part insert failed");
       var selected = line.monthlyPriceIds().stream().map(adoptedById::get)
           .filter(Objects::nonNull).filter(value -> value.request().family().materialCode().equals(line.materialCode())).findFirst();
-      if (selected.isPresent()) storage.attachCostPart(version.getBusinessUnitType(), part.getId(),
-          selected.get().selection().monthlyPriceId(), PricingType.NORMAL);
-      count++;
+      rows.add(new MonthlyCostVersionMapper.Part(part,selected.map(value->value.selection().monthlyPriceId()).orElse(null),
+          selected.isPresent()?PricingType.NORMAL.name():null));
     }
     for (var line : result.household()) {
       var preparation = bound.get(MonthlyBomPricingScope.pathKey(line.paths().getFirst()));
       var part = part(version, preparation, line.materialCode(), line.quantity(), line.amount());
       part.setPriceSource("HOUSEHOLD_INQUIRY"); part.setUnitPrice(line.price());
-      if (parts.insert(part) != 1) throw new IllegalStateException("Household cost part insert failed");
-      storage.attachCostPart(version.getBusinessUnitType(), part.getId(), line.monthlyPriceId(), PricingType.HOUSEHOLD_INQUIRY);
-      count++;
+      rows.add(new MonthlyCostVersionMapper.Part(part,line.monthlyPriceId(),PricingType.HOUSEHOLD_INQUIRY.name()));
     }
-    return count;
+    for(int start=0;start<rows.size();start+=128) {
+      var chunk=rows.subList(start,Math.min(start+128,rows.size()));
+      if(locks.insertParts(chunk)!=chunk.size())throw new IllegalStateException("Cost parts insert failed");
+    }
+    return rows.size();
   }
 
   private CostRunPartItem part(QuoteCostRunVersion v, PricePrepareItem prepared, String code, BigDecimal q, BigDecimal amount) {
     var row = new CostRunPartItem(); row.setOaNo(v.getOaNo()); row.setOaFormItemId(v.getOaFormItemId());
+    // Explicit batch SQL must preserve the application's MetaObjectHandler timestamp policy.
+    var now = LocalDateTime.now(); row.setCreatedAt(now); row.setUpdatedAt(now);
     row.setCostRunVersionId(v.getId()); row.setCostRunNo(v.getCostRunNo()); row.setProductCode(v.getProductCode());
     row.setBusinessUnitType(v.getBusinessUnitType()); row.setPartCode(code); row.setQty(q); row.setAmount(amount);
     row.setPricePrepareItemId(prepared.getId()); row.setBomRowId(prepared.getBomRowId());
@@ -272,9 +346,11 @@ public class MonthlyCostVersionService {
     var details = new HashMap<String, OrdinaryDetail>();
     r.ordinaryInputs().details().forEach(detail -> details.put(detail.costCode(), detail));
     var values = expectedCostAmounts(r);
+    var rows=new ArrayList<CostRunCostItem>();
     int number = 0;
     for (var entry : values.entrySet()) {
       var item = new CostRunCostItem(); item.setOaNo(v.getOaNo()); item.setOaFormItemId(v.getOaFormItemId());
+      var now = LocalDateTime.now(); item.setCreatedAt(now); item.setUpdatedAt(now);
       item.setCostRunVersionId(v.getId()); item.setCostRunNo(v.getCostRunNo()); item.setProductCode(v.getProductCode());
       item.setBusinessUnitType(v.getBusinessUnitType()); item.setLineNo(++number); item.setCategory("EXPENSE");
       item.setCostCode(entry.getKey()); item.setCostName(entry.getKey()); item.setAmount(entry.getValue());
@@ -288,7 +364,11 @@ public class MonthlyCostVersionService {
         item.setSourceTable(detail.sourceTable()); item.setSourceId(detail.sourceId()); item.setRemark(detail.remark());
         if (detail.category() != null) item.setCategory(detail.category());
       }
-      if (costs.insert(item) != 1) throw new IllegalStateException("Cost item insert failed");
+      rows.add(item);
+    }
+    for(int start=0;start<rows.size();start+=128) {
+      var chunk=rows.subList(start,Math.min(start+128,rows.size()));
+      if(locks.insertCosts(chunk)!=chunk.size())throw new IllegalStateException("Cost items insert failed");
     }
     return number;
   }

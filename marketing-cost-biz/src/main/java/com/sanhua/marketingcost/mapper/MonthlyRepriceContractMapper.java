@@ -21,10 +21,13 @@ public interface MonthlyRepriceContractMapper {
   @Select("SELECT * FROM lp_monthly_reprice_batch WHERE contract_month_key=CONCAT(#{unit},':',#{month}) FOR UPDATE")
   MonthlyRepriceBatch month(@Param("unit") String unit, @Param("month") String month);
 
-  @Select("SELECT * FROM lp_monthly_reprice_batch WHERE reprice_no=#{no} AND contract_version=1 FOR UPDATE")
+  @Select("""
+      SELECT * FROM lp_monthly_reprice_batch FORCE INDEX (uk_monthly_reprice_no)
+      WHERE reprice_no=#{no} AND contract_version=1 FOR UPDATE
+      """)
   MonthlyRepriceBatch lock(String no);
 
-  @Select("SELECT COUNT(*) FROM lp_monthly_reprice_batch WHERE contract_version=1 AND business_unit_type=#{unit} AND status<>'CONFIRMED'")
+  @Select("SELECT COUNT(*) FROM lp_monthly_reprice_batch WHERE contract_version=1 AND business_unit_type=#{unit} AND confirmed_at IS NULL")
   long blocked(String unit);
 
   @Insert("""
@@ -54,32 +57,40 @@ public interface MonthlyRepriceContractMapper {
   List<QuoteCostRunVersion> cumulativeSources(@Param("unit") String unit,
       @Param("from") LocalDateTime from, @Param("until") LocalDateTime until);
 
-  record Target(String key,QuoteCostRunVersion version) {}
+  record Target(String key,QuoteCostRunVersion version,long batchId,String customerSource,
+      String customerValue,int mergedCount,String packageMethod,String request) {}
   @Insert("""
       <script>INSERT INTO lp_cost_run_task(batch_no,scene,source_no,calc_object_key,oa_no,oa_form_item_id,
-        product_code,business_unit_type,pricing_month,status,request_snapshot_json) VALUES
+        product_code,business_unit_type,pricing_month,status,customer_name,package_method,request_snapshot_json) VALUES
       <foreach collection="targets" item="t" separator=",">
         (#{no},'MONTHLY_REPRICE',#{no},#{t.key},#{t.version.oaNo},#{t.version.oaFormItemId},
-        #{t.version.productCode},#{t.version.businessUnitType},#{month},'PENDING',
-        JSON_OBJECT('contractVersion',1,'sourceCostVersionId',#{t.version.id}))
+        #{t.version.productCode},#{t.version.businessUnitType},#{month},'PENDING',#{t.customerValue},#{t.packageMethod},
+        #{t.request})
       </foreach></script>
       """)
   void tasksBatch(@Param("no") String no,@Param("month") String month,@Param("targets") List<Target> targets);
   @Insert("""
       <script>INSERT INTO lp_monthly_reprice_result(reprice_no,pricing_month,business_unit_type,oa_no,
-        oa_form_item_id,product_code,calc_object_key,source_cost_version_id,calc_status,contract_version) VALUES
+        oa_form_item_id,product_code,calc_object_key,source_cost_version_id,calc_status,contract_version,
+        reuse_batch_id,customer_identity_source,customer_identity_value,merged_source_count,customer_name,package_method) VALUES
       <foreach collection="targets" item="t" separator=",">
         (#{no},#{month},#{t.version.businessUnitType},#{t.version.oaNo},#{t.version.oaFormItemId},
-        #{t.version.productCode},#{t.key},#{t.version.id},'PENDING',1)
+        #{t.version.productCode},#{t.key},#{t.version.id},'PENDING',1,
+        #{t.batchId},#{t.customerSource},#{t.customerValue},#{t.mergedCount},#{t.customerValue},#{t.packageMethod})
       </foreach></script>
       """)
   void objectsBatch(@Param("no") String no,@Param("month") String month,@Param("targets") List<Target> targets);
 
-  @Update("UPDATE lp_monthly_reprice_batch SET total_count=#{count} WHERE reprice_no=#{no} AND contract_version=1")
-  void total(@Param("no") String no, @Param("count") int count);
-
   @Select("SELECT * FROM lp_cost_run_task WHERE source_no=#{no} AND scene='MONTHLY_REPRICE' ORDER BY id")
   List<CostRunTask> tasks(String no);
+
+  @Select("""
+      <script>SELECT t.* FROM lp_cost_run_task t JOIN lp_monthly_reprice_result r
+        ON r.reprice_no=t.source_no AND r.calc_object_key=t.calc_object_key AND r.contract_version=1
+      WHERE t.source_no=#{no} AND t.scene='MONTHLY_REPRICE' AND t.id IN
+      <foreach collection="ids" item="id" open="(" close=")" separator=",">#{id}</foreach> ORDER BY t.id</script>
+      """)
+  List<CostRunTask> selectedTasks(@Param("no") String no,@Param("ids") List<Long> ids);
 
   @Select("SELECT * FROM lp_cost_run_task WHERE id=#{id} AND source_no=#{no} AND scene='MONTHLY_REPRICE'")
   CostRunTask readTask(@Param("no") String no,@Param("id") long id);
@@ -93,35 +104,53 @@ public interface MonthlyRepriceContractMapper {
   @Update("UPDATE lp_cost_run_task SET request_snapshot_json=#{json} WHERE id=#{id} AND scene='MONTHLY_REPRICE'")
   int saveRequest(@Param("id") long id, @Param("json") String json);
 
-  @Update("""
-      UPDATE lp_cost_run_task SET status='RUNNING',started_at=NOW(),finished_at=NULL
-      WHERE id=#{id} AND status='PENDING' AND execution_no=#{execution}
+  @Select("""
+      SELECT EXISTS(SELECT 1 FROM lp_cost_run_task
+        WHERE id=#{id} AND source_no=#{no} AND scene='MONTHLY_REPRICE'
+          AND status='RUNNING' AND execution_no=#{execution} AND worker_id=#{worker}
+          AND lock_expire_time>NOW(6))
       """)
-  int begin(@Param("id") long id, @Param("execution") int execution);
+  boolean ownsLiveTask(@Param("no") String no, @Param("id") long id,
+      @Param("execution") int execution, @Param("worker") String worker);
 
   @Update("""
       UPDATE lp_monthly_reprice_batch SET status=#{status},result_revision=result_revision+1,
         check_status='PENDING',checked_revision=NULL,check_result_json=NULL,checked_at=NULL,
         started_at=CASE WHEN #{status}='RUNNING' THEN COALESCE(started_at,NOW()) ELSE started_at END,
         finished_at=CASE WHEN #{status} IN ('CHECKING','FAILED') THEN NOW() ELSE NULL END,
-        success_count=(SELECT COUNT(*) FROM lp_cost_run_task WHERE source_no=#{no} AND scene='MONTHLY_REPRICE' AND status='SUCCESS'),
-        failed_count=(SELECT COUNT(*) FROM lp_cost_run_task WHERE source_no=#{no} AND scene='MONTHLY_REPRICE' AND status='FAILED')
-      WHERE reprice_no=#{no} AND contract_version=1 AND status<>'CONFIRMED'
+        success_count=success_count+#{successDelta},failed_count=failed_count+#{failedDelta}
+      WHERE reprice_no=#{no} AND contract_version=1
+        AND success_count+#{successDelta}>=0 AND failed_count+#{failedDelta}>=0
+        AND success_count+#{successDelta}+failed_count+#{failedDelta}<=total_count
       """)
-  int state(@Param("no") String no, @Param("status") String status);
+  int progress(@Param("no") String no, @Param("status") String status,
+      @Param("successDelta") int successDelta,@Param("failedDelta") int failedDelta);
+
+  /** Status-only changes do not scan or modify task counters. */
+  default int state(String no,String status) {
+    int updated=progress(no,status,0,0);
+    if(updated!=1)throw new IllegalStateException("调价进度与批次状态不一致");
+    return updated;
+  }
 
   @Update("""
       UPDATE lp_cost_run_task SET status='FAILED',error_message=#{message},finished_at=NOW(),worker_id=NULL,locked_at=NULL,lock_expire_time=NULL
       WHERE id=#{id} AND status='RUNNING' AND execution_no=#{execution}
+        AND worker_id=#{worker} AND lock_expire_time>NOW(6)
       """)
-  int fail(@Param("id") long id, @Param("execution") int execution, @Param("message") String message);
+  int fail(@Param("id") long id, @Param("execution") int execution,
+      @Param("worker") String worker, @Param("message") String message);
 
   @Update("""
-      UPDATE lp_cost_run_task SET status='PENDING',execution_no=execution_no+1,retry_count=retry_count+1,
+      <script>UPDATE lp_cost_run_task SET status='PENDING',execution_no=execution_no+1,retry_count=retry_count+1,
+        result_summary_json=JSON_REMOVE(JSON_SET(COALESCE(result_summary_json,JSON_OBJECT()),'$.failure.automaticRetries',0,
+          '$.failure.exhausted',CAST('false' AS JSON),'$.lastAttemptAt',
+          DATE_FORMAT(COALESCE(finished_at,started_at),'%Y-%m-%d %H:%i:%s.%f')),'$.retryNotBefore'),
         error_message=NULL,started_at=NULL,finished_at=NULL,worker_id=NULL,locked_at=NULL,lock_expire_time=NULL
-      WHERE source_no=#{no} AND scene='MONTHLY_REPRICE' AND status='FAILED'
+      WHERE source_no=#{no} AND scene='MONTHLY_REPRICE' AND status='FAILED' AND id IN
+      <foreach collection="ids" item="id" open="(" close=")" separator=",">#{id}</foreach></script>
       """)
-  int retry(String no);
+  int retry(@Param("no") String no,@Param("ids") List<Long> ids);
 
   @Select("SELECT * FROM lp_quote_cost_run_version WHERE id=#{id} FOR UPDATE")
   QuoteCostRunVersion version(long id);
@@ -154,8 +183,10 @@ public interface MonthlyRepriceContractMapper {
       UPDATE lp_cost_run_task SET status='SUCCESS',cost_run_version_id=#{v.id},cost_run_no=#{v.costRunNo},
         progress=100,finished_at=NOW(),error_message=NULL,worker_id=NULL,locked_at=NULL,lock_expire_time=NULL
       WHERE id=#{id} AND execution_no=#{execution} AND status='RUNNING'
+        AND worker_id=#{worker} AND lock_expire_time>NOW(6)
       """)
-  int succeed(@Param("id") long id, @Param("execution") int execution, @Param("v") QuoteCostRunVersion version);
+  int succeed(@Param("id") long id, @Param("execution") int execution,
+      @Param("worker") String worker, @Param("v") QuoteCostRunVersion version);
 
   @Select("SELECT * FROM lp_monthly_reprice_result WHERE reprice_no=#{no} AND contract_version=1 ORDER BY id")
   List<MonthlyRepriceResult> results(String no);
@@ -167,13 +198,6 @@ public interface MonthlyRepriceContractMapper {
       """)
   void check(@Param("no") String no, @Param("status") String status,
       @Param("checkStatus") String checkStatus, @Param("json") String json);
-
-  @Update("""
-      UPDATE lp_monthly_reprice_batch SET status='CONFIRMED',confirmed_by=#{actor},confirmed_name=#{actor},confirmed_at=NOW()
-      WHERE reprice_no=#{no} AND contract_version=1 AND status='WAIT_CONFIRM'
-        AND check_status='PASSED' AND checked_revision=result_revision AND result_revision=#{revision}
-      """)
-  int confirm(@Param("no") String no, @Param("revision") long revision, @Param("actor") String actor);
 
   @Update("""
       UPDATE lp_cost_run_batch SET status=#{status},success_count=#{success},failed_count=#{failed},

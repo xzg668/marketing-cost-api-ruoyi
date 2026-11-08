@@ -39,8 +39,7 @@ public class HouseholdInquiryStorage {
 
   public HouseholdInquiryPriceRow insertVersion(HouseholdInquiryPriceRow input) {
     MonthlyPriceStorage.requireWriteTransaction(); MonthlyPriceStorage.requireBusinessUnit(input.getBusinessUnitType());
-    if (input.getMaterialCode()==null || input.getMaterialCode().isBlank() || input.getMaterialCode().length()>64
-        || !input.getMaterialCode().equals(input.getMaterialCode().trim())) throw new IllegalArgumentException("Exact source material code required");
+    com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryKey.of(input.getMaterialCode(),input.getSpecification());
     PriceFact.household(input.getUnitPrice(),input.getHouseholdRate(),SourceEvidence.ofJson(input.getReferenceJson()));
     codec.validateSourceRows(input.getSourceRowsJson());
     var row=new HouseholdInquiryPriceRow(); BeanUtils.copyProperties(input,row);
@@ -54,6 +53,10 @@ public class HouseholdInquiryStorage {
   }
 
   public List<HouseholdInquiryPriceRow> current(String unit,Collection<String> materials) {
+    return currentByKeys(unit,materials.stream().map(code->"C:"+code).toList());
+  }
+
+  public List<HouseholdInquiryPriceRow> currentByKeys(String unit,Collection<String> materials) {
     MonthlyPriceStorage.requireBusinessUnit(unit);
     var unique=new ArrayList<>(new LinkedHashSet<>(materials)); var result=new ArrayList<HouseholdInquiryPriceRow>();
     for (int start=0;start<unique.size();start+=256) {
@@ -61,6 +64,42 @@ public class HouseholdInquiryStorage {
     }
     return List.copyOf(result);
   }
+
+  public List<HouseholdInquiryPriceRow> asOfMonth(String unit,Collection<String> materials,java.time.YearMonth month) {
+    return asOfKeys(unit,materials.stream().map(code->"C:"+code).toList(),month);
+  }
+
+  public List<HouseholdInquiryPriceRow> asOfKeys(String unit,Collection<String> keys,java.time.YearMonth month) {
+    MonthlyPriceStorage.requireBusinessUnit(unit);Objects.requireNonNull(month);
+    var unique=new ArrayList<>(new TreeSet<>(keys));var result=new ArrayList<HouseholdInquiryPriceRow>();
+    for(int start=0;start<unique.size();start+=256)
+      mapper.asOfMonth(unit,unique.subList(start,Math.min(start+256,unique.size())),month.toString()).forEach(row->result.add(decode(row)));
+    return List.copyOf(result);
+  }
+
+  public Map<MonthlyPriceRequest,Set<String>> matchTerms(Collection<MonthlyPriceRequest> requests) {
+    if(requests.isEmpty())return Map.of();
+    var first=requests.iterator().next().family();
+    if(!mapper.hasModelSources(first.businessUnitType(),first.month().toString()))return Map.of();
+    var terms=new LinkedHashMap<MonthlyPriceRequest,Set<String>>();
+    var groups=new TreeMap<String,Set<String>>();
+    for(var request:requests) {
+      var values=new TreeSet<String>();add(values,request.family().specification());terms.put(request,values);
+      String org="210".equals(request.priceOrgCode())?"COMMERCIAL":"PLATE";
+      groups.computeIfAbsent(org,ignored->new TreeSet<>()).add(request.family().materialCode());
+    }
+    groups.forEach((organization,codes)->{
+      var list=new ArrayList<>(codes);
+      for(int start=0;start<list.size();start+=256)for(var material:mapper.materialIdentities(organization,list.subList(start,Math.min(start+256,list.size()))))
+        terms.forEach((request,values)->{
+          if(request.family().materialCode().equals(material.materialCode()) && organization.equals("210".equals(request.priceOrgCode())?"COMMERCIAL":"PLATE")) {
+            add(values,material.materialModel());add(values,material.materialSpec());
+          }
+        });
+    });
+    return terms;
+  }
+  private static void add(Set<String> values,String text) { if(text!=null && !text.isBlank())values.add(text.strip()); }
 
   public List<HouseholdInquiryPriceRow> history(String unit,String material) {
     MonthlyPriceStorage.requireBusinessUnit(unit);

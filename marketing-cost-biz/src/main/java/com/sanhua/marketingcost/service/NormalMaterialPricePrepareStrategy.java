@@ -6,6 +6,11 @@ import java.time.LocalDateTime;
 
 /** 普通料号价格准备策略：消费本次月价会话，保留每个 BOM 结算项的数量与来源。 */
 public interface NormalMaterialPricePrepareStrategy {
+  /** The same actual nonzero requests consumed by the ordinary pricing strategy. No source reads. */
+  java.util.Map<PricePreparePlanItem, com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSession.Input>
+      inputs(com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSession session,
+          java.util.List<PricePreparePlanItem> items);
+
 
   /** 同批普通料号批量读取月价并记录实际使用；正式采用由价格准备应用操作持有。 */
   default java.util.Map<PricePreparePlanItem, NormalMaterialPricePrepareResult> prepareBatch(

@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.dto.MonthlyRepricePartItemDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceProgressSnapshot;
 import com.sanhua.marketingcost.dto.MonthlyRepriceResultDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceResultQueryRequest;
+import com.sanhua.marketingcost.dto.MonthlyRepriceSourceDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceTaskDto;
 import com.sanhua.marketingcost.dto.MonthlyRepriceTaskQueryRequest;
 import java.util.List;
@@ -148,6 +149,15 @@ public class MonthlyRepriceQueryController {
   public CommonResult<List<MonthlyRepricePartItemDto>> partItems(
       @PathVariable("repriceNo") String repriceNo, @PathVariable("resultId") Long resultId) {
     return CommonResult.success(queryService.listPartItems(repriceNo, resultId));
+  }
+
+  @PreAuthorize(QUERY_PERMISSION)
+  @GetMapping("/batches/{repriceNo}/results/{resultId}/sources")
+  public CommonResult<MonthlyRepricePageResponse<MonthlyRepriceSourceDto>> sources(
+      @PathVariable("repriceNo") String repriceNo, @PathVariable("resultId") Long resultId,
+      @RequestParam(required = false, defaultValue = "1") Integer page,
+      @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
+    return CommonResult.success(queryService.pageSources(repriceNo, resultId, page, pageSize));
   }
 
   @PreAuthorize(QUERY_PERMISSION)

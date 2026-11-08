@@ -46,11 +46,17 @@ public class HouseholdInquiryController {
 
   @GetMapping
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:list')")
-  public CommonResult<PricePage> current(@RequestParam(required=false) String materialCode,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) { return CommonResult.success(service.current(unit(),materialCode,page,size)); }
+  public CommonResult<PricePage> current(@RequestParam(required=false) String materialCode,@RequestParam(required=false) String sourceMonth,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) { return CommonResult.success(service.current(unit(),materialCode,sourceMonth,page,size)); }
 
   @GetMapping("/history")
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:query')")
   public CommonResult<PricePage> history(@RequestParam String materialCode,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) { return CommonResult.success(service.history(unit(),materialCode,page,size)); }
+
+  @GetMapping("/{id}/history")
+  @PreAuthorize("@ss.hasPermi('price:household-inquiry:query')")
+  public CommonResult<PricePage> historyById(@PathVariable long id,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) {
+    return CommonResult.success(service.historyById(unit(),id,page,size));
+  }
 
   @GetMapping("/{id}")
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:query')")

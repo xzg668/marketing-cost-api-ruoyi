@@ -6,4 +6,6 @@ import com.sanhua.marketingcost.dto.CostRunObjectResult;
 public interface CostRunEngine {
 
   CostRunObjectResult run(CostRunContext context);
+
+  com.sanhua.marketingcost.service.costing.ResolvedCostRun resolve(CostRunContext context);
 }

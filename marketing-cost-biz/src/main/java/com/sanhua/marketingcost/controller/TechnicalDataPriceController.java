@@ -30,12 +30,20 @@ public class TechnicalDataPriceController {
 
   private final TechnicalDataPriceApplicationService applicationService;
   private final TechnicalDataActorProvider actorProvider;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataBomPriceCheck bomCheck;
 
   public TechnicalDataPriceController(
       TechnicalDataPriceApplicationService applicationService,
-      TechnicalDataActorProvider actorProvider) {
+      TechnicalDataActorProvider actorProvider, com.sanhua.marketingcost.service.technicaldata.TechnicalDataBomPriceCheck bomCheck) {
+    this.bomCheck = bomCheck;
     this.applicationService = applicationService;
     this.actorProvider = actorProvider;
+  }
+
+  @PreAuthorize(EDIT_PERMISSION)
+  @org.springframework.web.bind.annotation.PostMapping("/check-bom")
+  public CommonResult<com.sanhua.marketingcost.service.technicaldata.TechnicalDataBomPriceCheck.Result> checkBom(@PathVariable Long productId) {
+    return execute(() -> bomCheck.check(productId, actorProvider.current()));
   }
 
   @PreAuthorize(READ_PERMISSION)

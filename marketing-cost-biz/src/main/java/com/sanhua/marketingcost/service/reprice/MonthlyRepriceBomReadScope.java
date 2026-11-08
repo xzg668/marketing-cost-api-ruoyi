@@ -2,11 +2,15 @@ package com.sanhua.marketingcost.service.reprice;
 
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementDetail;
+import com.sanhua.marketingcost.entity.BomRawHierarchy;
+import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
+import com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher;
+import com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.PublicationContext;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSourceFact;
 import java.time.YearMonth;
 import java.util.List;
@@ -20,11 +24,14 @@ import org.springframework.util.StringUtils;
 public class MonthlyRepriceBomReadScope {
   private final QuoteBomSupplementVersionMapper versions;
   private final QuoteBomSupplementDetailMapper details;
+  private final ApprovedElectronicBomRawSnapshotPublisher converter;
   private final ThreadLocal<Read> current = new ThreadLocal<>();
 
-  public MonthlyRepriceBomReadScope(QuoteBomSupplementVersionMapper versions, QuoteBomSupplementDetailMapper details) {
+  public MonthlyRepriceBomReadScope(QuoteBomSupplementVersionMapper versions, QuoteBomSupplementDetailMapper details,
+      ApprovedElectronicBomRawSnapshotPublisher converter) {
     this.versions = versions;
     this.details = details;
+    this.converter = converter;
   }
 
   public <T> T use(MonthlyRepriceCalculation calculation, Supplier<T> work) {
@@ -33,6 +40,33 @@ public class MonthlyRepriceBomReadScope {
     current.set(read);
     try { return work.get(); }
     finally { current.remove(); }
+  }
+
+  /** Price and fee preparation must use the same selected OA, including its copper/board terms. */
+  public com.sanhua.marketingcost.dto.CostRunQuotationInput quotation(
+      com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSessions.Request request) {
+    var read = current.get();
+    if (read == null) return null;
+    var selected = read.calculation;
+    var input = selected.input();
+    if (!Objects.equals(request.oaNo(), input.form().getOaNo())
+        || !Objects.equals(request.businessUnit(), input.form().getBusinessUnitType())
+        || !Objects.equals(request.month(), input.context().costPeriodMonth())
+        || !Objects.equals(request.priceAsOfTime(), selected.priceAsOfTime())
+        || request.productCode() != null && !Objects.equals(request.productCode(), input.context().productCode())
+        || request.supplierReviews().oaFormItemId() != null
+            && !Objects.equals(request.supplierReviews().oaFormItemId(), input.item().getId()))
+      throw new IllegalArgumentException("调价取价不能跨选定的OA、产品、月份或取价时点");
+    var saved = new com.sanhua.marketingcost.dto.CostRunQuotationInput(input.form(), input.item());
+    saved.requireFor(selected.costContext(), request.oaNo(), input.context().productCode());
+    return saved;
+  }
+
+  /** Null is only the legacy task format; a captured missing unit remains explicitly missing. */
+  public com.sanhua.marketingcost.service.pricing.monthly.AnnualUsageInput annualUsage(
+      com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSessions.Request request) {
+    if (quotation(request) == null) return null;
+    return current.get().calculation.input().annualUsage();
   }
 
   public CurrentU9BomResult original(QuoteBomReadContext context, Supplier<CurrentU9BomResult> lookup) {
@@ -51,6 +85,16 @@ public class MonthlyRepriceBomReadScope {
     return read == null ? lookup.get() : read.drawing;
   }
 
+  public ElectronicDrawingWorkContext costingDrawing(Long itemId, String month,
+      Supplier<ElectronicDrawingWorkContext> lookup) {
+    var read = current.get();
+    if (read == null) return lookup.get();
+    if (!Objects.equals(read.calculation.input().item().getId(), itemId)
+        || !Objects.equals(read.calculation.input().context().costPeriodMonth(), month))
+      throw new IllegalArgumentException("制造件输入不能跨调价产品或月份读取");
+    return read.drawing;
+  }
+
   public Long snapshotId(QuoteBomReadContext context) {
     var read = requiredScope(context);
     return read == null ? null : read.calculation.bom().getSyncRecordId();
@@ -60,9 +104,36 @@ public class MonthlyRepriceBomReadScope {
   public List<QuoteBomSupplementDetail> drawingRows(QuoteBomReadContext context) {
     var read = requiredScope(context);
     if (read == null || read.drawing == null) return null;
+    return drawingRows(read);
+  }
+
+  /** 新月份尚无冻结明细时，从本次已选定的图库版本生成同一份层级。 */
+  public List<BomRawHierarchy> drawingHierarchy(QuoteBomMonthlySnapshot snapshot) {
+    var read = current.get();
+    if (read == null || read.drawing == null) return null;
+    var selected = read.calculation.bom();
+    var input = read.calculation.input();
+    var context = input.context();
+    if (!Objects.equals(snapshot.getId(), selected.getSyncRecordId())
+        || !Objects.equals(snapshot.getBomBatchId(), selected.getSyncBatchId())
+        || !Objects.equals(snapshot.getBomSource(), selected.getBomSource())
+        || !Objects.equals(snapshot.getSourceOaFormItemId(), input.item().getId())
+        || !Objects.equals(snapshot.getProductCode(), context.productCode())
+        || !Objects.equals(snapshot.getCostPeriodMonth(), context.costPeriodMonth())
+        || !Objects.equals(snapshot.getPriceOrgCode(), context.organization().priceOrgCode()))
+      throw new IllegalArgumentException("月度BOM与本次已选定的图库来源不一致");
+    if (read.hierarchy == null) read.hierarchy = converter.approvedRows(
+        new PublicationContext(read.drawing.sourceVersionId(), context.productCode(), null,
+            context.organization().priceOrgCode(), input.form().getBusinessUnitType(),
+            read.drawing.accountingMonth()), drawingRows(read));
+    return read.hierarchy;
+  }
+
+  private List<QuoteBomSupplementDetail> drawingRows(Read read) {
     if (read.rows == null) read.rows = List.copyOf(details.selectList(
         com.baomidou.mybatisplus.core.toolkit.Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
-            .eq(QuoteBomSupplementDetail::getSupplementVersionId, read.drawing.sourceVersionId())));
+            .eq(QuoteBomSupplementDetail::getSupplementVersionId, read.drawing.sourceVersionId())
+            .orderByAsc(QuoteBomSupplementDetail::getLineNo)));
     return read.rows;
   }
 
@@ -125,6 +196,7 @@ public class MonthlyRepriceBomReadScope {
     final ElectronicDrawingWorkContext drawing;
     List<TechnicalDataSourceFact> facts;
     List<QuoteBomSupplementDetail> rows;
+    List<BomRawHierarchy> hierarchy;
     Read(MonthlyRepriceCalculation calculation, ElectronicDrawingWorkContext drawing) {
       this.calculation = calculation;
       this.drawing = drawing;

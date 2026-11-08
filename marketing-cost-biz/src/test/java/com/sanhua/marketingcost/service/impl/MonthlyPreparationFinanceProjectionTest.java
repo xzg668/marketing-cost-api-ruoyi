@@ -21,6 +21,53 @@ class MonthlyPreparationFinanceProjectionTest {
   final MonthlyPreparationEvidence evidence = new MonthlyPreparationEvidence(codec);
   final MonthlyPreparationFinanceProjection projection = new MonthlyPreparationFinanceProjection(json, codec);
 
+  @Test void compactMonthlyScrapStillIdentifiesItsSavedScrapSource() {
+    var row = direct(false);
+    var original = codec.decode(row.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+    var price = new Selection(original.selection().monthlyPriceId(), original.selection().applicability(),
+        PriceFact.normal(d("10"), SourceEvidence.ofJson("{\"sourceKind\":\"SCRAP_PRICE\",\"original\":\"" + "废料原依据".repeat(300) + "\"}"), Set.of()));
+    String input = codec.encode(MonthlyPreparationPrice.of(new QuotationPriceSession.Value(original.request(), price, d("10"), d("12")), "P/NORMAL", d("2.5")));
+    assertThat(com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence.isScrap(input)).isTrue();
+    assertThat(com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence.isScrap(codec.compact(input))).isTrue();
+    assertThat(com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence.isScrap(codec.compact(row.getInputSnapshotJson()))).isFalse();
+  }
+
+  @Test void compactPreparationsRetainBothScenariosAndEveryOwnAggregateCoordinate() throws Exception {
+    for (var source : List.of(direct(false), direct(true), make(), pack())) {
+      String original = source.getInputSnapshotJson();
+      var expected = projection.project(source);
+      var inputs = evidence.read(source);
+      source.setInputSnapshotJson(evidence.compact(source));
+      assertThat(source.getInputSnapshotJson().length()).isLessThan(original.length());
+      assertThat(evidence.compact(source)).isEqualTo(source.getInputSnapshotJson());
+      assertThat(evidence.read(source)).isEqualTo(inputs);
+      var actual = projection.project(source);
+      assertThat(actual.getUnitPrice()).isEqualByComparingTo(expected.getUnitPrice());
+      assertThat(actual.getAmount()).isEqualByComparingTo(expected.getAmount());
+      assertThat(expand(json.readTree(actual.getInputSnapshotJson())))
+          .isEqualTo(expand(json.readTree(expected.getInputSnapshotJson())));
+      if (source.getResultRefType().startsWith("PACKAGE"))
+        assertThat(new PackageCalculationEvidence(json).validatePair(source, actual, null, null)).isTrue();
+    }
+  }
+
+  private com.fasterxml.jackson.databind.JsonNode expand(com.fasterxml.jackson.databind.JsonNode node) throws Exception {
+    if (node.isObject() && node.has("schemaVersion") && node.has("document"))
+      return expand(json.readTree(codec.unwrap(node.toString())));
+    if (node instanceof ObjectNode object) {
+      var result = object.deepCopy();
+      for (var field : java.util.List.copyOf(new java.util.ArrayList<>(result.properties()))) {
+        var value = field.getValue();
+        if (java.util.Set.of("monthlyInputs", "rawInputSnapshotJson", "scrapInputSnapshotJson").contains(field.getKey()) && value.isTextual())
+          result.set(field.getKey(), expand(json.readTree(value.textValue())));
+        else result.set(field.getKey(), expand(value));
+      }
+      return result;
+    }
+    if (node.isArray()) { var result = json.createArrayNode(); for (var item : node) result.add(expand(item)); return result; }
+    return node;
+  }
+
   @Test void directFeeExcludesSeparatelyPricedDescendantButRetainsItsFormulaDependencies() {
     var source = direct(false);
     var original = codec.decode(source.getInputSnapshotJson(), MonthlyPreparationPrice.class);
@@ -58,6 +105,58 @@ class MonthlyPreparationFinanceProjectionTest {
     assertThat(source.getAmount()).isEqualByComparingTo("30");
     assertThat(source.getUnitPrice()).isEqualByComparingTo("12");
     assertThat(source.getInputSnapshotJson()).isEqualTo(original);
+  }
+
+  @Test void savedAmountsUseOriginalPricesDespiteDatabaseUnitPriceRounding() {
+    // Real quotation 1145900000048: 201850159 uses 2.015 of 1.637168141592920354.
+    // DECIMAL(20,8) stores amount 3.29889381, while rounded unit price * quantity is 3.29889380.
+    for (String quantity : List.of("2.015", "-2.015", "1000000")) {
+      var source = roundedDirect(quantity);
+      var finance = projection.project(source);
+      assertThat(finance.getAmount()).isEqualByComparingTo(d("10").multiply(d(quantity)));
+      assertThat(source.getUnitPrice()).isEqualByComparingTo("1.63716814");
+      assertThat(source.getAmount()).isEqualByComparingTo(
+          d("1.637168141592920354").multiply(d(quantity)).setScale(8, java.math.RoundingMode.HALF_UP));
+    }
+  }
+
+  @Test void savedAmountStillMustMatchTheOriginalCalculationEvidence() {
+    var source = roundedDirect("2.015");
+    source.setAmount(d("3.30889381"));
+    assertThatThrownBy(() -> projection.project(source)).hasMessageContaining("金额");
+  }
+
+  @Test void costValidationAlsoUsesOriginalPricesAfterPreparationIsSaved() {
+    var validation = new MonthlyPreparationValidation(json, codec);
+    for (String quantity : List.of("2.015", "-2.015", "1000000")) {
+      var customer = roundedDirect(quantity);
+      var captured = codec.decode(customer.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+      var plan = evidence.read(customer).plan();
+      var scenarios = Map.of(1L, new MonthlyPriceScenarios.Pair(1L,
+          captured.selection().fact().evidence().sha256(), captured.financialPrice(),
+          captured.customerPrice(), "{}"));
+      validation.validate(customer, false, plan, scenarios, "P/NORMAL");
+      var finance = projection.project(customer);
+      validation.validate(finance, true, plan, scenarios, "P/NORMAL");
+      customer.setAmount(customer.getAmount().add(d("0.01")));
+      assertThatThrownBy(() -> validation.validate(customer, false, plan, scenarios, "P/NORMAL"))
+          .hasMessageContaining("金额");
+    }
+  }
+
+  PricePrepareItem roundedDirect(String quantity) {
+    var source = direct(false);
+    var original = codec.decode(source.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+    var uses = inputs("P/NORMAL", Map.of(original.request(), original.selection()),
+        List.of(new Use("P/NORMAL", original.request(), d(quantity).abs())));
+    source.setQuantity(d(quantity));
+    source.setUnitPrice(d("1.63716814"));
+    source.setAmount(d("1.637168141592920354").multiply(d(quantity))
+        .setScale(8, java.math.RoundingMode.HALF_UP));
+    source.setInputSnapshotJson(codec.encode(MonthlyPreparationPrice.of(
+        new QuotationPriceSession.Value(original.request(), original.selection(), d("10"),
+            d("1.637168141592920354")), "P/NORMAL", d(quantity)).withInputs(uses)));
+    return source;
   }
 
   @Test void householdProjectionPreservesTheIndependentPriceAndQuantityWithoutAddingFees() {

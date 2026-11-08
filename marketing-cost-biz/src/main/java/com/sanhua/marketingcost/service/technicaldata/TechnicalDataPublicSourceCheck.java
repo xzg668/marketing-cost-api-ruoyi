@@ -26,6 +26,7 @@ public class TechnicalDataPublicSourceCheck {
   private final TechnicalDataPackageSourceCheck packaging;
   private final com.sanhua.marketingcost.service.NetLossRateQuery netLoss;
   private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom;
+  private final com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse;
 
   public TechnicalDataPublicSourceCheck(
       CurrentU9BomGateway u9,
@@ -36,7 +37,9 @@ public class TechnicalDataPublicSourceCheck {
       TechnicalDataPackageSourceCheck packaging,
       com.sanhua.marketingcost.service.NetLossRateQuery netLoss, TechnicalDataSharedModules shared,
       ElectronicDrawingSourceNodeRepository drawingSources,
-      com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom) {
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse) {
+    this.drawingReuse = drawingReuse;
     this.repriceBom = repriceBom;
     this.shared = shared;
     this.u9 = u9;
@@ -121,9 +124,10 @@ public class TechnicalDataPublicSourceCheck {
     try {
       // 已分派或跨报价共享的技术资料仍走原负责人的提交、确认校验。
       // 图库模块只检查明细是否取得；料号匹配、制造件原料和组树完整性由各自核算检查负责。
-      if (shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM") == null) {
-        var drawing = repriceBom.drawing(context, () -> drawingContexts.load(context.oaFormItemId(),
-            context.businessUnitType(), context.priceOrgCode(), context.accountingMonth()));
+      var drawing = repriceBom.drawing(context, () -> drawingContexts.load(context.oaFormItemId(),
+          context.businessUnitType(), context.priceOrgCode(), context.accountingMonth()));
+      if (drawingReuse.verifiedRevision(drawing)
+          || shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM") == null) {
         if (drawing != null && drawing.active() && drawing.sourceVersionId() != null) {
           var savedRows = repriceBom.drawingRows(context);
           boolean hasDetails = savedRows == null
@@ -187,14 +191,17 @@ public class TechnicalDataPublicSourceCheck {
             "MONTHLY_BOM:" + repriceBom.snapshotId(context));
       }
       var owner = shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM");
-      boolean sharedSource = owner != null && (!Objects.equals(owner.quoteItemId(), context.oaFormItemId())
+      var localDrawing = repriceBom.drawing(context, () -> drawingContexts.load(context.oaFormItemId(),
+          context.businessUnitType(), context.priceOrgCode(), context.accountingMonth()));
+      boolean verifiedLocal = drawingReuse.verifiedRevision(localDrawing);
+      boolean sharedSource = !verifiedLocal && owner != null && (!Objects.equals(owner.quoteItemId(), context.oaFormItemId())
           || !Objects.equals(owner.accountingMonth(), context.accountingMonth()));
       if (sharedSource && (!Objects.equals(owner.organization(), context.priceOrgCode())
           || !Objects.equals(owner.businessUnit(), context.businessUnitType()))) {
         return fact(context, TechnicalDataModuleType.MANUFACTURING, TechnicalDataAvailability.ERROR,
             "MANUFACTURING_SOURCE_SCOPE_MISMATCH", "原图库组织与本报价不一致，请核实来源", null);
       }
-      var drawing = repriceBom.drawing(context, () -> drawingContexts.load(
+      var drawing = verifiedLocal ? localDrawing : repriceBom.drawing(context, () -> drawingContexts.load(
           sharedSource ? owner.quoteItemId() : context.oaFormItemId(), context.businessUnitType(),
           context.priceOrgCode(), sharedSource ? owner.accountingMonth() : context.accountingMonth()));
       if (drawing == null || drawing.sourceVersionId() == null)

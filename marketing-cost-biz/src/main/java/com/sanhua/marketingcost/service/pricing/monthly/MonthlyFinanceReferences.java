@@ -14,6 +14,7 @@ public final class MonthlyFinanceReferences {
     var result = new LinkedHashSet<Reference>();
     var source = document.path("source");
     switch (document.path("sourceKind").asText()) {
+      case "HOUSEHOLD_INQUIRY" -> financial(result,document.path("metalInputs").path("financial").path("financial"));
       case "LINKED", "RANGE_FACTOR" -> {
         publication(result, source.path("selectedPublication"));
         source.path("publications").forEach(value -> publication(result, value));
@@ -27,7 +28,7 @@ public final class MonthlyFinanceReferences {
         inquiry(result, source.path("selected"));
         source.path("candidates").forEach(value -> inquiry(result, value));
       }
-      default -> { /* Fixed purchases, invoices and household prices do not use financial bases. */ }
+      default -> { /* Fixed purchases and invoices do not use financial bases. */ }
     }
     return Set.copyOf(result);
   }

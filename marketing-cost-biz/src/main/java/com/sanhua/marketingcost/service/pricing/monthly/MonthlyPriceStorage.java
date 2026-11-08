@@ -47,6 +47,18 @@ public class MonthlyPriceStorage {
     });
     references.keySet().stream().map(request->request.family().businessUnitType()).distinct().sorted()
         .forEach(mapper::lockFinancePublication);
+    planned.selections().entrySet().stream().filter(entry->entry.getValue().fact().type()==PricingType.HOUSEHOLD_INQUIRY)
+        .sorted(java.util.Comparator.comparing(entry->entry.getKey().family().canonical())).forEach(entry->{
+          var family=entry.getKey().family();
+          var source=codec.decode(codec.wrap(entry.getValue().fact().evidence().json()),JsonNode.class);
+          var original=source.path("source").path("evidence").path("source");
+          String material=original.path("materialCode").isTextual()?original.path("materialCode").asText():null;
+          String matchKey=com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryKey.of(material,original.path("specification").asText(null));
+          for(String key:new TreeSet<>(List.of("C:"+family.materialCode(),matchKey)))mapper.lockHouseholdCurrent(family.businessUnitType(),key);
+          Long latest=mapper.currentHouseholdSource(family.businessUnitType(),family.materialCode(),family.month().toString(),matchKey);
+          if(!Objects.equals(latest,source.path("householdSourceId").asLong()))
+            throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,"适用家用询价在采用前已更新，请重新取价");
+        });
     var current=new HashMap<String,Long>();
     references.forEach((request,refs)->{
       if(planned.selections().get(request).monthlyPriceId()!=null)return;
@@ -62,9 +74,18 @@ public class MonthlyPriceStorage {
   /** REPEATABLE_READ next-key locks cover existing rows and absent-key gaps, without lock rows. */
   public void lockFamilies(Collection<MonthlyPriceFamilyKey> families) {
     requireAdoptionTransaction();
-    for(var key:new TreeSet<>(families)) {
-      for(var row:mapper.lockFamily(MonthlyPriceDocumentCodec.sha256(key.canonical()))) {
-        if(!read(row).family().equals(key))throw new IllegalStateException("Monthly identity hash conflict");
+    var byHash=new TreeMap<String,MonthlyPriceFamilyKey>();
+    for(var key:families) {
+      String hash=MonthlyPriceDocumentCodec.sha256(key.canonical());
+      var previous=byHash.putIfAbsent(hash,key);
+      if(previous!=null && !previous.equals(key))throw new IllegalStateException("Monthly identity hash conflict");
+    }
+    var hashes=new ArrayList<>(byHash.keySet());
+    for(int start=0;start<hashes.size();start+=128) {
+      var chunk=hashes.subList(start,Math.min(start+128,hashes.size()));
+      for(var row:mapper.lockFamilies(chunk)) {
+        if(!read(row).family().equals(byHash.get(row.getFamilyHash())))
+          throw new IllegalStateException("Monthly identity hash conflict");
       }
     }
   }
@@ -86,7 +107,10 @@ public class MonthlyPriceStorage {
       var saved=read(existing);
       if(!saved.family().equals(key))throw new IllegalStateException("Monthly identity hash conflict");
       for(var left:applicability.fragments())for(var right:saved.applicability().fragments()) {
-        if(left.intersection(right).isPresent())throw new IllegalStateException("Monthly price applicability is already adopted");
+        // A current locking read can see a winner committed after this transaction's snapshot.
+        // Reject the obsolete candidate and let the existing bounded executor rebuild the whole plan.
+        if(left.intersection(right).isPresent())throw new MonthlyPriceProblem(
+            MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,"Monthly price applicability is already adopted; replan from the committed winner");
       }
     }
     var row=new MonthlyMaterialPriceRow();
@@ -94,6 +118,7 @@ public class MonthlyPriceStorage {
     // Its typed evidence stays unchanged, and later invoice imports never invalidate that higher source.
     row.setInvoiceRevision(revision);
     row.setFinanceRevision(mapper.financeRevision(hash));
+    row.setHouseholdRevision(householdSourceId==null?0L:householdSourceId);
     row.setFamilyHash(hash);row.setPricingMonth(key.month().toString());row.setBusinessUnitType(key.businessUnitType());
     row.setMaterialCode(key.materialCode());row.setSpecification(key.specification());row.setPricingUnit(key.unit());
     row.setCurrency(key.currency());row.setTaxBasis(key.taxBasis().name());row.setRequestedSupplierCode(key.requestedSupplierCode());
@@ -183,6 +208,36 @@ public class MonthlyPriceStorage {
     }return mask;
   }
 
+  public record PreparationReference(long itemId, MonthlyPriceRequest request,
+      MonthlyAdoptionPlan.Selection selection) {
+    public PreparationReference {
+      Objects.requireNonNull(request); Objects.requireNonNull(selection);
+      if (itemId <= 0 || selection.monthlyPriceId() == null || selection.monthlyPriceId() <= 0)
+        throw new IllegalArgumentException("Preparation reference requires saved item and monthly price identities");
+    }
+  }
+
+  /** Attach the validated price set without changing the caller's BOM or calculation order. */
+  public void attachPreparations(String unit, String repriceNo, List<PreparationReference> references) {
+    requireWriteTransaction(); requireBusinessUnit(unit);
+    record OrderedReference(String key, PreparationReference reference) {}
+    // Foreign-key checks hold shared price locks until customer commit. Match adoption's
+    // family/applicability index order so another adopter cannot hold our next price.
+    var ordered = references.stream().map(reference -> {
+      if (!unit.equals(reference.request().family().businessUnitType()))
+        throw new IllegalArgumentException("Preparation reference belongs to a different business unit");
+      String key = MonthlyPriceDocumentCodec.sha256(reference.request().family().canonical())
+          + MonthlyPriceDocumentCodec.sha256(reference.selection().applicability().canonical());
+      return new OrderedReference(key, reference);
+    }).sorted(Comparator.comparing(OrderedReference::key)).toList();
+    for (var entry : ordered) {
+      var reference = entry.reference();
+      var selection = reference.selection();
+      if (repriceNo == null) attachPreparation(unit, reference.itemId(), selection.monthlyPriceId(), selection.fact().type());
+      else attachRepricePreparation(unit, repriceNo, reference.itemId(), selection.monthlyPriceId(), selection.fact().type());
+    }
+  }
+
   public void attachPreparation(String unit,long id,long priceId,PricingType type) {
     requireWriteTransaction(); requireBusinessUnit(unit); Objects.requireNonNull(type);
     var current=links.preparation(unit,id);
@@ -199,15 +254,6 @@ public class MonthlyPriceStorage {
     if (current==null || current.monthlyPriceId()!=null
         || links.attachRepricePreparation(unit,no,id,priceId,type.name())!=1)
       throw new IllegalStateException("Reprice preparation monthly price link conflict");
-  }
-
-  public void attachCostPart(String unit,long id,long priceId,PricingType type) {
-    requireWriteTransaction(); requireBusinessUnit(unit); Objects.requireNonNull(type);
-    var current=links.costPart(unit,id);
-    if (sameLink(current,priceId,type)) return;
-    if (current==null || current.monthlyPriceId()!=null || links.attachCostPart(unit,id,priceId,type.name())!=1) {
-      throw new IllegalStateException("Cost part monthly price link conflict");
-    }
   }
 
   private boolean sameLink(MonthlyPriceLinkMapper.PriceLink current,long id,PricingType type) {

@@ -25,6 +25,7 @@ public class TechnicalDataManufacturingSaveRequest {
     private String rawMaterialNo;
     private BigDecimal netLengthMm;
     private BigDecimal grossWeightKg;
+    private String reuseReference;
     private final Map<String, Object> unknownFields = new LinkedHashMap<>();
     @JsonAnySetter public void unknown(String name, Object value) { unknownFields.put(name, value); }
   }

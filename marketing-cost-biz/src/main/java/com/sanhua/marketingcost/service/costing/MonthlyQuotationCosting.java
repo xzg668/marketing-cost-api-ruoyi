@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.costing;
 
+import com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
@@ -20,6 +22,29 @@ import org.springframework.stereotype.Service;
 /** Connects saved quotation preparations and the existing ordinary fee calculation. */
 @Service
 public final class MonthlyQuotationCosting {
+  public record Prepared(MonthlyAdoptionPlan plan, Ordinary ordinary,
+      com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput technical,
+      Map<String, MonthlyCostVersionService.PreparationBinding> bindings,
+      Map<Long, BigDecimal> householdCustomerPrices) {
+    public Prepared { bindings = Map.copyOf(bindings); householdCustomerPrices = Map.copyOf(householdCustomerPrices); }
+    public MonthlyProductCost.Resolved resolve() { return MonthlyProductCost.resolve(plan, ordinary, technical, householdCustomerPrices); }
+  }
+  /** Actual two-scenario material inputs, available before the ordinary cost formula runs. */
+  public record MaterialInputs(MonthlyAdoptionPlan plan, List<MaterialLine> materials,
+      Map<String, MonthlyCostVersionService.PreparationBinding> bindings,
+      List<PreparationInputs> preparations, Map<Long, BigDecimal> householdCustomerPrices) {
+    public MaterialInputs {
+      materials = List.copyOf(materials); bindings = Map.copyOf(bindings); preparations = List.copyOf(preparations);
+      householdCustomerPrices = Map.copyOf(householdCustomerPrices);
+    }
+    public Prepared complete(CostRunObjectResult result) {
+      return new Prepared(plan, ordinary(result.getCostItems(), materials),
+          result.getContext().getEffectiveTechnicalData(), bindings, householdCustomerPrices);
+    }
+  }
+  public record PreparationInputs(String path, String materialCode, String priceOrganization,
+      String resultType, BigDecimal quantity, BigDecimal financialUnitPrice, BigDecimal customerUnitPrice,
+      BigDecimal financialAmount, BigDecimal customerAmount, String financialInputs, String customerInputs) {}
   private final PricePrepareItemMapper preparations;
   private final MonthlyCostVersionService versions;
   private final MonthlyPreparationEvidence evidence;
@@ -33,8 +58,25 @@ public final class MonthlyQuotationCosting {
     components = new MonthlyPreparationComponents(json, codec);
   }
 
-  public MonthlyCostVersionService.Stored save(QuoteCostRunVersion version, CostRunObjectResult ordinary,
-      BigDecimal customerCopperPerTon) {
+  public MonthlyCostVersionService.Stored saveMaterials(QuoteCostRunVersion version, CostRunObjectResult ordinary,
+      CustomerMaterialPrices customerPrices) {
+    var input = prepare(version, ordinary);
+    return versions.calculateAndSaveMaterials(version.getBusinessUnitType(), version.getId(), input.plan(),
+        input.ordinary(), input.technical(), customerPrices, input.bindings());
+  }
+
+  public MonthlyCostVersionService.Stored saveCalculatedMaterials(QuoteCostRunVersion version, Prepared input,
+      CustomerMaterialPrices customerPrices, MonthlyProductCost.Numbers numbers) {
+    return versions.saveCalculatedMaterials(version.getBusinessUnitType(), version.getId(), input.plan(),
+        input.ordinary(), input.technical(), customerPrices, input.bindings(), numbers);
+  }
+
+  /** Resolve this customer's two price scenarios; no final cost computation and no writes. */
+  public Prepared prepare(QuoteCostRunVersion version, CostRunObjectResult ordinary) {
+    return materials(version).complete(ordinary);
+  }
+
+  public MaterialInputs materials(QuoteCostRunVersion version) {
     var customer = items(version.getOaPricePrepareNo());
     var finance = items(version.getFinancePricePrepareNo());
     if (!customer.keySet().equals(finance.keySet()) || customer.isEmpty())
@@ -44,6 +86,8 @@ public final class MonthlyQuotationCosting {
     var suppressed = new HashSet<String>();
     var materials = new ArrayList<MaterialLine>();
     var bindings = new HashMap<String, MonthlyCostVersionService.PreparationBinding>();
+    var preparations = new ArrayList<PreparationInputs>();
+    var householdCustomerPrices = new HashMap<Long, BigDecimal>();
     for (var entry : customer.entrySet()) {
       var oa = entry.getValue(); var fin = finance.get(entry.getKey());
       if (oa.getQuantity() != null && oa.getQuantity().signum() == 0
@@ -61,19 +105,32 @@ public final class MonthlyQuotationCosting {
       uses.addAll(inputs.uses()); suppressed.addAll(inputs.suppressedPaths());
       if (bindings.putIfAbsent(inputs.rootPath(), new MonthlyCostVersionService.PreparationBinding(fin.getId(), oa.getId())) != null)
         throw new IllegalArgumentException("成本准备贡献路径重复");
+      preparations.add(new PreparationInputs(inputs.rootPath(), oa.getMaterialCode(), oa.getPriceOrgCode(),
+          oa.getResultRefType(), oa.getQuantity(), fin.getUnitPrice(), oa.getUnitPrice(), fin.getAmount(),
+          oa.getAmount(), fin.getInputSnapshotJson(), oa.getInputSnapshotJson()));
       boolean household = inputs.uses().stream().anyMatch(use ->
           inputs.plan().selections().get(use.request()).fact().type() == PricingType.HOUSEHOLD_INQUIRY);
       if (household) {
         if (inputs.uses().size() != 1 || !inputs.uses().getFirst().path().equals(inputs.rootPath()))
           throw new IllegalArgumentException("家用整体计价必须先从普通母件范围独立");
+        if (!MonthlyPreparationPrice.KIND.equals(oa.getResultRefType()))
+          throw new IllegalArgumentException("家用整体计价缺少直接月价准备");
+        // The snapshot retains the exact W value; unit_price rounds to eight decimals.
+        var captured = codec.decode(oa.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+        var use = inputs.uses().getFirst();
+        var selected = inputs.plan().selections().get(use.request());
+        if (!use.request().equals(captured.request()) || !selected.equals(captured.selection())
+            || BigDecimal.ONE.compareTo(captured.unitPriceMultiplier()) != 0)
+          throw new IllegalArgumentException("家用客户单价与已采用月价不一致");
+        var previous = householdCustomerPrices.putIfAbsent(selected.monthlyPriceId(), captured.customerPrice());
+        if (previous != null && previous.compareTo(captured.customerPrice()) != 0)
+          throw new IllegalArgumentException("同一家用月价包含不同客户单价");
       } else materials.add(new MaterialLine(inputs.rootPath(), oa.getMaterialCode(), oa.getQuantity(),
           inputs.prices().stream().map(price -> price.selection().monthlyPriceId()).distinct().toList(),
           fin.getAmount(), oa.getAmount(), null));
     }
     var plan = new MonthlyAdoptionPlan(prices, uses, suppressed);
-    return versions.calculateAndSave(version.getBusinessUnitType(), version.getId(), plan,
-        ordinary(ordinary.getCostItems(), materials), ordinary.getContext().getEffectiveTechnicalData(),
-        customerCopperPerTon, bindings);
+    return new MaterialInputs(plan, materials, bindings, preparations, householdCustomerPrices);
   }
 
   private Map<String, PricePrepareItem> items(String prepareNo) {
@@ -119,7 +176,7 @@ public final class MonthlyQuotationCosting {
     var version = stored.version(); var snapshot = Objects.requireNonNull(stored.snapshot());
     var adopted = new LinkedHashMap<MonthlyPriceRequest, MonthlyAdoptionPlan.Selection>();
     snapshot.calculation().adoptedPrices().forEach(price -> adopted.put(price.request(), price.selection()));
-    var exposure = new MonthlyCopperExposure(codec).read(adopted);
+    var exposure = new MonthlyMetalExposure(codec).read(adopted);
     var ids = snapshot.preparations().values().stream()
         .flatMap(binding -> java.util.stream.Stream.of(binding.financialItemId(), binding.customerItemId()))
         .distinct().toList();
@@ -155,21 +212,24 @@ public final class MonthlyQuotationCosting {
       row.setTraceJson(codec.unwrap(codec.encode(trace)));
       requireCuDifference(row); rows.add(row); rows.addAll(children);
     }
-    for (var use : snapshot.calculation().effectiveUses()) {
-      var price = adopted.get(use.request());
-      if (price.fact().type() != PricingType.HOUSEHOLD_INQUIRY) continue;
-      var binding = Objects.requireNonNull(snapshot.preparations().get(use.path()), "Missing saved household preparation binding");
-      var row = base(version, use.path(), binding);
-      row.setDetailLevel("SETTLEMENT"); row.setContributesToAdjustment(0);
-      row.setMaterialCode(use.request().family().materialCode()); row.setItemType("HOUSEHOLD_INQUIRY");
-      row.setQuantity(use.cumulativeQuantity()); row.setFinanceUnitPrice(price.fact().price());
-      row.setOaUnitPrice(price.fact().price());
-      row.setFinanceAmount(OrdinaryCostAmounts.money(price.fact().price().multiply(use.cumulativeQuantity())));
-      row.setOaAmount(row.getFinanceAmount()); row.setDiffAmount(BigDecimal.ZERO); row.setCuAffected(0);
-      row.setPriceFormulaRefType(MonthlyPreparationPrice.KIND); row.setPriceFormulaRefId(price.monthlyPriceId());
-      row.setTraceJson(codec.unwrap(codec.encode(Map.of("path", use.path(), "monthlyPriceId", price.monthlyPriceId(),
-          "sourceEvidenceHash", price.fact().evidence().sha256(), "householdRate", price.fact().householdRate()))));
-      rows.add(row);
+    for (var line : snapshot.calculation().household()) {
+      String path=line.paths().getFirst();
+      var binding=Objects.requireNonNull(snapshot.preparations().get(path),"Missing saved household preparation binding");
+      var row=base(version,path,binding);
+      row.setDetailLevel("SETTLEMENT");row.setContributesToAdjustment(1);
+      row.setMaterialCode(line.materialCode());row.setItemType("HOUSEHOLD_INQUIRY");row.setQuantity(line.quantity());
+      row.setFinanceUnitPrice(line.amount().divide(line.quantity(),8,java.math.RoundingMode.HALF_UP));
+      row.setOaUnitPrice(line.effectiveCustomerAmount().divide(line.quantity(),8,java.math.RoundingMode.HALF_UP));
+      row.setFinanceAmount(line.amount());row.setOaAmount(line.effectiveCustomerAmount());
+      row.setDiffAmount(line.effectiveCustomerAmount().subtract(line.amount()));
+      row.setCuAffected(Boolean.TRUE.equals(exposure.get(line.monthlyPriceId()))?1:0);
+      row.setPriceFormulaRefType(MonthlyPreparationPrice.KIND);row.setPriceFormulaRefId(line.monthlyPriceId());
+      var trace=new LinkedHashMap<String,Object>();trace.put("paths",line.paths());trace.put("monthlyPriceId",line.monthlyPriceId());
+      trace.put("sourceEvidenceHash",line.sourceEvidenceHash());trace.put("householdRate",line.householdRate());trace.put("salesRate",line.salesRate());
+      trace.put("originalPrice",line.price());trace.put("calculatedW",line.effectiveCustomerPrice());
+      snapshot.priceScenarios().stream().filter(pair->pair.monthlyPriceId()==line.monthlyPriceId()).findFirst()
+          .ifPresent(pair->trace.put("calculation",codec.decode(codec.wrap(pair.customerEvidenceJson()),com.fasterxml.jackson.databind.JsonNode.class)));
+      row.setTraceJson(codec.unwrap(codec.encode(trace)));requireCuDifference(row);rows.add(row);
     }
     for (int i = 0; i < rows.size(); i++) rows.get(i).setLineNo(i + 1);
     int settlements = (int) rows.stream().filter(row -> "SETTLEMENT".equals(row.getDetailLevel())).count();
@@ -219,7 +279,7 @@ public final class MonthlyQuotationCosting {
   }
   private static void requireCuDifference(QuoteCuMaterialDiffItemResult row) {
     if (row.getDiffAmount().signum() != 0 && !Integer.valueOf(1).equals(row.getCuAffected()))
-      throw new IllegalArgumentException("Non-Cu monthly input has a nonzero difference");
+      throw new IllegalArgumentException("Monthly input without a material base-price dependency has a nonzero difference");
   }
   private static QuoteCuMaterialDiffItemResult base(QuoteCostRunVersion version, String path,
       MonthlyCostVersionService.PreparationBinding binding) {

@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.mapper.*;
 import com.sanhua.marketingcost.service.costing.MonthlyCostVersionService;
-import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec;
+import com.sanhua.marketingcost.service.costing.MonthlyCostSnapshotDocuments;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -32,14 +32,14 @@ public class MonthlyCostComparisonInputs {
   private final QuoteEffectiveBomNodeMapper nodes;
   private final CostRunTraceSnapshotMapper traces;
   private final QuoteTechSalaryItemMapper salaries;
-  private final MonthlyPriceDocumentCodec codec;
+  private final MonthlyCostSnapshotDocuments documents;
   private final ObjectMapper json;
   public MonthlyCostComparisonInputs(MonthlyCostComparisonMapper query,CostRunPartItemMapper parts,
       CostRunCostItemMapper costs,BomCostingRowMapper boms,
       QuoteEffectiveBomNodeMapper nodes,CostRunTraceSnapshotMapper traces,QuoteTechSalaryItemMapper salaries,
-      MonthlyPriceDocumentCodec codec,ObjectMapper json) {
+      MonthlyCostSnapshotDocuments documents,ObjectMapper json) {
     this.query=query;this.parts=parts;this.costs=costs;this.boms=boms;
-    this.nodes=nodes;this.traces=traces;this.salaries=salaries;this.codec=codec;this.json=json;
+    this.nodes=nodes;this.traces=traces;this.salaries=salaries;this.documents=documents;this.json=json;
   }
   public List<Loaded> load(String unit,List<QuoteCostRunVersion> versions) {
     MonthlyRepriceContract.unit(unit);
@@ -51,6 +51,8 @@ public class MonthlyCostComparisonInputs {
     var partRows=parts.selectList(Wrappers.<CostRunPartItem>lambdaQuery().in(CostRunPartItem::getCostRunVersionId,ids).orderByAsc(CostRunPartItem::getId));
     var costRows=costs.selectList(Wrappers.<CostRunCostItem>lambdaQuery().in(CostRunCostItem::getCostRunVersionId,ids).orderByAsc(CostRunCostItem::getLineNo).orderByAsc(CostRunCostItem::getId));
     var snapshotRows=query.snapshots(ids).stream().collect(Collectors.toMap(MonthlyCostComparisonMapper.SavedSnapshot::id,Function.identity()));
+    var decoded=documents.readBatch(unit,snapshotRows.values().stream().filter(row->row.json()!=null)
+        .collect(Collectors.toMap(MonthlyCostComparisonMapper.SavedSnapshot::id,MonthlyCostComparisonMapper.SavedSnapshot::json)));
     var inputs=query.taskInputs(ids).stream().collect(Collectors.toMap(MonthlyCostComparisonMapper.TaskInput::versionId,v->input(v.inputJson())));
     var bomIds=partRows.stream().map(CostRunPartItem::getBomRowId).filter(Objects::nonNull).distinct().toList();
     var bomRows=bomIds.isEmpty()?List.<BomCostingRow>of():boms.selectBatchIds(bomIds);
@@ -62,7 +64,7 @@ public class MonthlyCostComparisonInputs {
     for(var version:versions) {
       var raw=snapshotRows.get(version.getId());
       if(raw==null) throw new IllegalStateException("所选成本版本已不存在");
-      var snapshot=raw.json()==null?null:codec.decode(raw.json(),MonthlyCostVersionService.Snapshot.class);
+      var snapshot=decoded.get(version.getId());
       MonthlyCostVersionService.validateSavedSnapshot(version,snapshot);
       var p=partRows.stream().filter(r->version.getId().equals(r.getCostRunVersionId())).toList();
       var c=costRows.stream().filter(r->version.getId().equals(r.getCostRunVersionId())).toList();

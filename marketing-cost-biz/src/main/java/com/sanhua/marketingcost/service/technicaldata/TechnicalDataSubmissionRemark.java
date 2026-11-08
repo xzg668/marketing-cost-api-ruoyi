@@ -32,6 +32,45 @@ public class TechnicalDataSubmissionRemark {
     return generate(productLabel, submission, true);
   }
 
+  public record SubmittedProduct(String productLabel, QuoteTechSubmission submission) {}
+
+  /** 多产品整单共用一个 OA 意见字段；摘要从冻结内容生成，完整明细保留在工作台。 */
+  public String generateDocument(List<SubmittedProduct> products) {
+    if (products == null || products.isEmpty()) throw invalid("本次没有提交产品");
+    var full = products.stream().map(row -> generate(row.productLabel(), row.submission())).toList();
+    String text = String.join("\n", full);
+    if (fitsOa(text)) return text;
+    text = String.join("\n", products.stream().map(row -> generateBrief(row.productLabel(), row.submission())).toList());
+    if (fitsOa(text)) return text;
+    var modules = new java.util.EnumMap<TechnicalDataModuleType, Integer>(TechnicalDataModuleType.class);
+    int ownPrices = 0, sharedPrices = 0;
+    for (var product : products) {
+      var snapshot = read(product.submission().getContentSnapshotJson());
+      for (var value : read(product.submission().getModuleTypesJson())) {
+        var type = TechnicalDataModuleType.valueOf(value.asText()); modules.merge(type, 1, Integer::sum);
+        if (type == TechnicalDataModuleType.PRICE) {
+          ownPrices += rows(object(object(snapshot, "supplements"), "prices"), "items").size();
+          sharedPrices += sharedPrices(object(snapshot, "details")).size();
+        }
+      }
+    }
+    var parts = new ArrayList<String>();
+    for (var module : modules.entrySet()) {
+      String label = switch (module.getKey()) {
+        case DRAWING_BOM -> "图库";
+        case MANUFACTURING -> "制造件";
+        default -> module.getKey().displayName();
+      };
+      parts.add(label + module.getValue() + "个产品" + (module.getKey() == TechnicalDataModuleType.PRICE
+          ? "（自填" + ownPrices + "项、引用" + sharedPrices + "项）" : ""));
+    }
+    text = "本次提交" + products.size() + "个产品：" + String.join("、", parts) + "。完整明细见补录工作台。";
+    com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowClient.validateRemark(text);
+    return text;
+  }
+
+  private static boolean fitsOa(String text) { return text.codePointCount(0, text.length()) <= 200; }
+
   private String generate(String productLabel, QuoteTechSubmission submission, boolean brief) {
     if (productLabel == null || productLabel.isBlank() || submission == null
         || !Integer.valueOf(2).equals(submission.getContentSchemaVersion())) {
@@ -73,7 +112,7 @@ public class TechnicalDataSubmissionRemark {
         case SOLDER -> solder(object(supplements, "solder"));
         case SALARY -> salary(details);
         case NET_LOSS -> netLoss(object(supplements, "netLoss"));
-        case PRICE -> prices(object(supplements, "prices"));
+        case PRICE -> prices(details, object(supplements, "prices"));
       };
       if (value.isBlank()) throw invalid(type.displayName() + "缺少实际内容");
       String label = brief && type == TechnicalDataModuleType.DRAWING_BOM ? "图库" : type.displayName();
@@ -129,6 +168,9 @@ public class TechnicalDataSubmissionRemark {
           .movePointRight(2).stripTrailingZeros().toPlainString() + "%";
       case PRICE -> {
         var items = rows(object(supplements, "prices"), "items");
+        var shared = sharedPrices(details);
+        if (!shared.isEmpty()) yield items.isEmpty() ? "引用" + shared.size() + "项已有价格"
+            : "自填" + items.size() + "项，引用" + shared.size() + "项已有价格";
         if (items.isEmpty()) throw invalid("价格没有实际明细");
         var first = items.get(0);
         yield items.size() == 1 && "FIXED".equals(requiredText(first, "entryMode"))
@@ -299,7 +341,7 @@ public class TechnicalDataSubmissionRemark {
     return join(fields);
   }
 
-  private String prices(JsonNode content) {
+  private String prices(JsonNode details, JsonNode content) {
     List<String> items = new ArrayList<>();
     for (JsonNode row : rows(content, "items")) {
       List<String> fields = new ArrayList<>();
@@ -323,7 +365,37 @@ public class TechnicalDataSubmissionRemark {
       addText(fields, row, "notes", "备注");
       items.add(join(fields));
     }
+    var shared = sharedPrices(details);
+    if (!shared.isEmpty()) items.add("引用已有补录价格：" + String.join("、", shared));
+    if (items.isEmpty()) throw invalid("价格没有实际明细");
     return items(items);
+  }
+
+  /** 只读本次冻结的共享依据，既不重查当前草稿，也不复制或发布第二份价格。 */
+  private List<String> sharedPrices(JsonNode details) {
+    var result = new ArrayList<String>();
+    for (var module : rows(details, "modules")) {
+      if (!"PRICE".equals(text(module, "moduleType")) || !"TECH_PRICE_SHARED".equals(text(module, "referenceSourceType"))) continue;
+      var reference = read(requiredText(module, "referenceSnapshotJson"));
+      var requirements = object(reference, "requirements");
+      if (!requirements.path("issues").isArray() || !requirements.path("issues").isEmpty()) throw invalid("共享价格尚未通过检查");
+      var owners = rows(reference, "owners");
+      var items = rows(requirements, "items");
+      if (items.isEmpty()) throw invalid("共享价格没有实际引用");
+      for (var item : items) {
+        String code = requiredText(item, "materialNo");
+        if (!"SHARED".equals(text(item, "status"))) throw invalid("共享价格尚未填完整：" + code);
+        boolean owned = false;
+        for (var owner : owners) {
+          if (code.equals(text(owner, "materialNo")) && owner.path("productId").asLong() > 0 && owner.path("versionId").asLong() > 0
+              && requiredText(item, "organizationCode").equals(text(owner, "organizationCode"))
+              && requiredText(item, "unit").equals(text(owner, "unit")) && requiredText(item, "currency").equals(text(owner, "currency"))) owned = true;
+        }
+        if (!owned || result.contains(code)) throw invalid("共享价格来源缺失或重复：" + code);
+        result.add(code);
+      }
+    }
+    return List.copyOf(result);
   }
 
   private JsonNode evidence(JsonNode item) {

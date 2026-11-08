@@ -3,13 +3,10 @@ package com.sanhua.marketingcost.service.electronicdrawing;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
-import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
-import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher;
 import com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.PublicationContext;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataCostingSources;
@@ -17,7 +14,6 @@ import com.sanhua.marketingcost.service.technicaldata.TechnicalDataDrawingSnapsh
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataVersionContentCodec;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
@@ -30,12 +26,11 @@ public class ElectronicDrawingPreparationSource {
   private final TechnicalDataVersionContentCodec content;
   private final OaMessageCodec json;
   private final ElectronicDrawingSourceNodeRepository sourceNodes;
-  private final QuoteProductBomPreparationService preparation;
-  private final QuoteBomPreparationRecordMapper preparationRecords;
   private final ElectronicDrawingWorkflowContextPort contexts;
   private final QuoteBomSupplementVersionMapper versions;
   private final QuoteBomMonthlySnapshotMapper snapshots;
   private final ApprovedElectronicBomRawSnapshotPublisher converter;
+  private final DrawingVerificationService verifications;
 
   public ElectronicDrawingPreparationSource(
       ElectronicDrawingWorkflowContextPort contexts,
@@ -46,18 +41,35 @@ public class ElectronicDrawingPreparationSource {
       TechnicalDataVersionContentCodec content,
       OaMessageCodec json,
       ElectronicDrawingSourceNodeRepository sourceNodes,
-      QuoteProductBomPreparationService preparation,
-      QuoteBomPreparationRecordMapper preparationRecords) {
+      DrawingVerificationService verifications) {
+    this.verifications = verifications;
     this.technicalSources = technicalSources;
     this.content = content;
     this.json = json;
     this.sourceNodes = sourceNodes;
-    this.preparation = preparation;
-    this.preparationRecords = preparationRecords;
     this.contexts = contexts;
     this.versions = versions;
     this.snapshots = snapshots;
     this.converter = converter;
+  }
+
+  /** 已有月度快照可直接查看；主动核算产生的新核验未完成时，禁止退回旧快照。 */
+  public String currentBlockReason(Long itemId, String month, String businessUnit, String org) {
+    var context = contexts.load(itemId, businessUnit, org, month);
+    var current = verifications.current(context).orElse(null);
+    // 此方法仅在调用方已经找到适用月度快照时使用。跨月/跨报价读取不要求重复取图；
+    // 主动核算入口仍先发起最新明细核验，有任务后严格检查其结果和组树状态。
+    if (current == null) return null;
+    if (!"RECEIVED".equals(current.getTaskState()))
+      return "WAIT_REVIEW".equals(current.getTaskState()) ? "最新图库明细待确认，请先完成图库核对"
+          : "本次图库核验尚未完成，请查看取图结果后继续";
+    var source = context.sourceVersionId() == null ? null : versions.selectById(context.sourceVersionId());
+    if (source == null || !Objects.equals(source.getDrawingResultId(), current.getCurrentResultId())
+        || !Objects.equals(current.getConsumedResultId(), current.getCurrentResultId()))
+      return "最新图库明细已接收，等待处理明细变化及对应补录资料";
+    if (!context.published() && !ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage()))
+      return "最新图库明细尚未形成完整 BOM，请处理变化节点的料号或补录资料";
+    return null;
   }
 
   public QuoteBomMonthlySnapshot snapshot(
@@ -67,9 +79,6 @@ public class ElectronicDrawingPreparationSource {
       String org,
       String customer,
       String packageMethod) {
-    var shared = technicalSources.sharedDrawing(itemId, month);
-    if (shared != null)
-      return sharedSnapshot(itemId, month, businessUnit, org, customer, packageMethod, shared);
     var context = contexts.load(itemId, businessUnit, org, month);
     if (!ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage())
         || context.published()) return null;
@@ -150,75 +159,11 @@ public class ElectronicDrawingPreparationSource {
     return preview(context, snapshot.getBomBatchId());
   }
 
-  public boolean prepareSharedDrawing(Long itemId, String month) {
-    if (technicalSources.sharedDrawing(itemId, month) == null) return false;
-    var prepared = preparation.prepareByOaFormItem(itemId, YearMonth.parse(month).atDay(1), month);
-    if (prepared == null || prepared.preparationRecordId() == null)
-      throw new IllegalStateException("本报价 BOM 准备记录尚未建立");
-    return true;
-  }
-
   /** 财务归类完成后接续本单已组好的图库；图号取已确认来源，客户图号允许未填写。 */
   public String composedDrawingNo(Long itemId, String month, String businessUnit, String org) {
     var context = contexts.load(itemId, businessUnit, org, month);
     if (!ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage())) return null;
     return requireVersion(context, true).getElectronicDrawingNo();
-  }
-
-  private QuoteBomMonthlySnapshot sharedSnapshot(
-      Long itemId,
-      String month,
-      String businessUnit,
-      String org,
-      String customer,
-      String packageMethod,
-      TechnicalDataCostingSources.Source shared) {
-    var original = sharedContext(shared, businessUnit, org);
-    String batch = sharedBatch(shared, original);
-    var current = preparation.prepareByOaFormItem(itemId, YearMonth.parse(month).atDay(1), month);
-    if (current == null || current.preparationRecordId() == null)
-      throw new IllegalStateException("本报价 BOM 准备记录尚未建立");
-    preparationRecords.update(
-        null,
-        Wrappers.<QuoteBomPreparationRecord>lambdaUpdate()
-            .eq(QuoteBomPreparationRecord::getId, current.preparationRecordId())
-            .set(QuoteBomPreparationRecord::getPreparationStatus, "READY")
-            .set(QuoteBomPreparationRecord::getReusedFromOaFormItemId, original.oaFormItemId())
-            .set(QuoteBomPreparationRecord::getReuseType, "APPROVED_TECH_DRAWING")
-            .set(QuoteBomPreparationRecord::getErrorMessage, null));
-    var found =
-        snapshots.selectList(
-            Wrappers.<QuoteBomMonthlySnapshot>lambdaQuery()
-                .eq(QuoteBomMonthlySnapshot::getSourceOaFormItemId, itemId)
-                .eq(QuoteBomMonthlySnapshot::getCostPeriodMonth, month)
-                .eq(QuoteBomMonthlySnapshot::getBomBatchId, batch)
-                .eq(QuoteBomMonthlySnapshot::getSyncStatus, "DRAFT"));
-    if (found.size() > 1) throw new IllegalStateException("本报价复用图库准备记录重复");
-    if (!found.isEmpty()) return found.getFirst();
-    var snapshot = new QuoteBomMonthlySnapshot();
-    snapshot.setProductCode(original.quoteProductCode());
-    snapshot.setPriceOrgCode(org);
-    snapshot.setBusinessUnitType(businessUnit);
-    snapshot.setMaterialOrganizationCode(original.materialOrgCode());
-    snapshot.setCustomerCode(customer);
-    snapshot.setPackageMethod(packageMethod);
-    snapshot.setCostPeriodMonth(month);
-    snapshot.setBomSource(versions.selectById(original.sourceVersionId()).getBomSource());
-    snapshot.setBomPurpose("主制造");
-    snapshot.setBomVersion("ED-" + original.sourceVersionId());
-    snapshot.setSyncType("TECH_PREPARATION");
-    snapshot.setSyncStatus("DRAFT");
-    snapshot.setSyncAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
-    snapshot.setSyncBy("系统");
-    snapshot.setSourceOaNo(current.oaNo());
-    snapshot.setSourceOaFormItemId(itemId);
-    snapshot.setBomBatchId(batch);
-    snapshot.setStructureFingerprint(
-        versions.selectById(original.sourceVersionId()).getCompositionFingerprint());
-    snapshot.setActiveFlag(1);
-    snapshot.setLineCount(preview(original, batch).size());
-    snapshots.insert(snapshot);
-    return snapshot;
   }
 
   private ElectronicDrawingWorkContext sharedContext(

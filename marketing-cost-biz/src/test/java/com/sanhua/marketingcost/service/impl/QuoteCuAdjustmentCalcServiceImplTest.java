@@ -59,6 +59,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   private QuoteCostRunVersionService versionService;
   private QuoteCostRunVersionMapper versionMapper;
   private CostRunEngine costRunEngine;
+  private com.sanhua.marketingcost.service.reprice.MonthlyRepriceCostingReuse reuse;
   private QuoteCostPriceScenarioMapper scenarioMapper;
   private QuoteCuAdjustmentCalcServiceImpl service;
   private OaForm form;
@@ -78,6 +79,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     versionService = mock(QuoteCostRunVersionService.class);
     versionMapper = mock(QuoteCostRunVersionMapper.class);
     costRunEngine = mock(CostRunEngine.class);
+    reuse = mock(com.sanhua.marketingcost.service.reprice.MonthlyRepriceCostingReuse.class);
     scenarioMapper = mock(QuoteCostPriceScenarioMapper.class);
     service = new QuoteCuAdjustmentCalcServiceImpl(
         batchMapper,
@@ -85,7 +87,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
         versionService,
         versionMapper,
         costRunEngine,
-        scenarioMapper, null);
+        scenarioMapper, null, reuse);
 
     form = form(new BigDecimal("102039"));
     item = item();
@@ -198,6 +200,33 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   private QuoteCuAdjustmentCalcRequest request() {
     return new QuoteCuAdjustmentCalcRequest(
         form, item, MONTH, "PPR-OA-1", "QUOTE:11", ignored -> {});
+  }
+
+  @Test void monthlyCostingReceivesTheSelectedQuotationBeforeResolvingSharedInputs() {
+    when(versionService.createRunning(anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(version(101L));
+    form.setSourceBusinessDivision("保存的事业部");
+    var organization = new com.sanhua.marketingcost.dto.QuoteDataOrganization("210", "COMMERCIAL");
+    var bomContext = new com.sanhua.marketingcost.service.ingest.QuoteBomContext(
+        MONTH, "PROD-1", null, "BOX", organization);
+    var input = new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomService.Input(form, item, bomContext);
+    var bom = new com.sanhua.marketingcost.entity.QuoteBomStatus();
+    bom.setSyncRecordId(1L); bom.setCostPeriodMonth(MONTH);
+    var calculation = new com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation(
+        "MRP1130-selected-oa", "a".repeat(64), input, bom, AS_OF);
+    when(reuse.resolve(any(),any(),any(),any())).thenAnswer(call -> {
+      CostRunContext actual = call.getArgument(2);
+      assertThat(actual.getScene()).isEqualTo(CostRunContext.SCENE_MONTHLY_REPRICE);
+      assertThat(actual.getPriceOrgCode()).isEqualTo("210");
+      assertThat(actual.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+      assertThat(actual.getQuotationInput()).isNotNull();
+      assertThat(actual.getQuotationInput().form().getSourceBusinessDivision()).isEqualTo("保存的事业部");
+      actual.getQuotationInput().requireFor(actual, "OA-1", "PROD-1");
+      throw new IllegalStateException("engine-boundary-verified");
+    });
+    assertThatThrownBy(() -> service.calculate(new QuoteCuAdjustmentCalcRequest(
+        form, item, MONTH, "PPR-OA-1", "a".repeat(64), null, true, calculation)))
+        .isInstanceOf(IllegalStateException.class).hasMessage("engine-boundary-verified");
   }
 
   private OaForm form(BigDecimal copperPrice) {

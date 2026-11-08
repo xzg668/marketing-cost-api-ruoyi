@@ -18,8 +18,20 @@ class MonthlyCostComparisonProjectionTest {
     return new MonthlyCostComparisonInputs.Loaded(new MonthlyCostVersionService.Stored(v,null,List.of(p),List.of()),null,
         savedPath?Map.of(77L,bom):Map.of(),List.of(),List.of(),Map.of());
   }
-  @Test void missingHistoricalBomPathIsRejectedEvenWithAnExistingPreparationId(){
-    assertThatThrownBy(()->projection.project(legacy(false))).hasMessageContaining("历史部品未保存计价路径");
+  @Test void missingHistoricalPathRetainsItsSavedAmountWithoutGuessingFromThePreparationId(){
+    var result=projection.project(legacy(false));
+    assertThat(result.lines()).singleElement().satisfies(line->{
+      assertThat(line.key().pricingPaths()).isEmpty();
+      assertThat(line.key().unmatchedKey()).isEqualTo("LEGACY:1:2");
+      assertThat(line.amounts().get(MonthlyCostComparison.Metric.MATERIAL)).isEqualByComparingTo("12.30");
+    });
+  }
+  @Test void nullHistoricalBomReferenceDoesNotBlockTheOtherProductsInAReport(){
+    var input=legacy(false);input.saved().parts().getFirst().setBomRowId(null);
+    assertThat(projection.project(input).lines()).singleElement().satisfies(line->{
+      assertThat(line.key().unmatchedKey()).isEqualTo("LEGACY:1:2");
+      assertThat(line.amounts().get(MonthlyCostComparison.Metric.MATERIAL)).isEqualByComparingTo("12.30");
+    });
   }
   @Test void savedHistoricalPathAndMaterialAmountArePreservedWithoutInventingProductFees(){
     var p=projection.project(legacy(true));assertThat(p.lines().getFirst().key().pricingPaths()).containsExactly("000A/000B");

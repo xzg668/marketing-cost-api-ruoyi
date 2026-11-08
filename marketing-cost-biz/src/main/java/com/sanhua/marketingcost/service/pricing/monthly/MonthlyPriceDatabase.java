@@ -37,6 +37,7 @@ public final class MonthlyPriceDatabase implements AutoCloseable {
   }
   public MonthlyMaterialPriceService createService(MonthlyPriceCandidateResolver sources){return new MonthlyMaterialPriceService(storage,transactions,codec,sources,ACQUISITION_BUDGET);}
   HikariDataSource pool(){return pool;}
+  public int maximumPoolSize(){return pool.getMaximumPoolSize();}
   @Override public void close(){pool.close();}
 
   private static String boundedUrl(String original){
