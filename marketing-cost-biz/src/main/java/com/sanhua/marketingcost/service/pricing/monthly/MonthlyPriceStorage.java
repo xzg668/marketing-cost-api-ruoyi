@@ -170,6 +170,15 @@ public class MonthlyPriceStorage {
     });
     return List.copyOf(result);
   }
+  public List<StoredPrice> previousSupplemental(String unit,YearMonth month,Collection<String> codes) {
+    requireBusinessUnit(unit);
+    var unique=new ArrayList<>(new LinkedHashSet<>(codes));var result=new ArrayList<StoredPrice>();
+    for(int start=0;start<unique.size();start+=256)
+      mapper.previousSupplemental(unit,month.toString(),unique.subList(start,Math.min(start+256,unique.size())))
+          .forEach(row->result.add(read(row)));
+    return List.copyOf(result);
+  }
+
   public Map<MonthlyPriceRequest,Long> invoiceRevisions(Collection<MonthlyPriceRequest> requests) {
     var result=new LinkedHashMap<MonthlyPriceRequest,Long>();
     var groups=new LinkedHashMap<String,Set<String>>();

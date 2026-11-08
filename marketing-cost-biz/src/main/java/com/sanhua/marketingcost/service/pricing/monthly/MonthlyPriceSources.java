@@ -28,19 +28,22 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
   private final MonthlyOdsPriceSource ods;
   private final MonthlyInvoicePriceSource invoices;
   private final MonthlyInquiryPriceSource inquiries;
+  private final MonthlyRepriceSupplementalPriceSource historicalSupplemental;
 
   public MonthlyPriceSources(MaterialPricePriorityService priorities,HouseholdMonthlyPriceSource household,
       MonthlyFixedPriceSource fixed,MonthlySettlementPriceSource settlement,MonthlyLegacyLinkedPriceSource linked,
       MonthlyOriginalLinkedPriceSource originalLinked,MonthlyLegacyRangePriceSource range,
       MonthlyOriginalRangePriceSource originalRange,MonthlyQuantityRangeSource quantities,
       MonthlyLegacyRangeSourceMapper rangeRows,MonthlySupplementalFixedPriceSource supplemental,MonthlyScrapPriceSource scrap,
-      MonthlyOdsPriceSource ods,MonthlyInvoicePriceSource invoices,MonthlyInquiryPriceSource inquiries) {
+      MonthlyOdsPriceSource ods,MonthlyInvoicePriceSource invoices,MonthlyInquiryPriceSource inquiries,
+      MonthlyRepriceSupplementalPriceSource historicalSupplemental) {
     this.priorities=priorities;this.household=household;this.fixed=fixed;this.settlement=settlement;
     this.linked=linked;this.originalLinked=originalLinked;this.range=range;this.originalRange=originalRange;
     this.quantities=quantities;this.rangeRows=rangeRows;this.supplemental=supplemental;this.scrap=scrap;
     this.ods=ods;
     this.invoices=invoices;
     this.inquiries=inquiries;
+    this.historicalSupplemental=historicalSupplemental;
   }
 
   @Override public Candidates resolve(Context context,Set<MonthlyPriceRequest> requests,
@@ -101,7 +104,8 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
-      var found=supplemental.read(context,Set.copyOf(pending));requireComplete(pending,found);
+      var currentSupplemental=supplemental.read(context,Set.copyOf(pending));requireComplete(pending,currentSupplemental);
+      var found=historicalSupplemental.fill(context,currentSupplemental);
       accept(found,pending,values,problems);
       pending.forEach(request->problems.put(request,found.problems().get(request)));
     }

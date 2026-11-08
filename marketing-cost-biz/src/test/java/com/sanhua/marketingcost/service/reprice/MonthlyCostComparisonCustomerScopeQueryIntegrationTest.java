@@ -21,7 +21,8 @@ class MonthlyCostComparisonCustomerScopeQueryIntegrationTest {
       .withLabel("sales-cost.task",System.getProperty("mpp.mysql.task","monthly-reprice-reuse-20261105-r02")).withReuse(Boolean.getBoolean("mpp.mysql.retain")).withConfigurationOverride("monthly-pricing/mysql").withDatabaseName("comparison_query").withUsername("root").withPassword("query-only-test");
   static JdbcTemplate jdbc;static MonthlyCostComparisonMapper mapper;
   @BeforeAll static void setup() throws Exception {
-    MYSQL.start();var ds=new DriverManagerDataSource(MYSQL.getJdbcUrl(),MYSQL.getUsername(),MYSQL.getPassword());jdbc=new JdbcTemplate(ds);
+    MYSQL.start();var properties=new Properties();properties.setProperty("connectionCollation","utf8mb4_unicode_ci");
+    var ds=new DriverManagerDataSource(MYSQL.getJdbcUrl(),MYSQL.getUsername(),MYSQL.getPassword());ds.setConnectionProperties(properties);jdbc=new JdbcTemplate(ds);
     assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     jdbc.execute("CREATE TABLE oa_form(id BIGINT PRIMARY KEY,oa_no VARCHAR(64),business_unit_type VARCHAR(32))");
     jdbc.execute("CREATE TABLE oa_form_item(id BIGINT PRIMARY KEY,oa_form_id BIGINT,business_unit_type VARCHAR(32))");
@@ -69,6 +70,25 @@ class MonthlyCostComparisonCustomerScopeQueryIntegrationTest {
     jdbc.update("INSERT INTO lp_cost_run_task(batch_no,scene,source_no,calc_object_key,oa_no,oa_form_item_id,product_code,business_unit_type,pricing_month,status,cost_run_version_id,error_message) VALUES(?,'MONTHLY_REPRICE',?,?,?,?,'00001','COMMERCIAL',?,?,?,?)",
         no,no,key,oa,item,month,success?"SUCCESS":"FAILED",success?saved:null,success?null:"Missing actual material price");
     jdbc.update("INSERT INTO lp_monthly_reprice_source(batch_id,object_id,source_cost_version_id,oa_no,oa_form_item_id,source_snapshot_json) VALUES(?,?,?,?,?,'{}')",batch,object,saved,oa,item);
+  }
+  @Test void mixedLegacyAndReuseCollationsRemainQueryableWithoutAnySavedObjects() {
+    // The production schema intentionally preserves legacy unicode_ci and exact source identities.
+    assertThat(jdbc.queryForObject("SELECT @@collation_connection",String.class)).isEqualTo("utf8mb4_unicode_ci");
+    assertThat(jdbc.queryForObject("SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='lp_quote_cost_run_version' AND COLUMN_NAME='oa_no'",String.class))
+        .isEqualTo("utf8mb4_unicode_ci");
+    assertThat(jdbc.queryForObject("SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='lp_monthly_reprice_source' AND COLUMN_NAME='oa_no'",String.class))
+        .isEqualTo("utf8mb4_bin");
+    for(boolean review:List.of(false,true)) {
+      var empty=scope("HOUSEHOLD",review,1,20);
+      assertThat(mapper.coverage(empty)).isEmpty();
+      assertThat(mapper.countObjects(empty)).isZero();
+      assertThat(mapper.pageSelections(empty)).isEmpty();
+      var exported=new ArrayList<Selected>();
+      mapper.exportSelections(empty,row->exported.add(row.getResultObject()));
+      assertThat(exported).isEmpty();
+      assertThat(mapper.countHistoricalSources(empty,1)).isZero();
+      assertThat(mapper.historicalSources(empty,1)).isEmpty();
+    }
   }
   @Test void sameProductAndCustomerPairsAcrossDifferentRepresentativeOasBeforePagination() {
     customerMonth("2025-12","OA-OLD",1,"Customer-A",true);
@@ -196,4 +216,62 @@ class MonthlyCostComparisonCustomerScopeQueryIntegrationTest {
         .singleElement().satisfies(s->assertThat(s.versionId()).isNull());
     assertThat(streamed).allSatisfy(s->assertThat(s.businessUnitType()).isEqualTo("COMMERCIAL"));
   }
+  @Test void capturedLegacyRepricingSourceIdentityAlsoIdentifiesItsExactPriorCost() {
+    long old=version("COMMERCIAL","OA-CHAIN",901,"2025-12","SUCCESS","2025-12-10 12:00:00",null,true);
+    owner("CHAIN-MR","COMMERCIAL","2026-03","CONFIRMED");
+    long current=version("COMMERCIAL","OA-CHAIN",901,"2026-03","SUCCESS","2026-03-10 12:00:00","CHAIN-MR",true);
+    capturedTask("CHAIN-MR",current,old,"Customer-A","OA-CHAIN",901);
+    var rows=mapper.pageSelections(scope("COMMERCIAL",false,1,20));
+    assertThat(mapper.countObjects(scope("COMMERCIAL",false,1,20))).isEqualTo(1);
+    assertThat(rows).hasSize(2).allMatch(x->x.identity().matched() && x.customerValue().equals("Customer-A"));
+    assertThat(rows.stream().map(Selected::versionId)).containsExactlyInAnyOrder(old,current);
+  }
+  @Test void conflictingCapturedCustomerClaimsNeverGuessAnOldCostCustomer() {
+    long old=version("COMMERCIAL","OA-CONFLICT",902,"2025-12","SUCCESS","2025-12-10 12:00:00",null,true);
+    owner("CLAIM-A","COMMERCIAL","2026-03","CONFIRMED");
+    long a=version("COMMERCIAL","OA-CONFLICT",902,"2026-03","HISTORY","2026-03-10 12:00:00","CLAIM-A",true);
+    capturedTask("CLAIM-A",a,old,"Customer-A","OA-CONFLICT",902);
+    owner("CLAIM-B","COMMERCIAL","2026-03","CONFIRMED");
+    long b=version("COMMERCIAL","OA-CONFLICT",902,"2026-03","SUCCESS","2026-03-11 12:00:00","CLAIM-B",true);
+    capturedTask("CLAIM-B",b,old,"Customer-B","OA-CONFLICT",902);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",false,1,20)).stream().filter(x->Objects.equals(x.versionId(),old)))
+        .singleElement().satisfies(x->assertThat(x.identity().matched()).isFalse());
+  }
+  @Test void aDifferentOriginalOaCannotLendItsCapturedIdentityToAnotherCost() {
+    long old=version("COMMERCIAL","OA-OWNER",903,"2025-12","SUCCESS","2025-12-10 12:00:00",null,true);
+    owner("WRONG-CLAIM","COMMERCIAL","2026-03","CONFIRMED");
+    long current=version("COMMERCIAL","OA-OTHER",904,"2026-03","SUCCESS","2026-03-10 12:00:00","WRONG-CLAIM",true);
+    capturedTask("WRONG-CLAIM",current,old,"Customer-A","OA-OTHER",904);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",false,1,20)).stream().filter(x->Objects.equals(x.versionId(),old)))
+        .singleElement().satisfies(x->assertThat(x.identity().matched()).isFalse());
+  }
+  @Test void currentCapturedSourcePairsItsExactPriorCostWithAnUnfinishedCustomerObject() {
+    long old=version("COMMERCIAL","OA-CAPTURE",905,"2025-12","SUCCESS","2025-12-10",null,true);
+    customerMonth("2026-03","OA-CAPTURE",905,"Customer-A",false);
+    captureSource(old,"OA-CAPTURE",905,"Customer-A");
+    assertThat(mapper.countObjects(scope("COMMERCIAL",true,1,20))).isEqualTo(1);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",true,1,20))).hasSize(2)
+        .allSatisfy(row -> assertThat(row.customerValue()).isEqualTo("Customer-A"));
+  }
+
+  @Test void currentCaptureWithWrongVersionIdentityCannotLendACustomer() {
+    long old=version("COMMERCIAL","OA-CAPTURE",905,"2025-12","SUCCESS","2025-12-10",null,true);
+    customerMonth("2026-03","OA-CAPTURE",905,"Customer-A",false);
+    captureSource(old,"OA-CAPTURE",905,"Customer-A");
+    jdbc.update("UPDATE lp_monthly_reprice_source SET source_snapshot_json=JSON_SET(source_snapshot_json,'$.version.oaNo','WRONG-OA')");
+    assertThat(mapper.countObjects(scope("COMMERCIAL",true,1,20))).isEqualTo(2);
+    assertThat(mapper.pageSelections(scope("COMMERCIAL",true,1,20)).stream().filter(row -> Objects.equals(row.versionId(),old)))
+        .singleElement().satisfies(row -> assertThat(row.identity().matched()).isFalse());
+  }
+
+  static void captureSource(long source,String oa,long item,String customer) {
+    String snapshot="{\"version\":{\"id\":"+source+",\"oaNo\":\""+oa+"\",\"oaFormItemId\":"+item+",\"productCode\":\"00001\",\"businessUnitType\":\"COMMERCIAL\"},\"form\":{\"customer\":\""+customer+"\"}}";
+    jdbc.update("UPDATE lp_monthly_reprice_source SET source_cost_version_id=?,source_snapshot_json=? WHERE oa_no=? AND oa_form_item_id=?",source,snapshot,oa,item);
+  }
+
+  static void capturedTask(String batch,long current,long source,String customer,String oa,long item) {
+    var snapshot="{\"sourceCostVersionId\":"+source+",\"bomInput\":{\"context\":{\"customer\":{\"source\":\"OA_HEADER_CUSTOMER\",\"value\":\""+customer+"\"}}}}";
+    jdbc.update("INSERT INTO lp_cost_run_task(batch_no,scene,source_no,calc_object_key,oa_no,oa_form_item_id,product_code,business_unit_type,pricing_month,status,cost_run_version_id,request_snapshot_json) VALUES(?,'MONTHLY_REPRICE',?,'CHAIN',?,?,'00001','COMMERCIAL','2026-03','SUCCESS',?,?)",batch,batch,oa,item,current,snapshot);
+  }
+
 }

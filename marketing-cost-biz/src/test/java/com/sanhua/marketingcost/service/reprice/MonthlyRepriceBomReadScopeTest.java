@@ -20,6 +20,20 @@ class MonthlyRepriceBomReadScopeTest {
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L,2L,"OA","2026-11",
       "COMMERCIAL","PRODUCT",null,null,null,"210","COMMERCIAL",LocalDate.of(2026,11,1),LocalDateTime.of(2026,11,4,1,0));
 
+  @Test void historicalPriceContextCannotLeakOutsideItsSelectedRepriceConsumer() {
+    var calculation=calculation("2026-11",false);
+    var price=new com.sanhua.marketingcost.service.pricing.monthly.MonthlyMaterialPrices.Context(
+        "COMMERCIAL","OA",2L,"PRODUCT",java.time.YearMonth.of(2026,11),calculation.priceAsOfTime(),"test","210");
+    assertThat(scope.priceContext(price)).isFalse();
+    scope.use(calculation,()->{
+      assertThat(scope.priceContext(price)).isTrue();
+      var wrong=new com.sanhua.marketingcost.service.pricing.monthly.MonthlyMaterialPrices.Context(
+          "COMMERCIAL","OTHER-OA",2L,"PRODUCT",java.time.YearMonth.of(2026,11),calculation.priceAsOfTime(),"test","210");
+      assertThatThrownBy(()->scope.priceContext(wrong)).hasMessageContaining("不能跨");
+      return null;
+    });
+    assertThat(scope.priceContext(price)).isFalse();
+  }
   @Test void availableU9IsReusedWithoutAnotherLookupOrDrawingQuery() {
     scope.use(calculation("2026-11",false), () -> {
       var result=scope.original(context, () -> { throw new AssertionError("must not query U9 twice"); });

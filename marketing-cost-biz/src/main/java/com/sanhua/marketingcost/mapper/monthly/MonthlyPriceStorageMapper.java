@@ -70,4 +70,29 @@ public interface MonthlyPriceStorageMapper {
       <foreach collection="hashes" item="hash" open="(" separator="," close=")">#{hash}</foreach> AND
       """ + CURRENT + " ORDER BY id</script>")
   List<MonthlyMaterialPriceRow> pricesByFamilies(@Param("unit") String unit,@Param("hashes") Collection<String> hashes);
+  /** Only immutable supplemental prices actually consumed by a complete successful historical cost. */
+  @Select("""
+      <script>SELECT m.* FROM lp_material_monthly_price m
+      WHERE m.business_unit_type=#{unit} AND m.pricing_month &lt; #{month}
+        AND m.source_type='TECH_FIXED' AND m.pricing_type='NORMAL'
+        AND m.material_code IN
+        <foreach collection="codes" item="code" open="(" separator="," close=")">#{code}</foreach>
+        AND EXISTS (
+          SELECT 1 FROM lp_cost_run_part_item p JOIN lp_quote_cost_run_version v ON v.id=p.cost_run_version_id
+          WHERE p.monthly_price_id=m.id AND BINARY p.part_code=BINARY m.material_code
+            AND BINARY p.business_unit_type=BINARY m.business_unit_type
+            AND BINARY v.business_unit_type=BINARY m.business_unit_type
+            AND BINARY p.cost_run_no=BINARY v.cost_run_no
+            AND BINARY p.oa_no=BINARY v.oa_no AND p.oa_form_item_id=v.oa_form_item_id
+            AND BINARY p.product_code=BINARY v.product_code AND v.pricing_month=m.pricing_month
+            AND p.monthly_pricing_type='NORMAL' AND v.status IN ('SUCCESS','CONFIRMED','HISTORY')
+            AND v.trial_finished_at IS NOT NULL AND v.total_cost IS NOT NULL
+            AND v.part_item_count&gt;0 AND v.cost_item_count&gt;0
+            AND v.part_item_count=(SELECT COUNT(*) FROM lp_cost_run_part_item complete_parts WHERE complete_parts.cost_run_version_id=v.id)
+            AND v.cost_item_count=(SELECT COUNT(*) FROM lp_cost_run_cost_item complete_costs WHERE complete_costs.cost_run_version_id=v.id))
+      ORDER BY m.pricing_month DESC,m.id DESC</script>
+      """)
+  List<MonthlyMaterialPriceRow> previousSupplemental(@Param("unit") String unit,
+      @Param("month") String month,@Param("codes") Collection<String> codes);
+
 }

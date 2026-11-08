@@ -114,6 +114,7 @@ abstract class MonthlyRepriceCostingFixture extends OriginalPricingIntegrationTe
       raw.setPath("/" + product + "/" + (level == 0 ? "" : material + "/")); raw.setLevel(level); raw.setSortSeq(level);
       raw.setQtyPerParent(new BigDecimal(level == 0 ? "1" : "2.5")); raw.setQtyPerTop(raw.getQtyPerParent());
       raw.setShapeAttr(level == 0 ? "制造件" : "采购件"); raw.setBomPurpose("主制造"); raw.setBomVersion("MPP12");
+      raw.setChildType("NORMAL"); // These synthetic fixtures have no standard/alternative groups.
       raw.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); raw.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1)); raw.setBomStatus("已核准");
       raw.setIsLeaf(level); raw.setU9IsCostFlag(1); raw.setSourceType("U9"); raw.setSourceImportBatchId(product);
       raw.setBuildBatchId(product); raw.setBuiltAt(date); raw.setPriceOrgCode(priceOrg); raw.setBusinessUnitType(unit); rawHierarchy.insert(raw);
@@ -137,6 +138,7 @@ abstract class MonthlyRepriceCostingFixture extends OriginalPricingIntegrationTe
       raw.setLevel(index + 1); raw.setSortSeq(index + 2); raw.setQtyPerParent(index == 0 ? BigDecimal.ZERO : BigDecimal.ONE);
       raw.setQtyPerTop(BigDecimal.ZERO); raw.setShapeAttr(index == 0 ? "虚拟" : "采购件");
       raw.setBomPurpose("主制造"); raw.setBomVersion("MPP12"); raw.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); raw.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1));
+      raw.setChildType("NORMAL");
       raw.setBomStatus("已核准"); raw.setIsLeaf(index); raw.setU9IsCostFlag(1); raw.setSourceType("U9");
       raw.setSourceImportBatchId(product); raw.setBuildBatchId(product); raw.setBuiltAt(date);
       raw.setPriceOrgCode(priceOrg); raw.setBusinessUnitType(unit); rawHierarchy.insert(raw);

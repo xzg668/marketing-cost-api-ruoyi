@@ -69,6 +69,22 @@ public class MonthlyRepriceBomReadScope {
     return current.get().calculation.input().annualUsage();
   }
 
+  /** Historical supplemental reuse is confined to this captured repricing consumer. */
+  public boolean priceContext(com.sanhua.marketingcost.service.pricing.monthly.MonthlyMaterialPrices.Context context) {
+    var read=current.get();
+    if(read==null)return false;
+    var selected=read.calculation;var input=selected.input();
+    if(!Objects.equals(context.businessUnitType(),input.form().getBusinessUnitType())
+        || !Objects.equals(context.oaNo(),input.form().getOaNo())
+        || !Objects.equals(context.oaFormItemId(),input.item().getId())
+        || !Objects.equals(context.productCode(),input.context().productCode())
+        || !Objects.equals(context.month().toString(),input.context().costPeriodMonth())
+        || !Objects.equals(context.priceAsOfTime(),selected.priceAsOfTime())
+        || !Objects.equals(context.consumerOrg(),input.context().organization().priceOrgCode()))
+      throw new IllegalArgumentException("历史补录价格不能跨调价产品、客户、月份或组织采用");
+    return true;
+  }
+
   public CurrentU9BomResult original(QuoteBomReadContext context, Supplier<CurrentU9BomResult> lookup) {
     var read = requiredScope(context);
     if (read == null) return lookup.get();

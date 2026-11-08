@@ -136,6 +136,31 @@ class CostRunPublicInputPreparationIntegrationTest {
     assertThat(requests).allSatisfy(r -> assertThat(r.context().getPreparedInputs()).isNull());
   }
 
+  @Test void selectedBomScopeIsAppliedIndividuallyBeforePublicSourcesAreShared() {
+    var requests = requests(fixture(), 2);
+    var activeItem = new ThreadLocal<Long>();
+    when(technical.resolve(anyLong(), anyString())).thenAnswer(invocation -> {
+      assertThat(activeItem.get()).as("approval must read this consumer's selected BOM")
+          .isEqualTo(invocation.getArgument(0, Long.class));
+      return null;
+    });
+    var prepared = preparation.prepare(requests, (request, query) -> {
+      assertThat(activeItem.get()).isNull();
+      activeItem.set(request.context().getOaFormItemId());
+      try { return query.get(); } finally { activeItem.remove(); }
+    });
+    assertThat(prepared).hasSize(2);
+    assertThat(activeItem.get()).isNull();
+    for (var request : requests) verify(technical).resolve(request.context().getOaFormItemId(), year + "-10");
+    doThrow(new IllegalStateException("this customer's approval is incomplete"))
+        .when(technical).resolve(requests.getLast().context().getOaFormItemId(), year + "-10");
+    assertThatThrownBy(() -> preparation.prepare(requests, (request, query) -> {
+      activeItem.set(request.context().getOaFormItemId());
+      try { return query.get(); } finally { activeItem.remove(); }
+    })).hasMessageContaining("approval is incomplete");
+    assertThat(activeItem.get()).isNull();
+  }
+
   @Test void emptyAndOversizedBatchesDoNotReadOrResolveApproval() {
     int before = statements();
     assertThat(preparation.prepare(List.of())).isEmpty();

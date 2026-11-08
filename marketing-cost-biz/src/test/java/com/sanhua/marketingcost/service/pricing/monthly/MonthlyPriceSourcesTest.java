@@ -30,13 +30,15 @@ class MonthlyPriceSourcesTest {
   final MonthlyOdsPriceSource ods=fake(MonthlyOdsPriceSource.class);
   final MonthlyInvoicePriceSource invoices=fake(MonthlyInvoicePriceSource.class);
   final MonthlyInquiryPriceSource inquiries=fake(MonthlyInquiryPriceSource.class);
-  final MonthlyPriceSources sources=new MonthlyPriceSources(priorities,household,fixed,settlement,linked,originalLinked,range,originalRange,quantities,rangeRows,supplemental,scrap,ods,invoices,inquiries);
+  final MonthlyRepriceSupplementalPriceSource historical=fake(MonthlyRepriceSupplementalPriceSource.class);
+  final MonthlyPriceSources sources=new MonthlyPriceSources(priorities,household,fixed,settlement,linked,originalLinked,range,originalRange,quantities,rangeRows,supplemental,scrap,ods,invoices,inquiries,historical);
   final Context context=new Context("COMMERCIAL","route",1L,"product",YearMonth.of(2026,10),LocalDateTime.of(2026,10,1,0,0),"test","210");
   static <T> T fake(Class<T> type){return java.lang.reflect.Modifier.isFinal(type.getModifiers())?mock(type,withSettings().mockMaker(org.mockito.MockMakers.INLINE)):mock(type);}
   boolean manual=false;
   List<MaterialPriceSourceType> order=MaterialPriceSourceType.DEFAULT_ORDER;
 
   @BeforeEach void missingSources() {
+    when(historical.fill(any(),any())).thenAnswer(call->call.getArgument(1));
     when(household.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of()));
     when(scrap.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of()));
     when(priorities.readBatch(any(),anyMap(),eq(false))).thenAnswer(call->{
@@ -60,6 +62,22 @@ class MonthlyPriceSourcesTest {
     when(supplemental.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
   }
   Candidates read(Set<MonthlyPriceRequest> requests){return sources.resolve(context,requests,ignored->{throw new AssertionError("No formula dependency expected");});}
+  @Test void missingOrUnconfirmedCurrentSupplementalCanUseThePreviouslyCostedPriceOnlyAtTheLastStep() {
+    var request=request("previous-supplemental");
+    when(supplemental.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.WAITING,"original confirmation changed"))));
+    when(historical.fill(eq(context),any())).thenReturn(found(request,"TECH_FIXED"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);
+    var ordered=inOrder(inquiries,supplemental,historical);
+    ordered.verify(inquiries).read(context,Set.of(request));ordered.verify(supplemental).read(context,Set.of(request));
+    ordered.verify(historical).fill(eq(context),any());
+  }
+  @Test void newPublicPriceWinsAndAnInvalidPublicSourceCannotActivateHistoricalSupplemental() {
+    var request=request("new-fixed");when(fixed.read(any(),anySet())).thenReturn(found(request,"PURCHASE_FIXED"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);verifyNoInteractions(historical,supplemental);
+    when(fixed.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.INVALID_INPUT,"supplier ratios missing"))));
+    assertThat(read(Set.of(request)).problems().get(request).reason()).isEqualTo(Failure.INVALID_INPUT);
+    verifyNoInteractions(historical,supplemental);
+  }
   @Test void inquiryFollowsOrderAndPrecedesSupplementalFixed() {
     var request=request("inquiry");when(inquiries.read(any(),anySet())).thenReturn(found(request,"INQUIRY"));
     assertThat(read(Set.of(request)).values()).containsKey(request);

@@ -14,6 +14,7 @@ public interface MonthlyCostComparisonMapper {
   record TaskInput(long versionId,String inputJson) {}
   // Current contract queues share the repricing number and have a unique batch/object key.
   // Legacy task ownership can differ; aggregate its original successful evidence once.
+  // Normalize unmatched keys before UNION: connection and JSON-cast collations can differ.
   String RANKED="""
       WITH result_views AS (
         <choose><when test="s.review">SELECT * FROM lp_monthly_reprice_result</when><otherwise>
@@ -46,16 +47,69 @@ public interface MonthlyCostComparisonMapper {
           AND BINARY old.product_code=BINARY v.product_code AND BINARY old.source_no=BINARY v.reprice_no
         WHERE historical.scope_version IS NULL AND old.status='SUCCESS'
         GROUP BY old.cost_run_version_id
+      ), legacy_source_claims AS (
+        SELECT original.id version_id,
+          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.customerIdentity.customerSource')),
+            JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.bomInput.context.customer.source'))) customer_source,
+          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.customerIdentity.customerValue')),
+            JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.bomInput.context.customer.value'))) customer_value
+        FROM complete_versions original
+        JOIN lp_cost_run_task t ON t.scene='MONTHLY_REPRICE' AND t.status='SUCCESS'
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.sourceCostVersionId'))=BINARY CAST(original.id AS CHAR)
+          AND BINARY t.business_unit_type=BINARY original.business_unit_type
+          AND BINARY t.oa_no=BINARY original.oa_no AND t.oa_form_item_id=original.oa_form_item_id
+          AND BINARY t.product_code=BINARY original.product_code
+        JOIN lp_monthly_reprice_batch batch ON BINARY batch.reprice_no=BINARY t.source_no
+          AND batch.scope_version IS NULL AND batch.status='CONFIRMED'
+          AND BINARY batch.business_unit_type=BINARY original.business_unit_type AND batch.pricing_month=t.pricing_month
+        JOIN lp_quote_cost_run_version adopted ON adopted.id=t.cost_run_version_id
+          AND BINARY adopted.reprice_no=BINARY t.source_no AND adopted.pricing_month=t.pricing_month
+          AND BINARY adopted.business_unit_type=BINARY t.business_unit_type AND BINARY adopted.oa_no=BINARY t.oa_no
+          AND adopted.oa_form_item_id=t.oa_form_item_id AND BINARY adopted.product_code=BINARY t.product_code
+          AND adopted.status IN ('SUCCESS','CONFIRMED','HISTORY','VOIDED','STALE')
+          AND adopted.trial_finished_at IS NOT NULL AND adopted.total_cost IS NOT NULL
+          AND adopted.part_item_count&gt;0 AND adopted.cost_item_count&gt;0
+          AND adopted.part_item_count=(SELECT COUNT(*) FROM lp_cost_run_part_item p WHERE p.cost_run_version_id=adopted.id)
+          AND adopted.cost_item_count=(SELECT COUNT(*) FROM lp_cost_run_cost_item c WHERE c.cost_run_version_id=adopted.id)
+      ), captured_source_claims AS (
+        SELECT original.id version_id,r.customer_identity_source customer_source,r.customer_identity_value customer_value
+        FROM complete_versions original
+        JOIN lp_monthly_reprice_source source ON source.source_cost_version_id=original.id
+          AND BINARY source.oa_no=BINARY original.oa_no AND source.oa_form_item_id=original.oa_form_item_id
+        JOIN lp_monthly_reprice_batch batch ON batch.id=source.batch_id AND batch.scope_version=1
+          AND BINARY batch.business_unit_type=BINARY original.business_unit_type
+        JOIN lp_monthly_reprice_result r ON r.id=source.object_id AND r.reuse_batch_id=batch.id
+          AND BINARY r.business_unit_type=BINARY original.business_unit_type AND BINARY r.product_code=BINARY original.product_code
+        WHERE r.customer_identity_source='OA_HEADER_CUSTOMER'
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(source.source_snapshot_json,'$.version.id'))=BINARY CAST(original.id AS CHAR)
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(source.source_snapshot_json,'$.version.oaNo'))=BINARY original.oa_no
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(source.source_snapshot_json,'$.version.oaFormItemId'))=BINARY CAST(original.oa_form_item_id AS CHAR)
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(source.source_snapshot_json,'$.version.productCode'))=BINARY original.product_code
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(source.source_snapshot_json,'$.version.businessUnitType'))=BINARY original.business_unit_type
+          AND BINARY TRIM(JSON_UNQUOTE(JSON_EXTRACT(source.source_snapshot_json,'$.form.customer')))=BINARY r.customer_identity_value
+      ), source_claims AS (
+        SELECT version_id,CAST(customer_source AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_bin customer_source,
+          CAST(customer_value AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_bin customer_value FROM legacy_source_claims
+        UNION ALL
+        SELECT version_id,CAST(customer_source AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_bin,
+          CAST(customer_value AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_bin FROM captured_source_claims
+      ), saved_source_customers AS (
+        SELECT version_id,MIN(customer_source) customer_source,MIN(customer_value) customer_value
+        FROM source_claims
+        WHERE customer_source IN ('VERIFIED_CUSTOMER_CODE','OA_HEADER_CUSTOMER')
+          AND customer_value IS NOT NULL AND TRIM(customer_value) NOT IN ('','null')
+        GROUP BY version_id HAVING COUNT(DISTINCT CONCAT(customer_source,CHAR(0),customer_value))=1
       ), legacy_ranked AS (
         SELECT v.*,ROW_NUMBER() OVER(PARTITION BY BINARY v.oa_no,v.oa_form_item_id,v.pricing_month
           ORDER BY v.trial_finished_at DESC,v.id DESC) oa_rank,
           COALESCE(JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.customerIdentity.customerSource')),
-            JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.bomInput.context.customer.source'))) saved_customer_source,
+            JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.bomInput.context.customer.source')),captured.customer_source) saved_customer_source,
           COALESCE(JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.customerIdentity.customerValue')),
-            JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.bomInput.context.customer.value'))) saved_customer_value
+            JSON_UNQUOTE(JSON_EXTRACT(t.request_snapshot_json,'$.bomInput.context.customer.value')),captured.customer_value) saved_customer_value
         FROM complete_versions v LEFT JOIN lp_monthly_reprice_batch b ON BINARY b.reprice_no=BINARY v.reprice_no
         LEFT JOIN legacy_task_ids saved_task ON saved_task.version_id=v.id
         LEFT JOIN lp_cost_run_task t ON t.id=saved_task.task_id
+        LEFT JOIN saved_source_customers captured ON captured.version_id=v.id
         WHERE (v.reprice_no IS NULL OR (b.id IS NOT NULL AND b.scope_version IS NULL))
           AND (#{s.review} OR v.reprice_no IS NULL OR (b.contract_version IS NULL AND b.status='CONFIRMED')
             OR EXISTS(SELECT 1 FROM result_views published WHERE published.cost_run_version_id=v.id AND published.reprice_no=v.reprice_no))
@@ -70,7 +124,7 @@ public interface MonthlyCostComparisonMapper {
         FROM legacy_ranked v WHERE oa_rank=1
       ), candidates AS (
         SELECT b.business_unit_type,r.product_code,r.customer_identity_source customer_source,r.customer_identity_value customer_value,
-          CAST(NULL AS CHAR(512)) unmatched_key,b.pricing_month,r.oa_no,r.oa_form_item_id,v.id version_id,
+          CAST(NULL AS CHAR(512) CHARACTER SET utf8mb4) COLLATE utf8mb4_bin unmatched_key,b.pricing_month,r.oa_no,r.oa_form_item_id,v.id version_id,
           b.reprice_no,r.id result_id,CAST(NULL AS SIGNED) source_id,r.source_cost_version_id,
           r.merged_source_count source_count,
           CASE WHEN NOT #{s.review} THEN CASE WHEN r.calc_status='SUCCESS' AND v.id IS NULL THEN 'DATA_ISSUE' ELSE r.calc_status END
@@ -94,7 +148,7 @@ public interface MonthlyCostComparisonMapper {
         WHERE b.contract_version=1 AND b.scope_version=1 AND BINARY b.business_unit_type=BINARY #{s.unit}
           AND b.pricing_month IN (#{s.baseline},#{s.comparison}) AND (#{s.review} OR b.confirmed_at IS NOT NULL)
         UNION ALL
-        SELECT b.business_unit_type,v.product_code,NULL,NULL,CONCAT('SOURCE:',b.id,':',s.id),b.pricing_month,s.oa_no,s.oa_form_item_id,
+        SELECT b.business_unit_type,v.product_code,NULL,NULL,CONCAT('SOURCE:',b.id,':',s.id) COLLATE utf8mb4_bin,b.pricing_month,s.oa_no,s.oa_form_item_id,
           NULL,b.reprice_no,NULL,s.id,s.source_cost_version_id,1,
           CASE WHEN s.issue_code='MISSING_CUSTOMER' THEN 'WAIT_CUSTOMER' ELSE 'DATA_ISSUE' END,
           '原报价缺少可靠客户身份，无法按客户跨月匹配',NULL,2
@@ -104,7 +158,7 @@ public interface MonthlyCostComparisonMapper {
           AND b.pricing_month IN (#{s.baseline},#{s.comparison}) AND (#{s.review} OR b.confirmed_at IS NOT NULL)
         UNION ALL
         SELECT v.business_unit_type,v.product_code,v.customer_source,v.customer_value,
-          CASE WHEN v.customer_source IS NULL THEN CAST(JSON_ARRAY('LEGACY',v.pricing_month,v.oa_no,v.oa_form_item_id) AS CHAR CHARACTER SET utf8mb4) END,
+          CASE WHEN v.customer_source IS NULL THEN CAST(JSON_ARRAY('LEGACY',v.pricing_month,v.oa_no,v.oa_form_item_id) AS CHAR CHARACTER SET utf8mb4) END COLLATE utf8mb4_bin,
           v.pricing_month,v.oa_no,v.oa_form_item_id,v.id,v.reprice_no,NULL,NULL,v.id,1,'SUCCESS',
           CASE WHEN v.customer_source IS NULL THEN '旧版本未保存可靠客户身份，无法按客户跨月匹配' END,v.trial_finished_at,1
         FROM legacy v

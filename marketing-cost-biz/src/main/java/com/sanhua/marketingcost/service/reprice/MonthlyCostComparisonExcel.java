@@ -16,20 +16,20 @@ import org.springframework.stereotype.Component;
 @Component
 public class MonthlyCostComparisonExcel {
   public record Column(String group,String key,String label) {}
-  private static final String[][] FIXED={{"parentCode","父件编码"},{"parentName","父件名称"},{"code","一级编码"},{"name","一级名称"},
-      {"spec","父件规格"},{"model","父件型号"},{"customer","客户"},{"change","变化"}};
-  private static final String[][] MONTH={{"unit","计量单位"},{"completedAt","生效时间"},{"financeCuPrice","核算基价（元/公斤）"},
-      {"MATERIAL","材料费（1）"},{"DIRECT_LABOR","直接人工工资（2）"},{"INDIRECT_LABOR","辅助人工工资（3）"},
-      {"MANUFACTURE","制造费用（4）"},{"LOSS","净损失成本（5）"},{"MANUFACTURE_COST","制造成本（6）"},
-      {"productProperty","产品属性"},{"lossRate","净损失率"},{"wageSource","直接人工工资来源"},{"unapproved","未审批项"},
-      {"status","核算状态"},{"oa","采用的OA / 原OA"},{"sources","来源数"},{"reason","未核算 / 匹配说明"}};
+  private static final int HEADER_ROWS=2;
+  private static final String[][] FIXED={{"code","一级编码"},{"name","一级名称"},{"parentCode","父件编码"},{"parentName","父件名称"},
+      {"spec","父件规格"},{"model","父件型号"},{"unit","计量单位"},{"completedAt","生效时间"},{"oa","首次报价OA单号"},{"change","变化"}};
+  private static final String[][] MONTH={{"financeCuPrice","核算基价"},{"MATERIAL","材料费"},
+      {"DIRECT_LABOR","直接人工工资"},{"INDIRECT_LABOR","辅助人工工资"},{"MANUFACTURE","制造费用"},
+      {"LOSS","净损失成本"},{"MANUFACTURE_COST","制造成本"},{"productProperty","产品属性"},
+      {"unapproved","未审批项"},{"lossRate","净损失率"},{"wageSource","直接人工工资来源"}};
   public static List<Column> columns(Result result) {
     var columns=new ArrayList<Column>();for(var f:FIXED)columns.add(new Column("固定信息",f[0],f[1]));
     for(String month:List.of(result.baselineMonth().toString(),result.comparisonMonth().toString()))
       for(var field:MONTH)columns.add(new Column(month,field[0],field[1]));
     for(var metric:Metric.values()) if(result.metrics().contains(metric)) {
-      columns.add(new Column(metric.label+"差异",metric.name()+":amount","差异金额"));
-      columns.add(new Column(metric.label+"差异",metric.name()+":rate","差异率"));
+      columns.add(new Column("差异",metric.name()+":amount",metric.label+"差异金额"));
+      columns.add(new Column("差异",metric.name()+":rate",metric.label+"差异率"));
     }
     return List.copyOf(columns);
   }
@@ -37,13 +37,13 @@ public class MonthlyCostComparisonExcel {
     return write(first,nextPage,output,org.apache.poi.ss.SpreadsheetVersion.EXCEL2007.getMaxRows());
   }
   int write(Page first,IntFunction<Page> nextPage,OutputStream output,int maximumSheetRows) throws IOException {
-    if(maximumSheetRows<5 || maximumSheetRows>org.apache.poi.ss.SpreadsheetVersion.EXCEL2007.getMaxRows())
+    if(maximumSheetRows<HEADER_ROWS+1 || maximumSheetRows>org.apache.poi.ss.SpreadsheetVersion.EXCEL2007.getMaxRows())
       throw new IllegalArgumentException("工作表必须保留表头和至少一行明细");
     var columns=columns(first.comparison());
     try(var wb=new SXSSFWorkbook(100)) {
       wb.setCompressTempFiles(true);
       try {
-        var writer=new Sheets(wb,columns,new Styles(wb),maximumSheetRows);
+        var writer=new Sheets(wb,columns,new Styles(wb),maximumSheetRows,first.comparison());
         long products=0;
         Page current=first;
         while(true) {
@@ -56,15 +56,13 @@ public class MonthlyCostComparisonExcel {
           for(var product:current.comparison().products()) {
             var lines=children.getOrDefault(product.objectKey(),List.of());
             writer.beginProduct(1L+lines.size());
-            int start=writer.rowNumber;
             writer.write(product,null);
             for(var line:lines) {
               if(writer.full()) {
-                writer.mergeIdentity(start);writer.nextSheet();start=writer.rowNumber;
+                writer.nextSheet();
               }
               writer.write(product,line);
             }
-            writer.mergeIdentity(start);
             products++;
           }
           if(products>=first.totalProducts())break;
@@ -85,14 +83,15 @@ public class MonthlyCostComparisonExcel {
     private final int maximumRows;
     private final Set<String> explained=new HashSet<>();
     private Sheet sheet;
-    private int rowNumber,dataRows,lastMergedEnd;
+    private int rowNumber,dataRows;
+    private final Result comparison;
 
-    Sheets(SXSSFWorkbook workbook,List<Column> columns,Styles styles,int maximumRows) {
-      this.workbook=workbook;this.columns=columns;this.styles=styles;this.maximumRows=maximumRows;
+    Sheets(SXSSFWorkbook workbook,List<Column> columns,Styles styles,int maximumRows,Result comparison) {
+      this.workbook=workbook;this.columns=columns;this.styles=styles;this.maximumRows=maximumRows;this.comparison=comparison;
       createSheet();
     }
     void beginProduct(long rows) {
-      if(maximumRows-rowNumber<Math.min(rows,maximumRows-4L))nextSheet();
+      if(maximumRows-rowNumber<Math.min(rows,maximumRows-HEADER_ROWS))nextSheet();
     }
     boolean full(){return rowNumber==maximumRows;}
     void write(Product product,MonthlyCostComparison.Row part) {
@@ -100,44 +99,35 @@ public class MonthlyCostComparisonExcel {
       writeRow(sheet.createRow(rowNumber++),columns,product,part,styles,explained);
       dataRows=Math.addExact(dataRows,1);
     }
-    void mergeIdentity(int start) {
-      if(rowNumber-start<=1)return;
-      if(start<=lastMergedEnd)throw new IllegalStateException("产品合并区域重叠");
-      // Row ranges are consecutive, disjoint product segments below the four header rows.
-      // Validating against every earlier merge would make large exports quadratic.
-      for(int column=0;column<2;column++)
-        sheet.addMergedRegionUnsafe(new CellRangeAddress(start,rowNumber-1,column,column));
-      lastMergedEnd=rowNumber-1;
-    }
     void nextSheet(){finishSheet();createSheet();}
     void finishSheet(){workbook.setPrintArea(workbook.getNumberOfSheets()-1,0,columns.size()-1,0,rowNumber-1);}
     private void createSheet() {
       int number=workbook.getNumberOfSheets()+1;
       sheet=workbook.createSheet(number==1?"制造成本明细对比":"制造成本明细对比_"+number);
-      rowNumber=4;lastMergedEnd=3;explained.clear();
-      var title=sheet.createRow(0);title.setHeightInPoints(28);
-      text(title,0,number==1?"制造成本明细对比表":"制造成本明细对比表（续 "+number+"）",styles.title);
-      sheet.addMergedRegion(new CellRangeAddress(0,0,0,3));
-      var note=sheet.createRow(1);note.setHeightInPoints(48);
-      text(note,0,"按料号＋客户比较，材料费按部品、人工等按父件。\n未核算留空、不补零；客户身份缺失不猜测匹配。\n差异率无分母或分项未记录时留空，说明见各列首次批注。",styles.note);
-      sheet.addMergedRegion(new CellRangeAddress(1,1,0,3));
-      var group=sheet.createRow(2);var header=sheet.createRow(3);
-      group.setHeightInPoints(24);header.setHeightInPoints(42);
+      rowNumber=HEADER_ROWS;explained.clear();
+      var group=sheet.createRow(0);var header=sheet.createRow(1);
+      group.setHeightInPoints(32);header.setHeightInPoints(32);
       for(int i=0;i<columns.size();i++) {
         var column=columns.get(i);
-        text(group,i,i<4?"产品与部品":column.group(),styles.header);text(header,i,column.label(),styles.header);
-        sheet.setColumnWidth(i,(column.key().equals("completedAt")?21:column.key().equals("oa")?22:
-            column.key().equals("parentName")||column.key().equals("name")?18:column.key().equals("wageSource")?22:
-            column.key().equals("unit")?8:column.key().contains(":")||column.key().equals("financeCuPrice")
-            ||Arrays.stream(Metric.values()).anyMatch(m->m.name().equals(column.key()))?16:13)*256);
+        sheet.setColumnWidth(i,18*256);
+        if(i<FIXED.length) {
+          text(group,i,column.label(),styles.header);
+          text(header,i,"",styles.header);
+          sheet.addMergedRegion(new CellRangeAddress(0,1,i,i));
+        } else {
+          String groupLabel=column.group().equals("差异")
+              ? "差异 · "+comparison.comparisonMonth()+"减"+comparison.baselineMonth()
+              : java.time.YearMonth.parse(column.group()).format(java.time.format.DateTimeFormatter.ofPattern("yyyy年M月"))+"成本明细";
+          text(group,i,groupLabel,styles.header);text(header,i,column.label(),styles.header);
+        }
       }
-      for(int start=0;start<columns.size();) {
+      for(int start=FIXED.length;start<columns.size();) {
         int end=start;
-        while(end+1<columns.size()&&end!=3&&columns.get(start).group().equals(columns.get(end+1).group()))end++;
-        if(end>start)sheet.addMergedRegion(new CellRangeAddress(2,2,start,end));
+        while(end+1<columns.size()&&columns.get(start).group().equals(columns.get(end+1).group()))end++;
+        if(end>start)sheet.addMergedRegion(new CellRangeAddress(0,0,start,end));
         start=end+1;
       }
-      sheet.createFreezePane(4,4);sheet.setRepeatingRows(new CellRangeAddress(2,3,-1,-1));
+      sheet.createFreezePane(0,HEADER_ROWS);sheet.setRepeatingRows(new CellRangeAddress(0,1,-1,-1));
       sheet.setRepeatingColumns(new CellRangeAddress(-1,-1,0,3));sheet.setAutobreaks(true);sheet.setFitToPage(false);
       var print=sheet.getPrintSetup();print.setLandscape(true);print.setPaperSize(PrintSetup.A3_PAPERSIZE);print.setScale((short)50);
       sheet.setColumnBreak(FIXED.length+MONTH.length-1);
@@ -147,14 +137,16 @@ public class MonthlyCostComparisonExcel {
     }
   }
   private void writeRow(org.apache.poi.ss.usermodel.Row row,List<Column> columns,Product product,MonthlyCostComparison.Row part,Styles styles,Set<String> explained) {
-    row.setHeightInPoints(34);boolean total=part==null;
+    row.setHeightInPoints(32);boolean total=part==null;
     for(int i=0;i<columns.size();i++) {
       var col=columns.get(i);Object value;String explanation=null;
       if(col.group().equals("固定信息"))value=switch(col.key()){
         case "parentCode"->product.parent().code();case "parentName"->product.parent().name();
         case "code"->total?null:part.key().materialCode();case "name"->total?"父件汇总":part.comparison()!=null?part.comparison().name():part.baseline().name();
         case "spec"->product.parent().specification();case "model"->product.parent().model();
-        case "customer"->product.identity().matched()?product.identity().customerValue():"无法按客户匹配";
+        case "unit"->monthValue(preferredSide(product,part),"unit");
+        case "completedAt"->monthValue(preferredSide(product,part),"completedAt");
+        case "oa"->originalOa(product);
         case "change"->(total?product.change():part.change()).label;default->null;};
       else if(col.key().contains(":")) {
         var key=col.key().split(":");var differences=total?product.differences():part.differences();var d=differences.get(Metric.valueOf(key[0]));
@@ -172,22 +164,45 @@ public class MonthlyCostComparisonExcel {
         };
       }
       var cell=row.createCell(i);
-      boolean rate=col.key().endsWith(":rate");
+      boolean rate=col.key().endsWith(":rate") || col.key().equals("lossRate");
       cell.setCellStyle(styles.style(total,value,rate));
       if(value instanceof BigDecimal number) {
         if(number.precision()>15){cell.setCellValue(rate?number.movePointRight(2).toPlainString()+"%":number.toPlainString());cell.setCellStyle(total?styles.totalText:styles.text);}
         else cell.setCellValue(number.doubleValue());
       } else if(value instanceof LocalDateTime date)cell.setCellValue(date);
       else if(value!=null)cell.setCellValue(value.toString());
+      if(total && col.key().equals("oa") && (!product.identity().matched()
+          || product.baseline()==null || product.comparison()==null)) {
+        var details=new StringBuilder();
+        if(!product.identity().matched())details.append("客户身份缺失，无法匹配\n");
+        else details.append("客户：").append(product.identity().customerValue()).append('\n');
+        for(var state:new MonthlyCostComparisonScope.Selected[]{product.baselineState(),product.comparisonState()}) {
+          if(state!=null)details.append(state.pricingMonth()).append("：").append(status(state.status()))
+              .append("；采用OA：").append(state.oaNo()).append("；来源数：").append(state.sourceCount())
+              .append(state.reason()==null?"":"；"+state.reason()).append('\n');
+        }
+        comment(cell,details.toString());
+      }
       // POI keeps comments in memory even for SXSSF. Explain each reason once per column/sheet.
       if(value==null && explanation!=null && (explanation.contains("分母") || explanation.contains("未记录"))
           && explained.add(i+":"+explanation)) {
-        var helper=row.getSheet().getWorkbook().getCreationHelper();var anchor=helper.createClientAnchor();
-        anchor.setCol1(i);anchor.setCol2(i+3);anchor.setRow1(row.getRowNum());anchor.setRow2(row.getRowNum()+3);
-        var comment=row.getSheet().createDrawingPatriarch().createCellComment(anchor);comment.setAuthor("产品成本核算");
-        comment.setString(helper.createRichTextString(explanation));cell.setCellComment(comment);
+        comment(cell,explanation);
       }
     }
+  }
+  private static Object preferredSide(Product product,MonthlyCostComparison.Row part) {
+    return part==null?(product.comparison()!=null?product.comparison():product.baseline())
+        :(part.comparison()!=null?part.comparison():part.baseline());
+  }
+  private static String originalOa(Product product) {
+    var a=product.baselineState();var b=product.comparisonState();
+    return a!=null && (b==null || !a.month().isAfter(b.month()))?a.oaNo():b!=null?b.oaNo():product.object().oaNo();
+  }
+  private static void comment(Cell cell,String value) {
+    var sheet=cell.getSheet();var helper=sheet.getWorkbook().getCreationHelper();var anchor=helper.createClientAnchor();
+    anchor.setCol1(cell.getColumnIndex());anchor.setCol2(cell.getColumnIndex()+4);anchor.setRow1(cell.getRowIndex());anchor.setRow2(cell.getRowIndex()+5);
+    var comment=sheet.createDrawingPatriarch().createCellComment(anchor);comment.setAuthor("产品成本核算");
+    comment.setString(helper.createRichTextString(value));cell.setCellComment(comment);
   }
   private static String status(String value){return switch(value){
     case "SUCCESS"->"已核算";case "FAILED"->"核算失败";case "PENDING"->"等待核算";case "RUNNING"->"正在核算";
@@ -202,16 +217,14 @@ public class MonthlyCostComparisonExcel {
   }
   private static void text(org.apache.poi.ss.usermodel.Row row,int col,String text,CellStyle style){var cell=row.createCell(col);cell.setCellStyle(style);cell.setCellValue(text);}
   private static class Styles {
-    final CellStyle text,money,date,rate,totalText,totalMoney,totalDate,totalRate,header,title,note;
+    final CellStyle text,money,date,rate,totalText,totalMoney,totalDate,totalRate,header;
     Styles(Workbook wb){
-      var normal=wb.createFont();normal.setFontName("宋体");normal.setFontHeightInPoints((short)9);
-      var bold=wb.createFont();bold.setFontName("宋体");bold.setFontHeightInPoints((short)9);bold.setBold(true);
-      text=base(wb,normal);text.setDataFormat(wb.createDataFormat().getFormat("@"));money=copy(wb,text,"0.000000");date=copy(wb,text,"yyyy-mm-dd hh:mm:ss");rate=copy(wb,text,"0.00%");
+      var normal=wb.createFont();normal.setFontName("Microsoft YaHei");normal.setFontHeightInPoints((short)11);
+      var bold=wb.createFont();bold.setFontName("Microsoft YaHei");bold.setFontHeightInPoints((short)11);bold.setBold(true);
+      text=base(wb,normal);text.setDataFormat(wb.createDataFormat().getFormat("@"));money=copy(wb,text,"0.00");date=copy(wb,text,"yyyy-mm-dd hh:mm");rate=copy(wb,text,"0.00%");
       totalText=base(wb,bold);totalText.setFillForegroundColor(IndexedColors.PALE_BLUE.getIndex());totalText.setFillPattern(FillPatternType.SOLID_FOREGROUND);totalText.setDataFormat(text.getDataFormat());
-      totalMoney=copy(wb,totalText,"0.000000");totalDate=copy(wb,totalText,"yyyy-mm-dd hh:mm:ss");totalRate=copy(wb,totalText,"0.00%");
-      header=base(wb,bold);header.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());header.setFillPattern(FillPatternType.SOLID_FOREGROUND);header.setAlignment(HorizontalAlignment.CENTER);
-      var titleFont=wb.createFont();titleFont.setFontName("宋体");titleFont.setFontHeightInPoints((short)14);titleFont.setBold(true);
-      title=base(wb,titleFont);title.setAlignment(HorizontalAlignment.LEFT);note=base(wb,normal);
+      totalMoney=copy(wb,totalText,"0.00");totalDate=copy(wb,totalText,"yyyy-mm-dd hh:mm");totalRate=copy(wb,totalText,"0.00%");
+      header=base(wb,bold);((org.apache.poi.xssf.usermodel.XSSFCellStyle)header).setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(new java.awt.Color(234,243,255)));header.setFillPattern(FillPatternType.SOLID_FOREGROUND);header.setAlignment(HorizontalAlignment.CENTER);
     }
     CellStyle style(boolean total,Object value,boolean percent){return value instanceof LocalDateTime?(total?totalDate:date):value instanceof BigDecimal?(percent?(total?totalRate:rate):(total?totalMoney:money)):(total?totalText:text);}
     static CellStyle base(Workbook wb,Font font){var s=wb.createCellStyle();s.setFont(font);s.setWrapText(true);s.setVerticalAlignment(VerticalAlignment.CENTER);

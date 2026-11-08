@@ -113,9 +113,13 @@ public class MonthlyRepriceCostingService {
           : month.atEndOfMonth().atTime(23,59,59);
       active.put(lease, new MonthlyRepriceCalculation(lease.repriceNo(), task.getCalcObjectKey(), input, prepared.bom(), asOf));
     }
-    var preparedFees = publicInputs.prepare(active.values().stream().map(input ->
-        new CostRunPublicInputPreparation.Request(input.costContext(),
-            Set.of(input.input().context().productCode()))).toList());
+    var feeConsumers = new LinkedHashMap<CostRunPublicInputPreparation.Request, MonthlyRepriceCalculation>();
+    for (var input : active.values()) {
+      feeConsumers.put(new CostRunPublicInputPreparation.Request(input.costContext(),
+          Set.of(input.input().context().productCode())), input);
+    }
+    var preparedFees = publicInputs.prepare(List.copyOf(feeConsumers.keySet()),
+        (request, query) -> bomReads.use(feeConsumers.get(request), query));
     var frozenBoms = bomDetails.loadBatch(active.values().stream().map(input -> input.bom().getSyncRecordId()).toList());
     return bomDetails.useLoaded(frozenBoms, () -> {
       var prepared = new LinkedHashMap<Lease, MonthlyRepriceCalculation>();

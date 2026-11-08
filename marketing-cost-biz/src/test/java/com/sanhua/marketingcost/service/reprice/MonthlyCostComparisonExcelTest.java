@@ -26,48 +26,64 @@ class MonthlyCostComparisonExcelTest {
     return new Page(result,page,1,total,List.of());
   }
   byte[] render(Page first,java.util.function.IntFunction<Page> next)throws Exception{try(var output=new ByteArrayOutputStream()){new MonthlyCostComparisonExcel().write(first,next,output);return output.toByteArray();}}
+  @Test void mainSheetMatchesTheSuppliedPrototypeColumnOrder() throws Exception {
+    var page=sample("OA",1,1,List.of(Metric.MATERIAL,Metric.MANUFACTURE_COST));
+    var columns=MonthlyCostComparisonExcel.columns(page.comparison());
+    assertThat(columns).hasSize(36);
+    assertThat(columns.subList(0,10).stream().map(MonthlyCostComparisonExcel.Column::label)).containsExactly(
+        "一级编码","一级名称","父件编码","父件名称","父件规格","父件型号","计量单位","生效时间","首次报价OA单号","变化");
+    assertThat(columns.subList(10,21).stream().map(MonthlyCostComparisonExcel.Column::label)).containsExactly(
+        "核算基价","材料费","直接人工工资","辅助人工工资","制造费用","净损失成本","制造成本","产品属性","未审批项","净损失率","直接人工工资来源");
+    try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(page,n->null)))) {
+      var sheet=wb.getSheetAt(0);
+      assertThat(sheet.getRow(0).getCell(0).getStringCellValue()).isEqualTo("一级编码");
+      assertThat(sheet.getRow(1).getCell(10).getStringCellValue()).isEqualTo("核算基价");
+      assertThat(sheet.getPaneInformation().getHorizontalSplitPosition()).isEqualTo((short)2);
+      assertThat(sheet.getRow(2).getCell(1).getStringCellValue()).isEqualTo("父件汇总");
+    }
+  }
   @Test void realWorkbookRetainsComponentMaterialAndSingleProductFeesWithDynamicMonthGroups() throws Exception {
     var first=sample("000OA",1,1,List.of(Metric.MATERIAL,Metric.DIRECT_LABOR,Metric.MANUFACTURE_COST));
     try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(first,n->{throw new AssertionError();})))) {
       assertThat(wb.getNumberOfSheets()).isEqualTo(1);var s=wb.getSheetAt(0);
-      assertThat(s.getRow(3).getCell(0).getStringCellValue()).isEqualTo("父件编码");assertThat(s.getRow(3).getCell(1).getStringCellValue()).isEqualTo("父件名称");
-      assertThat(s.getRow(2).getCell(8).getStringCellValue()).isEqualTo("2025-12");assertThat(s.getRow(2).getCell(25).getStringCellValue()).isEqualTo("2026-03");
-      assertThat(s.getRow(3).getLastCellNum()).isEqualTo((short)48);
-      assertThat(s.getMergedRegions()).anyMatch(r->r.getFirstRow()==4 && r.getLastRow()==7 && r.getFirstColumn()==0);
-      assertThat(s.getRow(4).getCell(0).getStringCellValue()).isEqualTo("000A");assertThat(s.getRow(5).getCell(2).getStringCellValue()).isEqualTo("000B");
-      assertThat(s.getRow(5).getCell(3).getCellType()).isEqualTo(CellType.STRING);assertThat(s.getRow(5).getCell(3).getStringCellValue()).isEqualTo("=SUM(1,2)");
-      assertThat(s.getRow(4).getCell(12).getNumericCellValue()).isZero();assertThat(s.getRow(5).getCell(12).getCellType()).isEqualTo(CellType.BLANK);
-      assertThat(s.getRow(5).getCell(42).getNumericCellValue()).isEqualTo(-2);assertThat(s.getRow(5).getCell(43).getNumericCellValue()).isEqualTo(-.2);
-      assertThat(s.getRow(7).getCell(11).getCellType()).isEqualTo(CellType.BLANK);assertThat(s.getRow(7).getCell(42).getStringCellValue()).isEqualTo("-");
-      assertThat(s.getRow(4).getCell(45).getCellType()).isEqualTo(CellType.BLANK);assertThat(s.getRow(4).getCell(45).getCellComment().getString().getString()).contains("分母");
-      assertThat(s.getRow(5).getCell(9).getLocalDateTimeCellValue()).isEqualTo(LocalDateTime.of(2026,3,25,12,30));
-      assertThat(s.getPrintSetup().getLandscape()).isTrue();assertThat(s.getPaneInformation().isFreezePane()).isTrue();assertThat(s.getPaneInformation().getVerticalSplitPosition()).isEqualTo((short)4);
+      assertThat(s.getRow(0).getCell(0).getStringCellValue()).isEqualTo("一级编码");assertThat(s.getRow(0).getCell(2).getStringCellValue()).isEqualTo("父件编码");
+      assertThat(s.getRow(0).getCell(10).getStringCellValue()).isEqualTo("2025年12月成本明细");assertThat(s.getRow(0).getCell(21).getStringCellValue()).isEqualTo("2026年3月成本明细");
+      assertThat(s.getRow(1).getLastCellNum()).isEqualTo((short)38);
+      assertThat(s.getMergedRegions()).allMatch(r->r.getLastRow()<2);
+      assertThat(s.getRow(2).getCell(2).getStringCellValue()).isEqualTo("000A");assertThat(s.getRow(3).getCell(0).getStringCellValue()).isEqualTo("000B");
+      assertThat(s.getRow(3).getCell(1).getCellType()).isEqualTo(CellType.STRING);assertThat(s.getRow(3).getCell(1).getStringCellValue()).isEqualTo("=SUM(1,2)");
+      assertThat(s.getRow(2).getCell(12).getNumericCellValue()).isZero();assertThat(s.getRow(3).getCell(12).getCellType()).isEqualTo(CellType.BLANK);
+      assertThat(s.getRow(3).getCell(32).getNumericCellValue()).isEqualTo(-2);assertThat(s.getRow(3).getCell(33).getNumericCellValue()).isEqualTo(-.2);
+      assertThat(s.getRow(5).getCell(11).getCellType()).isEqualTo(CellType.BLANK);assertThat(s.getRow(5).getCell(32).getStringCellValue()).isEqualTo("-");
+      assertThat(s.getRow(2).getCell(35).getCellType()).isEqualTo(CellType.BLANK);assertThat(s.getRow(2).getCell(35).getCellComment().getString().getString()).contains("分母");
+      assertThat(s.getRow(3).getCell(7).getLocalDateTimeCellValue()).isEqualTo(LocalDateTime.of(2026,3,25,12,30));
+      assertThat(s.getPrintSetup().getLandscape()).isTrue();assertThat(s.getPaneInformation().isFreezePane()).isTrue();assertThat(s.getPaneInformation().getHorizontalSplitPosition()).isEqualTo((short)2);
     }
   }
   @Test void noSelectedDifferencesProducesOnlyBaseAndTwoMonthColumns()throws Exception {
-    try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(sample("OA",1,1,List.of()),n->null)))){assertThat(wb.getSheetAt(0).getRow(3).getLastCellNum()).isEqualTo((short)42);}
+    try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(sample("OA",1,1,List.of()),n->null)))){assertThat(wb.getSheetAt(0).getRow(1).getLastCellNum()).isEqualTo((short)32);}
   }
   @Test void allProductPagesAreRenderedInsteadOfOnlyTheVisiblePage()throws Exception {
     var pages=new ArrayList<Integer>();
     try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(sample("OA1",1,2,List.of(Metric.MATERIAL)),n->{pages.add(n);return sample("OA2",n,2,List.of(Metric.MATERIAL));})))){
-      assertThat(pages).containsExactly(2);assertThat(wb.getSheetAt(0).getLastRowNum()).isEqualTo(11);
-      assertThat(wb.getSheetAt(0).getRow(8).getCell(22).getStringCellValue()).isEqualTo("OA2");
+      assertThat(pages).containsExactly(2);assertThat(wb.getSheetAt(0).getLastRowNum()).isEqualTo(9);
+      assertThat(wb.getSheetAt(0).getRow(6).getCell(8).getStringCellValue()).isEqualTo("OA2");
     }
   }
   @Test void sheetRolloverKeepsEveryProductAndItsLinesAcrossInputPages() throws Exception {
     try(var output=new ByteArrayOutputStream()) {
       int rows=new MonthlyCostComparisonExcel().write(sample("OA1",1,2,List.of(Metric.MATERIAL)),
-          n->sample("OA2",n,2,List.of(Metric.MATERIAL)),output,8);
+          n->sample("OA2",n,2,List.of(Metric.MATERIAL)),output,6);
       assertThat(rows).isEqualTo(8);
       try(var wb=new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
         assertThat(wb.getNumberOfSheets()).isEqualTo(2);
         for(int i=0;i<2;i++) {
           var sheet=wb.getSheetAt(i);sheet.validateMergedRegions();
-          assertThat(sheet.getRow(3).getCell(0).getStringCellValue()).isEqualTo("父件编码");
-          assertThat(sheet.getLastRowNum()).isEqualTo(7);
-          assertThat(sheet.getRow(4).getCell(22).getStringCellValue()).isEqualTo("OA"+(i+1));
-          assertThat(sheet.getRow(5).getCell(2).getStringCellValue()).isEqualTo("000B");
-          assertThat(sheet.getRow(7).getCell(2).getStringCellValue()).isEqualTo("000D");
+          assertThat(sheet.getRow(0).getCell(0).getStringCellValue()).isEqualTo("一级编码");
+          assertThat(sheet.getLastRowNum()).isEqualTo(5);
+          assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).isEqualTo("OA"+(i+1));
+          assertThat(sheet.getRow(3).getCell(0).getStringCellValue()).isEqualTo("000B");
+          assertThat(sheet.getRow(5).getCell(0).getStringCellValue()).isEqualTo("000D");
           assertThat(sheet.getPaneInformation().isFreezePane()).isTrue();
           assertThat(wb.getPrintArea(i)).contains("$A$1:");
         }
@@ -77,16 +93,16 @@ class MonthlyCostComparisonExcelTest {
   @Test void oneProductLargerThanASheetKeepsOneSummaryAndAllContinuationLines() throws Exception {
     try(var output=new ByteArrayOutputStream()) {
       int rows=new MonthlyCostComparisonExcel().write(sample("OA",1,1,List.of(Metric.MATERIAL)),
-          n->{throw new AssertionError("one product only");},output,6);
+          n->{throw new AssertionError("one product only");},output,4);
       assertThat(rows).isEqualTo(4);
       try(var wb=new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
         assertThat(wb.getNumberOfSheets()).isEqualTo(2);
-        assertThat(wb.getSheetAt(0).getRow(4).getCell(3).getStringCellValue()).isEqualTo("父件汇总");
-        assertThat(wb.getSheetAt(1).getRow(4).getCell(2).getStringCellValue()).isEqualTo("000C");
-        assertThat(wb.getSheetAt(1).getRow(5).getCell(2).getStringCellValue()).isEqualTo("000D");
+        assertThat(wb.getSheetAt(0).getRow(2).getCell(1).getStringCellValue()).isEqualTo("父件汇总");
+        assertThat(wb.getSheetAt(1).getRow(2).getCell(0).getStringCellValue()).isEqualTo("000C");
+        assertThat(wb.getSheetAt(1).getRow(3).getCell(0).getStringCellValue()).isEqualTo("000D");
         for(var sheet:wb) {
           ((org.apache.poi.xssf.usermodel.XSSFSheet)sheet).validateMergedRegions();
-          assertThat(sheet.getRow(4).getCell(0).getStringCellValue()).isEqualTo("000A");
+          assertThat(sheet.getRow(2).getCell(2).getStringCellValue()).isEqualTo("000A");
         }
       }
     }
@@ -97,7 +113,7 @@ class MonthlyCostComparisonExcelTest {
       long notes=0;
       for(var row:wb.getSheetAt(0))for(var cell:row)if(cell.getCellComment()!=null)notes++;
       assertThat(notes).isEqualTo(1);
-      assertThat(wb.getSheetAt(0).getRow(4).getCell(43).getCellComment().getString().getString()).contains("分母");
+      assertThat(wb.getSheetAt(0).getRow(2).getCell(33).getCellComment().getString().getString()).contains("分母");
     }
   }
   @Test void historicalPartsWithoutPathsExportTheirAmountsWithoutFalseAdditions() throws Exception {
@@ -108,13 +124,13 @@ class MonthlyCostComparisonExcelTest {
     var result=MonthlyCostComparison.compare(A,B,List.of(Metric.MATERIAL),List.of(oldPanel),List.of(newPanel));
     try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(new Page(result,1,20,1,List.of()),n->null)))) {
       var sheet=wb.getSheetAt(0);
-      assertThat(sheet.getRow(5).getCell(7).getStringCellValue()).isEqualTo("历史部品待匹配");
-      assertThat(sheet.getRow(6).getCell(7).getStringCellValue()).isEqualTo("历史部品待匹配");
-      assertThat(sheet.getRow(5).getCell(11).getNumericCellValue()).isEqualTo(10);
-      assertThat(sheet.getRow(5).getCell(28).getCellType()).isEqualTo(CellType.BLANK);
-      assertThat(sheet.getRow(6).getCell(11).getCellType()).isEqualTo(CellType.BLANK);
-      assertThat(sheet.getRow(6).getCell(28).getNumericCellValue()).isEqualTo(12);
-      assertThat(sheet.getRow(5).getCell(42).getStringCellValue()).isEqualTo("-");
+      assertThat(sheet.getRow(3).getCell(9).getStringCellValue()).isEqualTo("历史部品待匹配");
+      assertThat(sheet.getRow(4).getCell(9).getStringCellValue()).isEqualTo("历史部品待匹配");
+      assertThat(sheet.getRow(3).getCell(11).getNumericCellValue()).isEqualTo(10);
+      assertThat(sheet.getRow(3).getCell(22).getCellType()).isEqualTo(CellType.BLANK);
+      assertThat(sheet.getRow(4).getCell(11).getCellType()).isEqualTo(CellType.BLANK);
+      assertThat(sheet.getRow(4).getCell(22).getNumericCellValue()).isEqualTo(12);
+      assertThat(sheet.getRow(3).getCell(32).getStringCellValue()).isEqualTo("-");
     }
   }
   @Test void decimalBeyondExcelPrecisionIsPreservedAsTextRatherThanRounded()throws Exception {
@@ -124,8 +140,8 @@ class MonthlyCostComparisonExcelTest {
     var rows=new ArrayList<>(page.comparison().rows());rows.set(0,new MonthlyCostComparison.Row(row.objectKey(),row.key(),row.parent(),replacement,row.comparison(),row.change(),row.differences()));
     var result=new Result(A,B,page.comparison().metrics(),rows,page.comparison().products(),List.of());
     try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(new Page(result,1,1,1,List.of()),n->null)))){
-      assertThat(wb.getSheetAt(0).getRow(5).getCell(11).getCellType()).isEqualTo(CellType.STRING);
-      assertThat(wb.getSheetAt(0).getRow(5).getCell(11).getStringCellValue()).isEqualTo(huge.toPlainString());
+      assertThat(wb.getSheetAt(0).getRow(3).getCell(11).getCellType()).isEqualTo(CellType.STRING);
+      assertThat(wb.getSheetAt(0).getRow(3).getCell(11).getStringCellValue()).isEqualTo(huge.toPlainString());
     }
   }
   @Test void latePageFailureDoesNotLeaveOrReturnAPartialDownload()throws Exception {
@@ -147,14 +163,14 @@ class MonthlyCostComparisonExcelTest {
     var b=new MonthlyCostComparisonScope.Selected("COMMERCIAL","000A","OA_HEADER_CUSTOMER","Customer-A",null,B.toString(),"OA-NEW",2,null,"MR-B",2L,null,11,3,"PENDING","waiting");
     var comparison=MonthlyCostComparison.compare(A,B,List.of(Metric.MATERIAL),List.of(new SelectedPanel(a,null)),List.of(new SelectedPanel(b,null)));
     try(var wb=new XSSFWorkbook(new ByteArrayInputStream(render(new Page(comparison,1,20,1,List.of()),n->null)))) {
-      var s=wb.getSheetAt(0);assertThat(s.getLastRowNum()).isEqualTo(4);
-      assertThat(s.getRow(4).getCell(6).getStringCellValue()).isEqualTo("Customer-A");
-      assertThat(s.getRow(4).getCell(11).getCellType()).isEqualTo(CellType.BLANK);
-      assertThat(s.getRow(4).getCell(28).getCellType()).isEqualTo(CellType.BLANK);
-      assertThat(s.getRow(4).getCell(21).getStringCellValue()).isEqualTo("核算失败");
-      assertThat(s.getRow(4).getCell(24).getStringCellValue()).isEqualTo("missing material X");
-      assertThat(s.getRow(4).getCell(39).getStringCellValue()).isEqualTo("OA-NEW");
-      assertThat(s.getRow(4).getCell(42).getStringCellValue()).isEqualTo("-");
+      var s=wb.getSheetAt(0);assertThat(s.getLastRowNum()).isEqualTo(2);
+      assertThat(s.getRow(2).getCell(8).getCellComment().getString().getString()).contains("Customer-A");
+      assertThat(s.getRow(2).getCell(11).getCellType()).isEqualTo(CellType.BLANK);
+      assertThat(s.getRow(2).getCell(22).getCellType()).isEqualTo(CellType.BLANK);
+      assertThat(s.getRow(2).getCell(8).getCellComment().getString().getString()).contains("核算失败");
+      assertThat(s.getRow(2).getCell(8).getCellComment().getString().getString()).contains("missing material X");
+      assertThat(s.getRow(2).getCell(8).getCellComment().getString().getString()).contains("OA-NEW");
+      assertThat(s.getRow(2).getCell(32).getStringCellValue()).isEqualTo("-");
     }
   }
 }

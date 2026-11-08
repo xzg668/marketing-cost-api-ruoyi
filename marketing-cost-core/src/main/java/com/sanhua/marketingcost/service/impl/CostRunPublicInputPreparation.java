@@ -51,14 +51,25 @@ public final class CostRunPublicInputPreparation {
     this.technical = technical; this.netLoss = netLoss; this.periods = periods;
   }
 
+  /** Keeps each consumer's selected source active only while its own approval is read. */
+  @FunctionalInterface
+  public interface TechnicalDataScope {
+    com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput read(Request request,
+        java.util.function.Supplier<com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput> query);
+  }
+
   public List<CostRunPreparedInputs> prepare(List<Request> requests) {
+    return prepare(requests, (request, query) -> query.get());
+  }
+
+  public List<CostRunPreparedInputs> prepare(List<Request> requests, TechnicalDataScope technicalScope) {
     var stable = List.copyOf(requests);
     if (stable.size() > 64) throw new IllegalArgumentException("公共输入每批最多64个核算对象");
     // Customer-specific approved data must be checked before sharing any public source.
     var dimensions = stable.stream().map(request -> costing.inputDimensions(request.context())).toList();
     for (var request : stable) {
-      request.context().setEffectiveTechnicalData(technical.resolve(
-          request.context().getOaFormItemId(), request.context().getPricingMonth()));
+      request.context().setEffectiveTechnicalData(technicalScope.read(request, () -> technical.resolve(
+          request.context().getOaFormItemId(), request.context().getPricingMonth())));
     }
     var facts = new LinkedHashMap<Object, List<?>>();
     var materialQueries = new LinkedHashSet<CostRunFeeQuery.Material>();
