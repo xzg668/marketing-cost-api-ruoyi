@@ -323,11 +323,42 @@ public class MonthlyCostVersionService {
       part.setPriceSource("HOUSEHOLD_INQUIRY"); part.setUnitPrice(line.price());
       rows.add(new MonthlyCostVersionMapper.Part(part,line.monthlyPriceId(),PricingType.HOUSEHOLD_INQUIRY.name()));
     }
+    capturePartDisplay(version,rows);
     for(int start=0;start<rows.size();start+=128) {
       var chunk=rows.subList(start,Math.min(start+128,rows.size()));
       if(locks.insertParts(chunk)!=chunk.size())throw new IllegalStateException("Cost parts insert failed");
     }
     return rows.size();
+  }
+
+  /** Capture display facts once with this cost; historical sheets never reread today's master. */
+  private void capturePartDisplay(QuoteCostRunVersion version,List<MonthlyCostVersionMapper.Part> rows) {
+    var bomIds=rows.stream().map(p->p.item().getBomRowId()).filter(Objects::nonNull).distinct().toList();
+    var bom=new HashMap<Long,MonthlyCostVersionMapper.PartDisplay>();
+    for(int start=0;start<bomIds.size();start+=256)
+      locks.partBomDisplay(version.getBusinessUnitType(),bomIds.subList(start,Math.min(start+256,bomIds.size())))
+          .forEach(value->bom.put(value.id(),value));
+    var byOrg=rows.stream().collect(java.util.stream.Collectors.groupingBy(p->p.item().getMaterialOrganizationCode()));
+    byOrg.forEach((org,items)->{
+      var codes=items.stream().map(p->p.item().getPartCode()).distinct().toList();
+      var master=new HashMap<String,MonthlyCostVersionMapper.PartDisplay>();
+      for(int start=0;start<codes.size();start+=256)
+        locks.partMasterDisplay(org,codes.subList(start,Math.min(start+256,codes.size())))
+            .forEach(value->master.put(value.materialCode(),value));
+      for(var entry:items) {
+        var part=entry.item();var source=bom.get(part.getBomRowId());var material=master.get(part.getPartCode());
+        if(source!=null && !Objects.equals(source.materialCode(),part.getPartCode()))
+          throw new IllegalStateException("部品展示资料与本次BOM料号不一致");
+        part.setMaterial(display(source==null?null:source.material(),material==null?null:material.material()));
+        part.setShapeAttr(display(source==null?null:source.shape(),material==null?null:material.shape()));
+        part.setPartDrawingNo(display(source==null?null:source.drawing(),material==null?null:material.drawing()));
+      }
+    });
+  }
+
+  private static String display(String preferred,String fallback) {
+    if(preferred!=null && !preferred.isBlank())return preferred.trim();
+    return fallback==null || fallback.isBlank()?null:fallback.trim();
   }
 
   private CostRunPartItem part(QuoteCostRunVersion v, PricePrepareItem prepared, String code, BigDecimal q, BigDecimal amount) {

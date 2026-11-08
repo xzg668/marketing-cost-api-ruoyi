@@ -32,6 +32,16 @@ public class ProductCostingSuccessLookup {
         .map(workspace -> workspace.getCurrentCostVersionId() != null).orElse(false);
   }
 
+  /** 已完成成本用于展示和提交，不重新读取公共来源来否定保存结果。 */
+  public Optional<ReusableCost> findSaved(ProductCostingContext context) {
+    var workspace = workspaceService.find(context.itemId(), context.periodMonth()).orElse(null);
+    if (workspace == null || workspace.getCurrentCostVersionId() == null) return Optional.empty();
+    var version = versionMapper.selectById(workspace.getCurrentCostVersionId());
+    if (!QuoteCurrentSuccessMatcher.matchesSaved(context.oaNo(), context.itemId(), context.periodMonth(),
+        context.item(), workspace, version)) return Optional.empty();
+    return Optional.of(reusable(version, workspace));
+  }
+
   public Optional<ReusableCost> find(ProductCostingContext context) {
     if (!StringUtils.hasText(context.sourceRevision())) return Optional.empty();
     var workspace = workspaceService.find(context.itemId(), context.periodMonth()).orElse(null);
@@ -42,11 +52,16 @@ public class ProductCostingSuccessLookup {
         item, workspace, version, algorithmVersionProvider.currentVersion(), context.sourceRevision())) {
       return Optional.empty();
     }
+    return Optional.of(reusable(version, workspace));
+  }
+
+  private ReusableCost reusable(QuoteCostRunVersion version,
+      com.sanhua.marketingcost.entity.QuoteCostingWorkspace workspace) {
     String prepareNo = StringUtils.hasText(version.getOaPricePrepareNo())
         ? version.getOaPricePrepareNo() : workspace.getCurrentPrepareNo();
     int warnings = workspace.getCarriedForwardPriceCount() == null
         ? 0 : workspace.getCarriedForwardPriceCount();
-    return Optional.of(new ReusableCost(version, prepareNo, warnings));
+    return new ReusableCost(version, prepareNo, warnings);
   }
 
   public record ReusableCost(QuoteCostRunVersion version, String prepareNo, int warningCount) {}

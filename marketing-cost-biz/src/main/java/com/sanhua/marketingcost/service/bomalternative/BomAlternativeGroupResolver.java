@@ -9,7 +9,7 @@ public interface BomAlternativeGroupResolver {
   /**
    * 识别结构正确的替代组，并同时返回所有结构异常。
    *
-   * <p>本方法不保存报价选择、不裁剪 BOM，也不写任何业务数据。
+   * <p>U9读取副本缺少类型时按同版本来源补齐；不保存报价选择、不裁剪 BOM，也不写业务数据。
    */
   BomAlternativeGroupResolution resolve(List<BomRawHierarchy> rows);
 }

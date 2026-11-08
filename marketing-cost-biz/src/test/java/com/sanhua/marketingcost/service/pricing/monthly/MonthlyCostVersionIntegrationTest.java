@@ -47,7 +47,7 @@ class MonthlyCostVersionIntegrationTest {
       });
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/original-linked-source-schema.sql")).execute(ds);
-    jdbc.execute("CREATE TABLE lp_material_master_raw(id BIGINT PRIMARY KEY AUTO_INCREMENT,material_code VARCHAR(64),organization_code VARCHAR(32),active_flag INT,material_model VARCHAR(255),material_spec VARCHAR(512))");
+    jdbc.execute("CREATE TABLE lp_material_master_raw(id BIGINT PRIMARY KEY AUTO_INCREMENT,material_code VARCHAR(64),organization_code VARCHAR(32),active_flag INT,material_model VARCHAR(255),material_spec VARCHAR(512),global_seg_4_material VARCHAR(255),shape_attr VARCHAR(64),drawing_no VARCHAR(255))");
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
     for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_cost_version_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
@@ -97,6 +97,7 @@ class MonthlyCostVersionIntegrationTest {
   static void initializeCostStorage() throws Exception {
     var ds=jdbc.getDataSource();
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/cost-item-schema.sql")).execute(ds);
+    jdbc.execute("CREATE TABLE lp_bom_costing_row(id BIGINT PRIMARY KEY,material_code VARCHAR(64),business_unit_type VARCHAR(32),material_attribute VARCHAR(255),shape_attr VARCHAR(64),material_spec VARCHAR(255))");
     // Current application version ownership added by V348; keep the historical pre-V342 fixture intact.
     jdbc.execute("ALTER TABLE lp_quote_cost_run_version ADD COLUMN reprice_no VARCHAR(64) NULL");
     var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);

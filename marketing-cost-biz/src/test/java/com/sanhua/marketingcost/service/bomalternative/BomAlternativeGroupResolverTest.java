@@ -13,7 +13,8 @@ import org.junit.jupiter.api.Test;
 class BomAlternativeGroupResolverTest {
 
   private final BomAlternativeGroupResolver resolver =
-      new BomAlternativeGroupResolverImpl(new BomAlternativeGroupKeyGeneratorImpl());
+      new BomAlternativeGroupResolverImpl(new BomAlternativeGroupKeyGeneratorImpl(),
+          org.mockito.Mockito.mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class));
 
   @Test
   @DisplayName("一个标准一个替代识别为一组，并明确输出唯一标准和替代候选")

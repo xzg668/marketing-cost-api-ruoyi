@@ -90,7 +90,7 @@ public class JjbExcelRenderer {
           case 3 -> h.productName(); default -> m.identity().productCode();
         });
       }
-      set(1, 4, h.quotation().get("applicantName"));
+      set(1, 4, h.quotation().get("quoterName"));
       set(1, 6, h.quotation().get("applicantDept"));
       set(1, 8, h.quotation().get("applicantOffice"));
       set(2, 4, h.customerCode());

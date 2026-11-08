@@ -21,6 +21,17 @@ public final class QuoteCurrentSuccessMatcher {
       QuoteCostRunVersion version,
       String currentAlgorithmVersion,
       String currentSourceRevision) {
+    if (!matchesSaved(oaNo, oaFormItemId, periodMonth, item, workspace, version)) return false;
+    if (!StringUtils.hasText(currentSourceRevision)
+        || !Objects.equals(currentSourceRevision, version.getSourceRevision())) return false;
+    return StringUtils.hasText(currentAlgorithmVersion)
+        && Objects.equals(currentAlgorithmVersion.trim(), version.getAlgorithmVersion());
+  }
+
+  /** 提交已完成的保存结果；公共价格、费率或新算法只在主动重新核算时参与取价。 */
+  public static boolean matchesSaved(
+      String oaNo, Long oaFormItemId, String periodMonth, OaFormItem item,
+      QuoteCostingWorkspace workspace, QuoteCostRunVersion version) {
     if (workspace == null
         || item == null
         || version == null
@@ -33,15 +44,9 @@ public final class QuoteCurrentSuccessMatcher {
         || !QuoteCostRunStatus.isCurrentSuccess(version.getStatus())) {
       return false;
     }
-    if (!StringUtils.hasText(currentSourceRevision)
-        || !Objects.equals(currentSourceRevision, version.getSourceRevision())
-        || !Objects.equals(currentSourceRevision, workspace.getSourceRevision())
-        || !Objects.equals(currentSourceRevision, workspace.getLastSuccessSourceRevision())) {
-      return false;
-    }
-    // BOM、价格等业务输入不随程序修复而变化；必须额外比较算法版本，避免新算法上线后仍复用旧成本。
-    if (!StringUtils.hasText(currentAlgorithmVersion)
-        || !Objects.equals(currentAlgorithmVersion.trim(), version.getAlgorithmVersion())) {
+    if (!StringUtils.hasText(version.getSourceRevision())
+        || !Objects.equals(version.getSourceRevision(), workspace.getSourceRevision())
+        || !Objects.equals(version.getSourceRevision(), workspace.getLastSuccessSourceRevision())) {
       return false;
     }
     return Objects.equals(oaNo, version.getOaNo())

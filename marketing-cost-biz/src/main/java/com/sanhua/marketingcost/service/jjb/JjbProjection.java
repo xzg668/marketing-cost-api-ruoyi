@@ -30,7 +30,8 @@ public class JjbProjection {
       "LOSS", "MANUFACTURE", "MANUFACTURE_COST", "ADJUSTED_MANUFACTURE_COST");
   private static final List<String> THREE = List.of("MGMT_EXP", "SALES_EXP", "FIN_EXP");
 
-  public JjbReadModel project(Stored stored, OaForm form, OaFormItem item, List<CostRunTraceSnapshot> traces) {
+  public JjbReadModel project(Stored stored, OaForm form, OaFormItem item,
+      List<CostRunTraceSnapshot> traces, List<PricePrepareItem> preparations) {
     var v = stored.version(); var snapshot = stored.snapshot();
     var calc = snapshot == null ? null : snapshot.calculation();
     var warnings = new ArrayList<String>(); var rows = new ArrayList<Row>();
@@ -48,6 +49,7 @@ public class JjbProjection {
       }
     } else for (var part : stored.parts()) rows.add(part(part).build());
 
+    rows = manufacturingDetails(rows, preparations);
     rows = explainSavedChildren(rows, traces);
     if (calc != null) for (var line : calc.ordinaryInputs().materials()) if (line.explanationOf() != null) {
       rows.add(Row.builder().key("EXPLANATION:"+line.path()).section("ORDINARY_PARTS").kind("EXPLANATION")
@@ -156,6 +158,7 @@ public class JjbProjection {
     var identity = new Identity(v.getId(),v.getCostRunNo(),v.getVersionNo(),v.getOaNo(),v.getOaFormItemId(),v.getProductCode(),
         v.getBusinessUnitType(),v.getPricingMonth(),v.getAlgorithmVersion(),v.getFeePolicyVersion(),v.getStatus(),calc!=null);
     Map<String,String> quotation = new LinkedHashMap<>();
+    if (v.getConfirmedBy() != null && !v.getConfirmedBy().isBlank()) quotation.put("quoterName",v.getConfirmedBy());
     String[][] metadata = {{"applicantName",form.getApplicantName()},{"applicantDept",form.getApplicantDept()},
         {"applicantOffice",form.getApplicantOffice()},{"overseasSalesMode",form.getOverseasSalesMode()},
         {"priceLinkMode",form.getPriceLinkMode()},{"businessType",item.getBusinessType()},
@@ -170,6 +173,48 @@ public class JjbProjection {
         "表头取报价需求单；核算金额、费率及财务Cu取所选保存版本",money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation);
     return new JjbReadModel(identity,header,rows,calc==null?List.of():monthly(calc),
         new Totals(money(t1),money(v.getCuMaterialAdjustment()),money(v.getFinalQuoteAmount())),warnings);
+  }
+
+  public JjbReadModel project(Stored stored, OaForm form, OaFormItem item, List<CostRunTraceSnapshot> traces) {
+    return project(stored,form,item,traces,List.of());
+  }
+
+  /** Monthly costs already captured MAKE rows, even when no legacy trace rows were generated. */
+  private ArrayList<Row> manufacturingDetails(List<Row> rows,List<PricePrepareItem> preparations) {
+    var byId=new HashMap<Long,PricePrepareItem>();
+    preparations.forEach(row->byId.put(row.getId(),row));
+    var result=new ArrayList<Row>();
+    for(var row:rows) {
+      var prepared=row.sources().stream().filter(source->"lp_price_prepare_item".equals(source.table()))
+          .map(source->byId.get(source.id())).filter(Objects::nonNull).findFirst().orElse(null);
+      if(prepared==null || !"MAKE_PART_PRICE".equals(prepared.getResultRefType())) {result.add(row);continue;}
+      var snapshot=tree(prepared.getInputSnapshotJson());
+      if(snapshot.has("document")) snapshot=tree(new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(json)
+          .unwrap(prepared.getInputSnapshotJson()));
+      if(!"MAKE_PART_V1".equals(snapshot.path("calculatorVersion").asText())
+          || !Objects.equals(prepared.getMaterialCode(),snapshot.path("materialCode").asText())
+          || !snapshot.path("rows").isArray()) {result.add(row);continue;}
+      var children=snapshot.path("rows");
+      if(children.size()==1) {
+        result.add(weights(row.toBuilder(),children.get(0)).build());
+      } else {
+        result.add(row);int index=0;
+        for(var child:children) {
+          String code=text(child,"childMaterialNo");if(code==null)continue;
+          result.add(weights(Row.builder(),child).key(row.key()+":MAKE:"+(++index))
+              .section("ORDINARY_PARTS").kind("EXPLANATION").code(row.code()+"\n【"+code+"】")
+              .name(first(text(child,"childMaterialName"),code)).drawingNo(text(child,"childMaterialSpec"))
+              .unitPrice(number(child,"costPrice")).partItemIds(row.partItemIds()).sources(row.sources())
+              .remark("母件 "+row.code()+" 的制造明细；金额已计入母件，不重复汇总").build());
+        }
+      }
+    }
+    return result;
+  }
+
+  private Row.RowBuilder weights(Row.RowBuilder row,JsonNode saved) {
+    return row.grossWeight(decimalNumber(saved,"grossWeightG")).netWeight(decimalNumber(saved,"netWeightG"))
+        .rawUnitPrice(number(saved,"rawUnitPrice")).scrapUnitPrice(number(saved,"scrapUnitPrice"));
   }
 
   /** Old rollup/raw details are explanations from immutable trace JSON, never today's BOM. */
@@ -195,7 +240,7 @@ public class JjbProjection {
             .code(row.code()+"\n【"+code+"】").name(first(text(child,"childMaterialName"),code))
             .drawingNo(text(child,"childMaterialSpec")).unitPrice(number(child,rollup?"childUnitCost":"costPrice"))
             .quantity(rollup?text(child,"childQtyPerTop"):null)
-            .grossWeight(text(child,"grossWeightG")).netWeight(text(child,"netWeightG"))
+            .grossWeight(decimalNumber(child,"grossWeightG")).netWeight(decimalNumber(child,"netWeightG"))
             .rawUnitPrice(number(child,"rawUnitPrice")).scrapUnitPrice(number(child,"scrapUnitPrice"))
             .priceSource(text(child,rollup?"childRawPriceType":"rawPriceType"))
             .partItemIds(row.partItemIds()).sources(List.of(new Source("lp_cost_run_trace_snapshot",trace.getId(),"保存的母件／子件依据")))
@@ -206,6 +251,9 @@ public class JjbProjection {
   }
   private static String number(JsonNode node,String field) {
     String value=text(node,field);return value==null?null:money(new BigDecimal(value));
+  }
+  private static String decimalNumber(JsonNode node,String field) {
+    String value=text(node,field);return value==null?null:decimal(new BigDecimal(value));
   }
 
   private Map<String,String> householdCalculation(com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.Snapshot snapshot,

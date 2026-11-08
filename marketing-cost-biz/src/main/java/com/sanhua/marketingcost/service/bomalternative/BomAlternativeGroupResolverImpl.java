@@ -45,10 +45,12 @@ public final class BomAlternativeGroupResolverImpl
               Comparator.nullsLast(Comparator.naturalOrder()));
 
   private final BomAlternativeGroupKeyGenerator keyGenerator;
+  private final U9BomAlternativeMetadata sourceMetadata;
 
   public BomAlternativeGroupResolverImpl(
-      BomAlternativeGroupKeyGenerator keyGenerator) {
+      BomAlternativeGroupKeyGenerator keyGenerator, U9BomAlternativeMetadata sourceMetadata) {
     this.keyGenerator = Objects.requireNonNull(keyGenerator, "keyGenerator");
+    this.sourceMetadata = Objects.requireNonNull(sourceMetadata, "sourceMetadata");
   }
 
   @Override
@@ -60,6 +62,8 @@ public final class BomAlternativeGroupResolverImpl
     if (rows == null || rows.isEmpty()) {
       return new BomAlternativeGroupResolution(groups, issues);
     }
+
+    sourceMetadata.complete(rows);
 
     rows.stream()
         .filter(Objects::nonNull)
@@ -193,7 +197,7 @@ public final class BomAlternativeGroupResolverImpl
 
     BomAlternativeGroupIdentity identity =
         new BomAlternativeGroupIdentity(
-            reference.getPriceOrgCode(),
+            U9BomAlternativeMetadata.sourceOrganization(reference),
             reference.getTopProductCode(),
             keyGenerator.parentPathFingerprint(referenceScope.parentPath()),
             reference.getParentCode(),
@@ -261,7 +265,7 @@ public final class BomAlternativeGroupResolverImpl
 
   private static GroupScope scope(BomRawHierarchy row) {
     return new GroupScope(
-        normalized(row.getPriceOrgCode()),
+        normalized(U9BomAlternativeMetadata.sourceOrganization(row)),
         normalized(row.getTopProductCode()),
         normalized(row.getParentCode()),
         parentPath(row.getPath()),

@@ -54,7 +54,8 @@ class MonthlyRepriceBomIntegrationTest {
     var snapshots=sql.getMapper(QuoteBomMonthlySnapshotMapper.class);
     var supplements=sql.getMapper(QuoteBomSupplementVersionMapper.class);
     var json=new ObjectMapper().findAndRegisterModules();
-    details=spy(new MonthlyBomSnapshotDetailService(jdbc,json,null,null));
+    details=spy(new MonthlyBomSnapshotDetailService(jdbc,json,null,null,
+        mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class)));
     doAnswer(call->{details.save(call.getArgument(0),raw);return null;})
         .when(details).captureU9(anyLong(),any(),anyString());
     var contexts=new QuoteBomContextResolver(mock(MaterialMasterRawMapper.class), unit -> "2026-10");

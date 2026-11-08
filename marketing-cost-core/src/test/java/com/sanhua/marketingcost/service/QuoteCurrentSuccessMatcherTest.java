@@ -74,6 +74,37 @@ class QuoteCurrentSuccessMatcherTest {
     assertThat(matches("COST_V1", "REV-1")).isFalse();
   }
 
+  @Test void savedResultIsIndependentOfCurrentPublicInputsAndAlgorithm() {
+    assertThat(saved()).isTrue();
+    assertThat(matches("COST_V2", "NEW-PRICES-AND-RATES")).isFalse();
+    assertThat(saved()).isTrue();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"QUEUED", "RUNNING", "WAIT_PRICE", "SYSTEM_FAILED", "STALE"})
+  void unfinishedRegenerationCannotBeSubmitted(String status) {
+    workspace.setWorkspaceStatus(status);
+    assertThat(saved()).isFalse();
+  }
+
+  @Test void savedResultStillRequiresTheSameCompletedVersionAndProduct() {
+    workspace.setLastSuccessInputFingerprint("OLD");
+    assertThat(saved()).isFalse();
+    workspace.setLastSuccessInputFingerprint("FP-1");
+    item.setConfirmedCostVersionId(89L);
+    assertThat(saved()).isFalse();
+    item.setConfirmedCostVersionId(88L);
+    version.setOaFormItemId(12L);
+    assertThat(saved()).isFalse();
+    version.setOaFormItemId(11L);
+    version.setPricingMonth("2026-09");
+    assertThat(saved()).isFalse();
+  }
+
+  private boolean saved() {
+    return QuoteCurrentSuccessMatcher.matchesSaved("OA-1", 11L, "2026-08", item, workspace, version);
+  }
+
   private boolean matches(String algorithmVersion, String sourceRevision) {
     return QuoteCurrentSuccessMatcher.matches(
         "OA-1", 11L, "2026-08", item, workspace, version, algorithmVersion, sourceRevision);

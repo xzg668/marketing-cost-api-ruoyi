@@ -29,16 +29,31 @@ class JjbReadIntegrationTest {
     jdbc.update("INSERT INTO oa_form(id,oa_no,business_unit_type) VALUES(1,'MPP05-LINKED','COMMERCIAL')");
     jdbc.update("INSERT INTO oa_form_item(id,oa_form_id,material_no,business_unit_type,deleted) VALUES(1,1,'TOP','COMMERCIAL',0)");
     var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
-    for(var type:List.of(QuoteCostRunVersionMapper.class,OaFormMapper.class,OaFormItemMapper.class,CostRunTraceSnapshotMapper.class)) config.addMapper(type);
+    for(var type:List.of(QuoteCostRunVersionMapper.class,OaFormMapper.class,OaFormItemMapper.class,CostRunTraceSnapshotMapper.class,PricePrepareItemMapper.class)) config.addMapper(type);
     var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(jdbc.getDataSource());factory.setConfiguration(config);
     var sql=new SqlSessionTemplate(factory.getObject());
-    reader=new JjbReadService(new JjbVersionAccess(sql.getMapper(QuoteCostRunVersionMapper.class),sql.getMapper(OaFormMapper.class),sql.getMapper(OaFormItemMapper.class)),costing,new JjbProjection(new ObjectMapper()),sql.getMapper(CostRunTraceSnapshotMapper.class));
+    reader=new JjbReadService(new JjbVersionAccess(sql.getMapper(QuoteCostRunVersionMapper.class),sql.getMapper(OaFormMapper.class),sql.getMapper(OaFormItemMapper.class)),costing,new JjbProjection(new ObjectMapper()),sql.getMapper(CostRunTraceSnapshotMapper.class),sql.getMapper(PricePrepareItemMapper.class));
   }
   @AfterAll static void close(){stop();}
   @BeforeEach void login(){auth("COMMERCIAL");}
   @AfterEach void logout(){SecurityContextHolder.clearContext();}
   static void auth(String unit){var auth=new UsernamePasswordAuthenticationToken("jjb-read-test","unused",List.of(new SimpleGrantedAuthority("ingest:quote:list")));auth.setDetails(Map.of("businessUnitType",unit));SecurityContextHolder.getContext().setAuthentication(auth);}
   static JjbReadModel.Row row(JjbReadModel model,String code){return model.rows().stream().filter(r->code.equals(r.code())).findFirst().orElseThrow();}
+  @Test void materialAndShapeAreCapturedByOrganizationAndHistoricalReadDoesNotFollowMasterChanges() throws Exception {
+    var f=fixture("1","100000",false);
+    var request=f.plan().selections().keySet().stream().filter(r->f.plan().selections().get(r).fact().type()==MonthlyAdoptionPlan.PricingType.NORMAL).findFirst().orElseThrow();
+    String code=request.family().materialCode();
+    jdbc.update("INSERT INTO lp_material_master_raw(id,material_code,organization_code,active_flag,global_seg_4_material,shape_attr,drawing_no) VALUES(90001,?,'COMMERCIAL',1,'紫铜T2','采购件','DRAW-OLD')",code);
+    jdbc.update("INSERT INTO lp_material_master_raw(id,material_code,organization_code,active_flag,global_seg_4_material,shape_attr,drawing_no) VALUES(90002,?,'PLATE',1,'316L','制造件','WRONG-ORG')",code);
+    saveCompleted(f);
+    var before=reader.read(f.version().getOaNo(),1L,f.version().getId()).sheet();
+    assertThat(row(before,code).material()).isEqualTo("紫铜T2");
+    assertThat(row(before,code).shape()).isEqualTo("采购件");
+    assertThat(row(before,code).drawingNo()).isEqualTo("DRAW-OLD");
+    jdbc.update("UPDATE lp_material_master_raw SET global_seg_4_material='新材质',shape_attr='新形态',drawing_no='NEW' WHERE id=90001");
+    assertThat(reader.read(f.version().getOaNo(),1L,f.version().getId()).sheet()).isEqualTo(before);
+    jdbc.update("DELETE FROM lp_material_master_raw WHERE id IN (90001,90002)");
+  }
   @Test void actualPersistedGoldenHasExactDPEQFAiAndThreeSavedTotals() throws Exception {
     var f=fixture("2","92000",true);saveCompleted(f);prepared.set(0);
     var view=reader.read(f.version().getOaNo(),1L,f.version().getId());var m=view.sheet();

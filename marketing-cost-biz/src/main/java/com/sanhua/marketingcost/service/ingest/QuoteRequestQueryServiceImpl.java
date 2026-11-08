@@ -417,6 +417,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setScrapRate(item.getScrapRate());
     response.setUnitLaborCost(item.getUnitLaborCost());
     response.setTechnicianName(item.getTechnicianName());
+    response.setQuoterName(latestCostRun == null ? null : latestCostRun.getConfirmedBy());
     response.setClassificationStatus(item.getClassificationStatus());
     response.setTotalWithShip(item.getTotalWithShip());
     response.setTotalNoShip(item.getTotalNoShip());

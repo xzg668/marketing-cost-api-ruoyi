@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata;
 import com.sanhua.marketingcost.service.impl.BomEffectiveTreePruner;
 import com.sanhua.marketingcost.service.impl.PlateCommercialMakeBomExpansionService;
 import java.sql.SQLException;
@@ -35,14 +36,17 @@ public class MonthlyBomSnapshotDetailService {
   private final ObjectMapper json;
   private final BomRawHierarchyMapper hierarchyMapper;
   private final PlateCommercialMakeBomExpansionService expansionService;
+  private final U9BomAlternativeMetadata alternativeMetadata;
 
   public MonthlyBomSnapshotDetailService(JdbcTemplate jdbc, ObjectMapper json,
       BomRawHierarchyMapper hierarchyMapper,
-      PlateCommercialMakeBomExpansionService expansionService) {
+      PlateCommercialMakeBomExpansionService expansionService,
+      U9BomAlternativeMetadata alternativeMetadata) {
     this.jdbc = jdbc;
     this.json = json;
     this.hierarchyMapper = hierarchyMapper;
     this.expansionService = expansionService;
+    this.alternativeMetadata = alternativeMetadata;
   }
 
   public List<BomRawHierarchy> load(Long snapshotId) {
@@ -138,6 +142,8 @@ public class MonthlyBomSnapshotDetailService {
         Long.class,
         snapshotId);
     if (!load(snapshotId).isEmpty()) return;
+    var frozenRows = detached(rows);
+    alternativeMetadata.complete(frozenRows);
     try {
       jdbc.batchUpdate(
           "INSERT INTO lp_quote_bom_monthly_snapshot_detail "
@@ -148,7 +154,7 @@ public class MonthlyBomSnapshotDetailService {
                 throws SQLException {
               statement.setLong(1, snapshotId);
               statement.setInt(2, index);
-              statement.setString(3, encode(rows.get(index)));
+              statement.setString(3, encode(frozenRows.get(index)));
             }
 
             @Override

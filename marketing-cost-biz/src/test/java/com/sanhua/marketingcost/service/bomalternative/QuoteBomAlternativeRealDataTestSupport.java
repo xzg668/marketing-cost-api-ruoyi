@@ -96,7 +96,8 @@ final class QuoteBomAlternativeRealDataTestSupport {
         new BomAlternativeGroupKeyGeneratorImpl();
     sourceRows = realSourceRows(keyGenerator);
     BomAlternativeGroupResolution resolution =
-        new BomAlternativeGroupResolverImpl(keyGenerator)
+        new BomAlternativeGroupResolverImpl(keyGenerator,
+            mock(U9BomAlternativeMetadata.class))
             .resolve(sourceRows);
     if (!resolution.issues().isEmpty()
         || resolution.groups().size() != 1) {
@@ -292,7 +293,7 @@ final class QuoteBomAlternativeRealDataTestSupport {
         mock(BomRawHierarchyMapper.class);
     BomAlternativeGroupResolver resolver =
         new BomAlternativeGroupResolverImpl(
-            new BomAlternativeGroupKeyGeneratorImpl());
+            new BomAlternativeGroupKeyGeneratorImpl(), mock(U9BomAlternativeMetadata.class));
     QuoteBomPreparationRecordMapper preparationMapper =
         mock(QuoteBomPreparationRecordMapper.class);
     QuoteBomAlternativeWorkflowInvalidationService invalidationService =

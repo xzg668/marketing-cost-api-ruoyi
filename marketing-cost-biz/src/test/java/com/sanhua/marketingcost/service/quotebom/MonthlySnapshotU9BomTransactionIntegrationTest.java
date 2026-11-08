@@ -51,6 +51,7 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
   private static JdbcTemplate jdbc;
   private static TransactionTemplate costing;
   private static QuoteBomMonthlySnapshotMapper mapper;
+  private static com.sanhua.marketingcost.mapper.BomU9SourceMapper u9Sources;
   private static CurrentU9BomGateway gateway;
   private static MonthlyBomSnapshotDetailService details;
   private static final LiveU9BomGateway LIVE = mock(LiveU9BomGateway.class);
@@ -68,17 +69,27 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     jdbc.execute("ALTER TABLE lp_quote_bom_monthly_snapshot ADD price_org_code VARCHAR(32)");
     jdbc.execute(resource("db/V233__u9_monthly_first_query_snapshot.sql"));
     jdbc.execute(resource("db/V293__quote_bom_monthly_snapshot_detail.sql"));
+    jdbc.execute("""
+        CREATE TABLE lp_bom_u9_source (
+          id BIGINT PRIMARY KEY, price_org_code VARCHAR(32), parent_material_no VARCHAR(64),
+          child_material_no VARCHAR(64), bom_purpose VARCHAR(32), bom_version VARCHAR(32),
+          child_seq INT, process_seq VARCHAR(32), effective_from DATE, effective_to DATE, child_type VARCHAR(16))
+        """);
     details = new MonthlyBomSnapshotDetailService(jdbc,
-        new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(), null, null);
+        new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(), null, null,
+        mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class));
 
     var factory = new MybatisSqlSessionFactoryBean();
     factory.setDataSource(source);
     var configuration = new MybatisConfiguration();
     configuration.setMapUnderscoreToCamelCase(true);
     configuration.addMapper(QuoteBomMonthlySnapshotMapper.class);
+    configuration.addMapper(com.sanhua.marketingcost.mapper.BomU9SourceMapper.class);
     factory.setConfiguration(configuration);
     mapper = new SqlSessionTemplate(factory.getObject())
         .getMapper(QuoteBomMonthlySnapshotMapper.class);
+    u9Sources = new SqlSessionTemplate(factory.getObject())
+        .getMapper(com.sanhua.marketingcost.mapper.BomU9SourceMapper.class);
     var manager = new DataSourceTransactionManager(source);
     spring = new AnnotationConfigApplicationContext();
     spring.register(
@@ -100,6 +111,7 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
   void clearIsolatedTestData() {
     jdbc.execute("TRUNCATE TABLE lp_quote_bom_monthly_snapshot_detail");
     jdbc.execute("TRUNCATE TABLE lp_quote_bom_monthly_snapshot");
+    jdbc.execute("TRUNCATE TABLE lp_bom_u9_source");
     reset(LIVE);
     when(LIVE.readLive(any())).thenAnswer(invocation -> {
       QuoteBomReadContext scope = invocation.getArgument(0);
@@ -271,7 +283,8 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     }
     var before=jdbc.queryForList("SELECT * FROM lp_quote_bom_monthly_snapshot_detail ORDER BY id");
     var counted=org.mockito.Mockito.spy(jdbc);
-    var batchReader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(),null,null);
+    var batchReader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(),null,null,
+        mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class));
     ids.add(ids.getFirst());ids.add(Long.MAX_VALUE);
     var loaded=batchReader.loadBatch(ids);
     assertThat(loaded).hasSize(130);
@@ -287,7 +300,8 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
 
   @Test void emptyOrInvalidBatchCannotReadUnrelatedBomAndInvalidJsonCannotBecomeAnEmptyTree() {
     var counted=org.mockito.Mockito.spy(jdbc);
-    var reader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper(),null,null);
+    var reader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper(),null,null,
+        mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class));
     assertThat(reader.loadBatch(java.util.List.of())).isEmpty();
     assertThatThrownBy(() -> reader.loadBatch(java.util.List.of(0L))).hasMessageContaining("ID必须大于0");
     org.mockito.Mockito.verifyNoInteractions(counted);
@@ -302,7 +316,8 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     var row=new com.sanhua.marketingcost.entity.BomRawHierarchy();row.setId(100L);row.setMaterialCode("ORIGINAL");
     costing.executeWithoutResult(tx -> details.save(id,java.util.List.of(row)));
     var counted=org.mockito.Mockito.spy(jdbc);
-    var reader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper(),null,null);
+    var reader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper(),null,null,
+        mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class));
     var loaded=reader.loadBatch(java.util.List.of(id,drawing));
     org.mockito.Mockito.clearInvocations(counted);
     assertThatThrownBy(() -> reader.useLoaded(loaded, () -> {
@@ -319,6 +334,53 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     assertThat(reader.load(id).getFirst().getMaterialCode()).isEqualTo("ORIGINAL");
     org.mockito.Mockito.verify(counted).query(org.mockito.ArgumentMatchers.anyString(),
         org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowCallbackHandler.class),org.mockito.ArgumentMatchers.any(Object[].class));
+  }
+
+  @Test
+  void newSnapshotFreezesRecoveredTypesWhileOldSnapshotAndSourceValuesRemainUnchanged() throws Exception {
+    var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    var fixture = json.readTree(resource("bom/alternative-missing-metadata.json"));
+    var rows = java.util.Arrays.asList(json.treeToValue(fixture.get("nodes"),
+        com.sanhua.marketingcost.entity.BomRawHierarchy[].class));
+    var sources = json.treeToValue(fixture.get("sources"), com.sanhua.marketingcost.entity.BomU9Source[].class);
+    for (var source : sources) {
+      jdbc.update("INSERT INTO lp_bom_u9_source VALUES(?,?,?,?,?,?,?,?,?,?,?)", source.getId(),
+          source.getPriceOrgCode(), source.getParentMaterialNo(), source.getChildMaterialNo(), source.getBomPurpose(),
+          source.getBomVersion(), source.getChildSeq(), source.getProcessSeq(), source.getEffectiveFrom(),
+          source.getEffectiveTo(), source.getChildType());
+    }
+    var sourceBefore = jdbc.queryForList("SELECT * FROM lp_bom_u9_source ORDER BY id");
+    var keys = new com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupKeyGeneratorImpl();
+    var metadata = new com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata(u9Sources, keys);
+    var realDetails = new MonthlyBomSnapshotDetailService(jdbc, json, null, null, metadata);
+    Long oldId = costing.execute(tx -> gateway.read(actualProductContext("2026-08")).monthlySnapshotId());
+    costing.executeWithoutResult(tx -> details.save(oldId, rows));
+    var oldBefore = jdbc.queryForList("SELECT * FROM lp_quote_bom_monthly_snapshot_detail WHERE monthly_snapshot_id=?", oldId);
+    Long newId = costing.execute(tx -> gateway.read(actualProductContext("2026-09")).monthlySnapshotId());
+    costing.executeWithoutResult(tx -> realDetails.save(newId, rows));
+    var frozen = realDetails.load(newId);
+    assertThat(frozen).filteredOn(row -> row.getLevel() > 0).allSatisfy(row -> {
+      assertThat(row.getChildType()).isNotBlank();
+      assertThat(row.getAlternativeGroupKey()).isNotBlank();
+    });
+    assertThat(rows).allSatisfy(row -> assertThat(row.getChildType()).isNull());
+    assertThat(jdbc.queryForList("SELECT * FROM lp_bom_u9_source ORDER BY id")).isEqualTo(sourceBefore);
+    // Recover the old read copy, without rewriting historical JSON or replacing its quantities.
+    var resolver = new com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupResolverImpl(keys, metadata);
+    assertThat(resolver.resolve(realDetails.load(oldId)).groups()).hasSize(1);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_monthly_snapshot_detail WHERE monthly_snapshot_id=?", oldId)).isEqualTo(oldBefore);
+    // A later import no longer contains the original source version; complete snapshots still work.
+    jdbc.update("DELETE FROM lp_bom_u9_source");
+    assertThat(resolver.resolve(realDetails.load(newId)).groups()).hasSize(1);
+    assertThatThrownBy(() -> resolver.resolve(realDetails.load(oldId)))
+        .hasMessageContaining("没有找到同版本来源");
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_monthly_snapshot_detail WHERE monthly_snapshot_id=?", oldId)).isEqualTo(oldBefore);
+  }
+
+  private QuoteBomReadContext actualProductContext(String month) {
+    return new QuoteBomReadContext(22L, 282L, "OA-METADATA-TEST", month, "COMMERCIAL",
+        "1145900000611", "压力变送器", "", "", "210", "COMMERCIAL",
+        LocalDate.parse(month + "-06"), LocalDateTime.parse(month + "-06T12:00:00"));
   }
 
   private static String resource(String path) throws Exception {

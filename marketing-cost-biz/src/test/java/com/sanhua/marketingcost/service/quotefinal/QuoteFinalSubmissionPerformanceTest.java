@@ -26,7 +26,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.PlatformTransactionManager;
 
-/** Exercises the whole-quotation reader with the real per-product revision calculator. */
+/** Completed submissions never reread mutable source tables, even for large quotations. */
 class QuoteFinalSubmissionPerformanceTest {
   private final AtomicInteger publicScans = new AtomicInteger();
   private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
@@ -35,6 +35,7 @@ class QuoteFinalSubmissionPerformanceTest {
   private final QuoteFinalSubmissionRepository repository = mock(QuoteFinalSubmissionRepository.class);
   private final ProductCostingSuccessLookup successes = mock(ProductCostingSuccessLookup.class);
   private final QuotationMonthlyPriceInputs monthly = mock(QuotationMonthlyPriceInputs.class);
+  private final TechnicalDataOaContext oaContext = mock(TechnicalDataOaContext.class);
   private final TechnicalDataActor actor = new TechnicalDataActor(1L, "报价员", Set.of("*:*:*"));
   private final OaForm form = new OaForm();
   private QuoteFinalSubmissionService service;
@@ -58,7 +59,7 @@ class QuoteFinalSubmissionPerformanceTest {
     var contexts = new ProductCostingContextResolver(forms, items, revisions, periods);
     var json = new ObjectMapper();
     service = new QuoteFinalSubmissionService(repository, forms, items, contexts, successes,
-        mock(OaMessageRepository.class), new OaMessageCodec(json), json, mock(TechnicalDataOaContext.class),
+        mock(OaMessageRepository.class), new OaMessageCodec(json), json, oaContext,
         mock(OaFinalCostSubmissionClient.class), mock(OaWorkflowAccessPolicy.class),
         mock(PlatformTransactionManager.class), periods);
   }
@@ -73,16 +74,31 @@ class QuoteFinalSubmissionPerformanceTest {
       return item;
     }).toList();
     when(items.selectList(any())).thenReturn(rows);
-    when(successes.hasCurrentVersion(any())).thenAnswer(call ->
-        !withoutCosts.contains(((ProductCostingContext) call.getArgument(0)).itemId()));
-    when(successes.find(any())).thenAnswer(call -> {
+    org.mockito.stubbing.Answer<Optional<ProductCostingSuccessLookup.ReusableCost>> saved = call -> {
       ProductCostingContext context = call.getArgument(0);
       if (withoutCosts.contains(context.itemId())) return Optional.empty();
       var version = new QuoteCostRunVersion(); version.setId(context.itemId() * 100);
       version.setVersionNo("V1"); version.setFinalQuoteAmount(new BigDecimal("196.800000"));
-      version.setSourceRevision(context.sourceRevision());
+      version.setSourceRevision("saved-source-revision");
       return Optional.of(new ProductCostingSuccessLookup.ReusableCost(version, "prepare", 0));
-    });
+    };
+    when(successes.findSaved(any())).thenAnswer(saved);
+  }
+
+  @Test void completedCostRemainsVisibleAndSubmittableWhenPublicPricesCannotBeRead() {
+    products(1, Set.of());
+    when(repository.linked(form.getId())).thenReturn(true);
+    var document = new TechnicalDataOaContext.Document(form.getId(), "OA-REQUEST", "FI-SC-006",
+        new OaPeer("I07", "TEST", Set.of("COMMERCIAL")), null);
+    when(oaContext.document(form.getId())).thenReturn(document);
+    // A price/rate refresh can be incomplete while the previously saved result is still valid.
+    when(monthly.read(any(), any(), anyString())).thenThrow(new IllegalStateException("公共价格正在更新"));
+    var result = service.status(form.getOaNo(), "2026-11", actor);
+    assertThat(result.readyProducts()).isEqualTo(1);
+    assertThat(result.canConfirm()).isTrue();
+    assertThat(result.costs().getFirst().totalCost()).isEqualTo("196.800000");
+    assertThat(publicScans.get()).isZero();
+    verifyNoInteractions(monthly);
   }
 
   @ParameterizedTest @ValueSource(ints = {107, 500})
@@ -97,14 +113,14 @@ class QuoteFinalSubmissionPerformanceTest {
   }
 
   @ParameterizedTest @ValueSource(ints = {107, 500})
-  void costedQuoteChecksPublicSourcesOnceAndEveryProductsOwnInputs(int count) {
+  void costedQuoteReadsEverySavedResultWithoutRescanningSources(int count) {
     products(count, Set.of());
     var status = service.status(form.getOaNo(), "2026-11", actor);
     assertThat(status.readyProducts()).isEqualTo(count);
     assertThat(status.costs()).allSatisfy(row -> assertThat(row.totalCost()).isEqualTo("196.800000"));
-    assertThat(publicScans.get()).as("One public source snapshot per quotation read").isEqualTo(1);
-    verify(monthly, times(count)).read(any(), any(), eq("2026-11"));
-    verify(successes, times(count)).find(any());
+    assertThat(publicScans.get()).isZero();
+    verifyNoInteractions(monthly);
+    verify(successes, times(count)).findSaved(any());
   }
 
   @Test void mixedQuoteSkipsOnlyUncostedProductsAndPreservesOrder() {
@@ -114,28 +130,29 @@ class QuoteFinalSubmissionPerformanceTest {
     assertThat(status.costs()).extracting(QuoteFinalSubmissionService.CostLine::itemId)
         .containsExactlyElementsOf(LongStream.rangeClosed(1, 107).boxed().toList());
     assertThat(status.costs().get(1).status()).isEqualTo("NOT_READY");
-    assertThat(publicScans.get()).isEqualTo(1);
-    verify(monthly, times(104)).read(any(), any(), anyString());
+    assertThat(publicScans.get()).isZero();
+    verifyNoInteractions(monthly);
   }
 
-  @Test void sourceChangesAreObservedOnTheNextReadRatherThanCachedAcrossRequests() {
+  @Test void sourceUpdatesDoNotHideOrAlterTheCompletedCosts() {
     products(107, Set.of());
     var before = service.status(form.getOaNo(), "2026-11", actor);
     when(monthly.read(any(), any(), anyString())).thenReturn(
         new QuotationMonthlyPriceInputs.Scope("changed-adopted-price", Set.of(), Set.of(), true));
     var after = service.status(form.getOaNo(), "2026-11", actor);
-    assertThat(after.fingerprint()).isNotEqualTo(before.fingerprint());
-    assertThat(after.costs().getFirst().sourceRevision()).isNotEqualTo(before.costs().getFirst().sourceRevision());
-    assertThat(publicScans.get()).isEqualTo(2);
+    assertThat(after.fingerprint()).isEqualTo(before.fingerprint());
+    assertThat(after.costs()).isEqualTo(before.costs());
+    assertThat(publicScans.get()).isZero();
+    verifyNoInteractions(monthly);
   }
 
   @Test void oneInvalidProductDoesNotHideOtherCosts() {
     products(3, Set.of());
-    when(monthly.read(any(), argThat(item -> item.getId() == 2L), anyString()))
-        .thenThrow(new IllegalArgumentException("第二个产品的价格依据失效"));
+    doThrow(new IllegalArgumentException("第二个产品的核算结果尚未保存完成"))
+        .when(successes).findSaved(argThat(context -> context.itemId() == 2L));
     var status = service.status(form.getOaNo(), "2026-11", actor);
     assertThat(status.readyProducts()).isEqualTo(2);
-    assertThat(status.costs().get(1).message()).isEqualTo("第二个产品的价格依据失效");
+    assertThat(status.costs().get(1).message()).isEqualTo("第二个产品的核算结果尚未保存完成");
     assertThat(status.costs().getFirst().totalCost()).isEqualTo("196.800000");
     assertThat(status.costs().getLast().totalCost()).isEqualTo("196.800000");
     assertThat(status.canConfirm()).isFalse();

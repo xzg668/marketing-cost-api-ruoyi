@@ -32,7 +32,8 @@ class FormalBomReferenceReadTest {
     when(expansion.expand(any(), any(), any(), any(), any(), any())).thenAnswer(invocation ->
         new PlateCommercialMakeBomExpansionService.ExpansionResult(invocation.getArgument(0), Map.of(), Map.of(), List.of()));
     var service = new FormalBomReadServiceImpl(bom, materials, expansion, quotationSelection,
-        new BomAlternativeGroupResolverImpl(new BomAlternativeGroupKeyGeneratorImpl()), new BomAlternativeBranchPrunerImpl());
+        new BomAlternativeGroupResolverImpl(new BomAlternativeGroupKeyGeneratorImpl(),
+          org.mockito.Mockito.mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class)), new BomAlternativeBranchPrunerImpl());
     var result = service.readReference("TOP", "2026-09", "主制造", LocalDate.of(2026, 9, 1), new QuoteDataOrganization("210", "COMMERCIAL"));
     assertThat(result.lines()).extracting(QuoteBomSourceLineDto::materialCode).containsExactly("TOP", "PARENT", "STD", "STD-RAW");
     assertThat(result.lines().getLast().qtyPerTop()).isEqualByComparingTo("0.0006");

@@ -389,6 +389,21 @@ class QuoteRequestQueryServiceImplTest {
     });
   }
 
+  @Test void completedProductDisplaysTheQuoterWhoSavedItsCost() {
+    var form=form("OA-QUOTER", "FI-SC-006", "CONFIRMED");
+    var product=item(155L,"1145900000048");product.setTechnicianName("技术员");
+    product.setConfirmedCostVersionId(20L);
+    var version=costRunVersion(155L,20L,"SUCCESS");version.setConfirmedBy("罗思雅");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(product));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(List.of());
+    when(quoteCostRunVersionMapper.selectList(any())).thenReturn(List.of(version));
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    assertThat(service.getRequestDetail("OA-QUOTER").getItems().getFirst().getQuoterName()).isEqualTo("罗思雅");
+  }
+
   @Test
   void pendingClassificationCanConfirm() {
     OaForm form = form("OA-T8-005", "FI-SC-999", "PENDING");

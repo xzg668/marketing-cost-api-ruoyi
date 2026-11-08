@@ -5,7 +5,6 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
-import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
 import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor;
@@ -40,7 +39,7 @@ class QuoteFinalSubmissionReadinessIntegrationTest extends OriginalPricingIntegr
 
   @AfterEach void clearIdentity() { SecurityContextHolder.clearContext(); }
 
-  @Test void missingTechnicalInputReturnsNotReadyAfterItsTransactionRollsBack() {
+  @Test void incompleteSavedResultReturnsNotReadyAfterItsTransactionRollsBack() {
     String oaNo = "TW18-READINESS-" + UUID.randomUUID();
     jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type) VALUES(?,'COMMERCIAL')", oaNo);
     long formId = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, oaNo);
@@ -50,20 +49,19 @@ class QuoteFinalSubmissionReadinessIntegrationTest extends OriginalPricingIntegr
     var auth = new UsernamePasswordAuthenticationToken("finance", "unused", List.of());
     auth.setDetails(Map.of("businessUnitType", "COMMERCIAL"));
     SecurityContextHolder.getContext().setAuthentication(auth);
-    doReturn(true).when(successes).hasCurrentVersion(any());
-    doReturn(Map.of()).when(contexts).resolveRevisions(anyList());
     doAnswer(call -> new TransactionTemplate(transactions).execute(tx -> {
-      throw new EffectiveTechnicalDataException("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", itemId,
-          month, List.of("PACKAGE"), "原包装资料尚未完成财务确认");
-    })).when(contexts).resolveRevision(any());
+      throw new IllegalStateException("核算结果尚未保存完成");
+    })).when(successes).findSaved(any());
 
     var result = service.status(oaNo, month, new TechnicalDataActor(1L, "报价员", Set.of("*:*:*")));
 
     assertThat(result.status()).isEqualTo("NOT_READY");
-    assertThat(result.error()).isEqualTo("原包装资料尚未完成财务确认");
+    assertThat(result.error()).isEqualTo("核算结果尚未保存完成");
     assertThat(result.canConfirm()).isFalse();
     assertThat(result.costs()).hasSize(1);
     assertThat(result.costs().getFirst().totalCost()).isNull();
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_final_submission WHERE oa_form_id=?", Integer.class, formId)).isZero();
+    verify(contexts, never()).resolveRevision(any());
+    verify(contexts, never()).resolveRevisions(anyList());
   }
 }

@@ -18,8 +18,11 @@ public class JjbReadService {
   private final MonthlyCostVersionService versions;
   private final JjbProjection projection;
   private final com.sanhua.marketingcost.mapper.CostRunTraceSnapshotMapper traces;
+  private final com.sanhua.marketingcost.mapper.PricePrepareItemMapper preparations;
   public JjbReadService(JjbVersionAccess access, MonthlyCostVersionService versions, JjbProjection projection,
-      com.sanhua.marketingcost.mapper.CostRunTraceSnapshotMapper traces) {
+      com.sanhua.marketingcost.mapper.CostRunTraceSnapshotMapper traces,
+      com.sanhua.marketingcost.mapper.PricePrepareItemMapper preparations) {
+    this.preparations=preparations;
     this.traces=traces;
     this.access=access;this.versions=versions;this.projection=projection;
   }
@@ -38,7 +41,21 @@ public class JjbReadService {
         .eq(CostRunTraceSnapshot::getCostRunVersionId, saved.version().getId())
         .eq(CostRunTraceSnapshot::getBusinessUnitType, owned.businessUnit())
         .eq(CostRunTraceSnapshot::getTraceType, "PART_PRICE").orderByAsc(CostRunTraceSnapshot::getId));
-    return new View(projection.project(saved,owned.form(),owned.item(),frozenDetails),
+    var ids=saved.parts().stream().map(CostRunPartItem::getPricePrepareItemId).filter(Objects::nonNull).distinct().toList();
+    var frozenPreparations=new ArrayList<PricePrepareItem>();
+    for(int start=0;start<ids.size();start+=256) {
+      for(var row:preparations.selectBatchIds(ids.subList(start,Math.min(start+256,ids.size())))) {
+        var version=saved.version();
+        if(!Objects.equals(version.getBusinessUnitType(),row.getBusinessUnitType())
+            || !Objects.equals(version.getOaNo(),row.getOaNo())
+            || !Objects.equals(version.getOaFormItemId(),row.getOaFormItemId())
+            || !Objects.equals(version.getPricingMonth(),row.getPeriodMonth())
+            || !Objects.equals(version.getProductCode(),row.getTopProductCode()))
+          throw new IllegalStateException("保存价格准备的版本归属不一致");
+        frozenPreparations.add(row);
+      }
+    }
+    return new View(projection.project(saved,owned.form(),owned.item(),frozenDetails,frozenPreparations),
         saved.parts().stream().map(row->{var dto=new CostRunPartItemDto();BeanUtils.copyProperties(row,dto);dto.setPartQty(row.getQty());return dto;}).toList(),
         saved.costs().stream().map(row->{var dto=new CostRunCostItemDto();BeanUtils.copyProperties(row,dto);return dto;}).toList());
   }

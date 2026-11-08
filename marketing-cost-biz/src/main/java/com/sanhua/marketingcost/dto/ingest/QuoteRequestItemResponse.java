@@ -33,6 +33,7 @@ public class QuoteRequestItemResponse {
   private BigDecimal scrapRate;
   private BigDecimal unitLaborCost;
   private String technicianName;
+  private String quoterName;
   private String classificationStatus;
   private BigDecimal totalWithShip;
   private BigDecimal totalNoShip;

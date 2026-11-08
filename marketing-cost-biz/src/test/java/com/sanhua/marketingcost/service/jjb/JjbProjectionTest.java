@@ -87,4 +87,37 @@ class JjbProjectionTest {
     var explanation=model.rows().get(1);assertThat(explanation.kind()).isEqualTo("EXPLANATION");assertThat(explanation.code()).isEqualTo("PARENT\n【CHILD】");
     assertThat(explanation.drawingNo()).isEqualTo("OLD-DRAW");assertThat(explanation.amount()).isNull();assertThat(explanation.partItemIds()).containsExactly(20L);
   }
+
+  @Test void monthlyManufacturedPartDisplaysItsAlreadySavedWeightsAndPricesWithoutLegacyTraces() {
+    var part=new CostRunPartItem();part.setId(20L);part.setPartCode("7218501041211");
+    part.setPricePrepareItemId(2151L);part.setQty(BigDecimal.ONE);part.setAmount(new BigDecimal("0.582814"));
+    var prepared=new PricePrepareItem();prepared.setId(2151L);prepared.setMaterialCode(part.getPartCode());
+    prepared.setResultRefType("MAKE_PART_PRICE");
+    prepared.setInputSnapshotJson("{\"calculatorVersion\":\"MAKE_PART_V1\",\"materialCode\":\"7218501041211\",\"rows\":[{\"parentMaterialNo\":\"7218501041211\",\"childMaterialNo\":\"201850068\",\"grossWeightG\":24.8,\"netWeightG\":14,\"rawUnitPrice\":0.66070796460177,\"scrapUnitPrice\":7.21238938053097}]}");
+    var model=projection.project(new Stored(version(),null,List.of(part),List.of()),new OaForm(),new OaFormItem(),List.of(),List.of(prepared));
+    var row=model.rows().getFirst();
+    assertThat(row.grossWeight()).isEqualTo("24.8");assertThat(row.netWeight()).isEqualTo("14");
+    assertThat(row.rawUnitPrice()).isEqualTo("0.660708");assertThat(row.scrapUnitPrice()).isEqualTo("7.212389");
+    assertThat(row.amount()).isEqualTo("0.582814");
+  }
+
+  @Test void multipleManufacturingRowsShowTheirOwnWeightsWithoutAddingAmountsAgain() {
+    var part=new CostRunPartItem();part.setId(21L);part.setPartCode("MAKE");part.setPricePrepareItemId(31L);
+    part.setQty(BigDecimal.ONE);part.setAmount(new BigDecimal("5"));
+    var prepared=new PricePrepareItem();prepared.setId(31L);prepared.setMaterialCode("MAKE");prepared.setResultRefType("MAKE_PART_PRICE");
+    prepared.setInputSnapshotJson("{\"calculatorVersion\":\"MAKE_PART_V1\",\"materialCode\":\"MAKE\",\"rows\":[{\"childMaterialNo\":\"RAW-A\",\"grossWeightG\":0,\"netWeightG\":0,\"rawUnitPrice\":0},{\"childMaterialNo\":\"RAW-B\",\"grossWeightG\":50,\"netWeightG\":40,\"rawUnitPrice\":100,\"scrapUnitPrice\":10}]}");
+    var model=projection.project(new Stored(version(),null,List.of(part),List.of()),new OaForm(),new OaFormItem(),List.of(),List.of(prepared));
+    var rows=model.rows().stream().filter(row->row.partItemIds().contains(21L)).toList();
+    assertThat(rows).hasSize(3);assertThat(rows.getFirst().amount()).isEqualTo("5.000000");
+    assertThat(rows.get(1).grossWeight()).isEqualTo("0");assertThat(rows.get(1).rawUnitPrice()).isEqualTo("0.000000");
+    assertThat(rows.get(1).scrapUnitPrice()).isNull();
+    assertThat(rows.subList(1,3)).allMatch(row->row.amount()==null && row.kind().equals("EXPLANATION"));
+    assertThat(rows.get(2).grossWeight()).isEqualTo("50");assertThat(rows.get(2).netWeight()).isEqualTo("40");
+  }
+
+  @Test void sheetQuoterUsesSavedCostOperatorInsteadOfRequestApplicant() {
+    var v=version();v.setConfirmedBy("罗思雅");var form=new OaForm();form.setApplicantName("需求申请人");
+    var sheet=projection.project(new Stored(v,null,List.of(),List.of()),form,new OaFormItem(),List.of());
+    assertThat(sheet.header().quotation()).containsEntry("quoterName","罗思雅").containsEntry("applicantName","需求申请人");
+  }
 }

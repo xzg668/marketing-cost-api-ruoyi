@@ -66,14 +66,7 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
       ProductCostingRequest req=call.getArgument(0);var form=new OaForm();form.setId(formId);form.setOaNo(oaNo);
       var item=new OaFormItem();item.setId(req.oaFormItemId());return new ProductCostingContext(form,item,"P",month,"admin","revision");
     });
-    when(contexts.resolveRevision(any())).thenAnswer(call->call.getArgument(0));
-    when(contexts.resolveRevisions(anyList())).thenAnswer(call -> {
-      List<ProductCostingContext> candidates = call.getArgument(0);
-      return candidates.stream().collect(java.util.stream.Collectors.toMap(ProductCostingContext::itemId, context -> "revision"));
-    });
-    when(successes.hasCurrentVersion(any())).thenAnswer(call ->
-        versions.containsKey(((ProductCostingContext) call.getArgument(0)).itemId()));
-    when(successes.find(any())).thenAnswer(call->{var v=versions.get(((ProductCostingContext)call.getArgument(0)).itemId());return v==null?Optional.empty():Optional.of(new ProductCostingSuccessLookup.ReusableCost(v,"prepare",0));});
+    when(successes.findSaved(any())).thenAnswer(call->{var v=versions.get(((ProductCostingContext)call.getArgument(0)).itemId());return v==null?Optional.empty():Optional.of(new ProductCostingSuccessLookup.ReusableCost(v,"prepare",0));});
     when(oaContext.document(formId)).thenReturn(new TechnicalDataOaContext.Document(formId,requestId,"FI-SC-006",new OaPeer("I07","TEST",Set.of("COMMERCIAL")),null));
     when(oaContext.operatorEmployeeNo(1)).thenReturn("001001");
     when(oa.submit(any())).thenReturn(receipt(OaWorkflowResult.Status.SUCCESS));
@@ -136,6 +129,35 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
   @Test void changedCostOrPositionIsRejectedBeforeSending() {
     var before=read();versions.get(items.getFirst()).setFinalQuoteAmount(new BigDecimal("100"));
     assertThatThrownBy(()->send(before.fingerprint(),key())).hasMessageContaining("已变化");verifyNoInteractions(oa);
+  }
+  @Test void changedPricesAndRatesDoNotBlockSavedCostsOrSubmission() {
+    when(contexts.resolveRevision(any())).thenThrow(new IllegalStateException("价格费率已变化"));
+    when(contexts.resolveRevisions(anyList())).thenThrow(new IllegalStateException("价格费率已变化"));
+    var ready = read();
+    assertThat(ready.canConfirm()).isTrue();
+    assertThat(send(ready.fingerprint(), key()).status()).isEqualTo("SUBMITTED");
+    verify(contexts, never()).resolveRevision(any());
+    verify(contexts, never()).resolveRevisions(anyList());
+    verify(successes, never()).find(any());
+    verify(oa).submit(any());
+  }
+  @Test void regenerationReplacesOnlyTheNextSubmissionAndPreservesTheOldVersion() {
+    var before = read();
+    var original = versions.get(items.getFirst());
+    var latest = new QuoteCostRunVersion();
+    latest.setId(original.getId() + 1); latest.setVersionNo("V2");
+    latest.setFinalQuoteAmount(new BigDecimal("32.93162700")); latest.setSourceRevision("new-rates");
+    versions.put(items.getFirst(), latest);
+    assertThatThrownBy(() -> send(before.fingerprint(), key())).hasMessageContaining("已变化");
+    verifyNoInteractions(oa);
+    var regenerated = read();
+    assertThat(regenerated.canConfirm()).isTrue();
+    assertThat(regenerated.costs().getFirst().costVersionId()).isEqualTo(latest.getId());
+    assertThat(regenerated.costs().getFirst().totalCost()).isEqualTo("32.93162700");
+    assertThat(send(regenerated.fingerprint(), key()).status()).isEqualTo("SUBMITTED");
+    assertThat(original.getFinalQuoteAmount()).isEqualByComparingTo("152.503400");
+    var body = ArgumentCaptor.forClass(ObjectNode.class); verify(oa).submit(body.capture());
+    assertThat(body.getValue().at("/formData/dataDetails/0/content").asText()).isEqualTo("32.93162700");
   }
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.CsvSource({

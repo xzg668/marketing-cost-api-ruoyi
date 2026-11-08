@@ -13,7 +13,8 @@ import org.junit.jupiter.api.Test;
 class BomAlternativeGroupResolverIssueTest {
 
   private final BomAlternativeGroupResolver resolver =
-      new BomAlternativeGroupResolverImpl(new BomAlternativeGroupKeyGeneratorImpl());
+      new BomAlternativeGroupResolverImpl(new BomAlternativeGroupKeyGeneratorImpl(),
+          org.mockito.Mockito.mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class));
 
   @Test
   @DisplayName("有替代但没有标准件时阻断，不任选替代件")
