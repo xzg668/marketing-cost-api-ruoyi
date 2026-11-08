@@ -231,6 +231,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     populateScenarioComparison(response, scope, new PricePrepareBatchPageResponse(0, List.of()));
     response.setSupplierPriceReviews(
         calculation == null ? List.of() : calculation.getSupplierPriceReviews());
+    com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.enrich(response);
     return response;
   }
 
@@ -397,6 +398,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         reviewBatch == null || reviewBatch.getSupplierPriceReviews() == null
             ? List.of()
             : reviewBatch.getSupplierPriceReviews());
+    com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.enrich(response);
     response.setOaScenario(oaScenario);
     response.setFinanceScenario(financeScenario);
     if (isCompletedScenarioPair(pair)) {

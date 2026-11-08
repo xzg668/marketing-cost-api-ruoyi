@@ -135,6 +135,31 @@ class ProductCostingPipelineImplTest {
   }
 
   @Test
+  void preparationShowsSupplierRatioCauseInsteadOfGenericPriceGap() {
+    stubReadyStages(0);
+    var prices = new QuotePricePrepareWorkbenchResponse();
+    prices.setReadiness(PricePrepareReadinessResult.notReady("NOT_READY", false, true,
+        "已读取BOM结算明细并完成价格准备，存在待补充缺口", null, MONTH, "PARTIAL", 2, List.of()));
+    var gap = new com.sanhua.marketingcost.entity.PricePrepareGap();
+    gap.setGapMaterialCode("301260158"); gap.setGapType("PRICE_SOURCE_ERROR");
+    gap.setReasonCode("RAW_PRICE_ERROR"); gap.setMessage("原材料取价异常：供货比率不足，请确认是否有新增审核");
+    prices.setGaps(new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapPageResponse(1, List.of(gap)));
+    var scope = new com.sanhua.marketingcost.service.pricing.SupplierPriceScope(
+        "COMMERCIAL", "OA-1", 11L, MONTH, java.time.LocalDate.now(), "220", "301260158", "LINKED");
+    var selector = new com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService(null, null);
+    var selected = selector.selectPrepared(scope, List.of(
+        new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("A", "SUP-A", "甲", new BigDecimal("10"), null, null),
+        new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("B", "SUP-B", "乙", new BigDecimal("12"), null, null)), List.of(), null);
+    assertThat(selected.candidate()).isNull();
+    prices.setSupplierPriceReviews(List.of(selected.review()));
+    when(priceService.checkPriceSources(anyString(), anyLong(), any())).thenReturn(prices);
+    var result = pipeline.prepare(request(false));
+    assertThat(result.getMessage()).contains("缺少供货比率", "301260158").doesNotContain("取价异常");
+    assertThat(result.getBlockingStatus()).isEqualTo("WAIT_PRICE");
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test
   void preparationKeepsCurrentSuccessVersionWithoutRebuildingSources() {
     var savedVersion = version();
     savedVersion.setInputFingerprint("FULL-FP");

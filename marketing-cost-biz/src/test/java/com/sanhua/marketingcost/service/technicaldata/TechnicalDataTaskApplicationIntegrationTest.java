@@ -247,6 +247,7 @@ class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegra
       prepared.getGaps().add(gap);
     }
     when(pricePreparation.calculate(org.mockito.ArgumentMatchers.any())).thenReturn(prepared);
+    when(pricePreparation.calculateForTechnical(org.mockito.ArgumentMatchers.any())).thenReturn(prepared);
     jdbc.update("UPDATE lp_quote_costing_workspace SET current_bom_build_batch_id='price-dispatch-test' WHERE oa_form_item_id=?", ids.getFirst());
     org.mockito.Mockito.doReturn(new com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult("test",
         com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult.Status.REJECTED,200,"test",

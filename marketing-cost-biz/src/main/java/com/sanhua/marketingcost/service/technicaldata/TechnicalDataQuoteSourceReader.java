@@ -72,6 +72,23 @@ public class TechnicalDataQuoteSourceReader {
     return check(context.form(), context.item(), context.month(), context.workspace());
   }
 
+  /** 单产品来源检查用独立只读事务，来源失败不能使整个工作台查询回滚。 */
+  @Transactional(readOnly = true, propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+  public TechnicalDataSourceCheckResponse preview(Long itemId, String month) {
+    var item = itemMapper.selectById(itemId);
+    var form = item == null ? null : formMapper.selectById(item.getOaFormId());
+    if (form == null || (!BusinessUnitContext.isAdmin() && !Objects.equals(
+        form.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType()))) {
+      throw error(TechnicalDataTaskErrorCode.FORBIDDEN, "报价产品不存在或不属于当前业务单元：" + itemId);
+    }
+    var workspace = workspaceMapper.selectByItemAndMonth(itemId, month);
+    if (workspace == null || workspace.getLastCheckedAt() == null
+        || !Objects.equals(workspace.getBusinessUnitType(), form.getBusinessUnitType())) {
+      throw error(TechnicalDataTaskErrorCode.INVALID_REQUEST, "未找到本产品、本月份的核算检查");
+    }
+    return inspect(form, item, month, workspace).source().check();
+  }
+
   /** 进入补录只使用一键核算已固化的检查结果，不再重复访问九个资料源。 */
   @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
   public Source readChecked(Long itemId, String month) {
@@ -129,6 +146,12 @@ public class TechnicalDataQuoteSourceReader {
   }
 
   private Source check(OaForm form, OaFormItem item, String month, QuoteCostingWorkspace workspace) {
+    var inspection = inspect(form, item, month, workspace);
+    store.save(workspace.getId(), inspection.source().check(), inspection.evidence());
+    return inspection.source();
+  }
+
+  private Inspection inspect(OaForm form, OaFormItem item, String month, QuoteCostingWorkspace workspace) {
     TechnicalDataProductSource product = product(form, item);
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var context = new QuoteBomReadContext(form.getId(), item.getId(), form.getOaNo(), month,
@@ -141,11 +164,10 @@ public class TechnicalDataQuoteSourceReader {
         "facts", requirements.stream().map(row -> List.of(row.moduleType(), row.availability().name(), row.reasonCode(),
             Objects.toString(row.sourceReference(), ""))).toList()));
     var response = new TechnicalDataSourceCheckResponse(item.getId(), month, fingerprint, now, requirements, null, shared);
-    store.save(workspace.getId(), response, checked.evidence());
     var facts = requirements.stream().map(row -> new TechnicalDataSourceFact(
         TechnicalDataModuleType.valueOf(row.moduleType()), row.availability(), row.reasonCode(), row.reason(),
         row.sourceReference(), row.checkedAt())).toList();
-    return new Source(product, facts, response);
+    return new Inspection(new Source(product, facts, response), checked.evidence());
   }
 
   private TechnicalDataProductSource product(OaForm form, OaFormItem item) {
@@ -169,6 +191,7 @@ public class TechnicalDataQuoteSourceReader {
   }
 
   public record Source(TechnicalDataProductSource product, List<TechnicalDataSourceFact> facts, TechnicalDataSourceCheckResponse check) {}
+  private record Inspection(Source source, Map<String, Object> evidence) {}
   private record LockedContext(OaForm form, OaFormItem item, QuoteCostingWorkspace workspace,
       String month, TechnicalDataProductSource product) {}
 }

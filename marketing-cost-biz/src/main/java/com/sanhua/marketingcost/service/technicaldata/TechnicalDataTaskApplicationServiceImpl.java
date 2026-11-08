@@ -218,12 +218,15 @@ public class TechnicalDataTaskApplicationServiceImpl
     String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
     if ("FINANCE".equals(accessMode) && businessUnitType == null) throw forbidden("未确定当前业务单元");
     int offset = (current - 1) * size;
-    long unassigned = pendingProducts.count(accessMode, businessUnitType, month, search, oaNo);
+    boolean includePending = status == null || "UNASSIGNED".equals(status);
+    var pendingPage = pendingProducts.readPage(accessMode, businessUnitType, month, search, oaNo,
+        offset, includePending ? size : 0);
+    long unassigned = pendingPage.total();
     long pendingCount = status == null || "UNASSIGNED".equals(status) ? unassigned : 0;
     long taskCount = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, status, month, search, oaNo);
     long total = pendingCount + taskCount;
     List<TechnicalDataWorkbenchRowResponse> records = new ArrayList<>();
-    if (offset < pendingCount) records.addAll(pendingProducts.page(accessMode, businessUnitType, month, search, oaNo, offset, size));
+    if (includePending) records.addAll(pendingPage.records());
     int taskOffset = (int) Math.max(0, offset - pendingCount);
     List<QuoteTechProduct> products = records.size() == size || taskCount == 0 ? List.of()
         : repository.findAccessibleProductPage(accessMode, actor.userId(), businessUnitType,

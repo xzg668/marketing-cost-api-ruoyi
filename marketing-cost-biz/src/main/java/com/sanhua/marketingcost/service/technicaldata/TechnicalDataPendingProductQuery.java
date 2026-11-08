@@ -14,8 +14,9 @@ import org.springframework.stereotype.Repository;
 
 /** 核算已确认但尚未分派的缺口直接进入工作台；读取列表不创建任务或 OA 待办。 */
 @Repository
+@lombok.extern.slf4j.Slf4j
 public class TechnicalDataPendingProductQuery {
-  // 列表保留原核算检查快照，但图库是否存在必须读取当前报价、月份绑定的实际来源。
+  // 原核算快照只提供待核对的范围，公共资料已补齐时只更新本次显示，不改写原快照。
   // 原有共享办理资料仍保留提交/审批约束；不能通过列表覆盖原办理人的状态。
   private static final String CURRENT_DRAWING_SOURCE = """
       SELECT v.id FROM lp_quote_bom_preparation_record p
@@ -35,11 +36,14 @@ public class TechnicalDataPendingProductQuery {
   private final JdbcTemplate jdbc;
   private final ObjectMapper json;
   private final TechnicalDataSharedModuleQuery shared;
+  private final TechnicalDataQuoteSourceReader sources;
 
-  public TechnicalDataPendingProductQuery(JdbcTemplate jdbc, ObjectMapper json, TechnicalDataSharedModuleQuery shared) {
+  public TechnicalDataPendingProductQuery(JdbcTemplate jdbc, ObjectMapper json, TechnicalDataSharedModuleQuery shared,
+      TechnicalDataQuoteSourceReader sources) {
     this.jdbc = jdbc;
     this.json = json;
     this.shared = shared;
+    this.sources = sources;
   }
 
   /** 旧空任务沿用已接收的本产品、本月份图库。只投影未办理模块，不改任务或历史快照。 */
@@ -120,21 +124,44 @@ public class TechnicalDataPendingProductQuery {
   }
 
   public long count(String accessMode, String businessUnit, String month, String keyword, String oaNo) {
-    if ("ASSIGNEE".equals(accessMode)) return 0;
-    Query query = scope(accessMode, businessUnit, month, keyword, oaNo);
-    return jdbc.queryForObject("SELECT COUNT(*) " + query.sql(), Long.class, query.args().toArray());
+    return readPage(accessMode, businessUnit, month, keyword, oaNo, 0, 0).total();
   }
 
   public boolean hasPendingItem(String oaNo, long itemId) {
     Query query = scope("ALL", null, null, null, oaNo, itemId);
-    return jdbc.queryForObject("SELECT EXISTS(SELECT 1 " + query.sql() + ")",
-        Boolean.class, query.args().toArray());
+    return readPage(query, 0, 1, true).total() > 0;
   }
 
   public List<TechnicalDataWorkbenchRowResponse> page(String accessMode, String businessUnit,
       String month, String keyword, String oaNo, int offset, int size) {
-    if ("ASSIGNEE".equals(accessMode) || size <= 0) return List.of();
-    Query query = scope(accessMode, businessUnit, month, keyword, oaNo);
+    return readPage(accessMode, businessUnit, month, keyword, oaNo, offset, size).records();
+  }
+
+  public record Page(long total, List<TechnicalDataWorkbenchRowResponse> records) {}
+
+  /** 先按当前来源移除已补齐产品，再计数、分页；一次请求只检查每个候选产品一次。 */
+  public Page readPage(String accessMode, String businessUnit, String month, String keyword,
+      String oaNo, int offset, int size) {
+    if ("ASSIGNEE".equals(accessMode)) return new Page(0, List.of());
+    return readPage(scope(accessMode, businessUnit, month, keyword, oaNo), offset, size, false);
+  }
+
+  private Page readPage(Query query, int offset, int size, boolean firstOnly) {
+    long total = 0;
+    List<TechnicalDataWorkbenchRowResponse> records = new ArrayList<>();
+    for (int candidateOffset = 0; ; candidateOffset += 128) {
+      var candidates = candidates(query, candidateOffset, 128);
+      for (var row : candidates) {
+        if (row.product().modules().stream().noneMatch(TechnicalDataModuleResponse::required)) continue;
+        if (total >= offset && records.size() < size) records.add(row);
+        total++;
+        if (firstOnly) return new Page(total, List.copyOf(records));
+      }
+      if (candidates.size() < 128) return new Page(total, List.copyOf(records));
+    }
+  }
+
+  private List<TechnicalDataWorkbenchRowResponse> candidates(Query query, int offset, int size) {
     List<Object> args = new ArrayList<>(query.args());
     args.add(offset); args.add(size);
     return jdbc.query("""
@@ -148,6 +175,11 @@ public class TechnicalDataPendingProductQuery {
       } catch (JsonProcessingException exception) {
         throw new IllegalStateException("产品 " + row.getLong("id") + " 的补录检查记录无法读取，请重新核算", exception);
       }
+      if (!java.util.Objects.equals(check.oaFormItemId(), row.getLong("id"))
+          || !java.util.Objects.equals(check.accountingMonth(), row.getString("period_month"))) {
+        throw new IllegalStateException("补录检查与当前产品、月份不一致，请重新检查资料");
+      }
+      check = current(check);
       Long drawingSourceId = row.getObject("current_drawing_source_id", Long.class);
       var currentShared = shared.current(row.getLong("id"), row.getString("period_month"), check.modules());
       check = new TechnicalDataSourceCheckResponse(check.oaFormItemId(), check.accountingMonth(), check.fingerprint(),
@@ -170,5 +202,25 @@ public class TechnicalDataPendingProductQuery {
           row.getString("period_month"), null, null, "UNASSIGNED", null, null, null,
           List.of(), List.of(), product, check);
     }, args.toArray());
+  }
+
+  private TechnicalDataSourceCheckResponse current(TechnicalDataSourceCheckResponse saved) {
+    if (saved.modules().stream().noneMatch(row -> row.required() && !"DRAWING_BOM".equals(row.moduleType()))) return saved;
+    try {
+      var current = sources.preview(saved.oaFormItemId(), saved.accountingMonth());
+      // 只复核核算已经发现的缺口。查询失败或尚未核实不能当作已补齐，图库沿用精确来源绑定。
+      var modules = saved.modules().stream().map(previous -> {
+        if (!previous.required() || "DRAWING_BOM".equals(previous.moduleType())) return previous;
+        return current.modules().stream().filter(next -> next.moduleType().equals(previous.moduleType())
+            && next.availability() == TechnicalDataAvailability.AVAILABLE && !next.required())
+            .findFirst().orElse(previous);
+      }).toList();
+      return new TechnicalDataSourceCheckResponse(saved.oaFormItemId(), saved.accountingMonth(),
+          saved.fingerprint(), saved.checkedAt(), modules, saved.taskUpdateMessage(), saved.sharedModules());
+    } catch (RuntimeException failure) {
+      log.warn("待补录公共来源复核未完成，保留原检查：item={}, month={}",
+          saved.oaFormItemId(), saved.accountingMonth(), failure);
+      return saved;
+    }
   }
 }

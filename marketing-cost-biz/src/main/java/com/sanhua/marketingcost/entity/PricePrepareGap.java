@@ -55,6 +55,19 @@ public class PricePrepareGap {
   /** 实际尝试的取价类型；历史缺口或无可用路由时为空。 */
   private String priceType;
 
+  /** 本次工作台展示原因；不改变保存的缺口分类、取价或补录判定。 */
+  @TableField(exist = false)
+  private String displayReasonCode;
+
+  @TableField(exist = false)
+  private String displayGapType;
+
+  @TableField(exist = false)
+  private String displayMessage;
+
+  @TableField(exist = false)
+  private String displayAction;
+
   @TableField(exist = false)
   private Boolean canConfirmNoScrap;
 

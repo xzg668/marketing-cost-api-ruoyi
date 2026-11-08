@@ -335,7 +335,9 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     int gaps = readiness == null ? 1 : Math.max(1, readiness.getGapCount());
     String message =
         firstText(readiness == null ? null : readiness.getMessage(), "存在 " + gaps + " 项最终价格缺口");
-    return blocked(scope, "WAIT_PRICE", STEP_PRICE, "PRICE_MISSING", message, gaps);
+    message = com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.summary(prices, message);
+    return blocked(scope, "WAIT_PRICE", STEP_PRICE,
+        com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.blockingCode(prices), message, gaps);
   }
 
   private ProductCostingResult blocked(
