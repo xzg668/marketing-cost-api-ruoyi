@@ -26,6 +26,10 @@ import org.springframework.test.context.TestPropertySource;
 @Tag("integration")
 @TestPropertySource(properties={"cms.sync-publish.enabled=false"})
 class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
+  @org.springframework.test.context.DynamicPropertySource
+  static void quotationMonth(org.springframework.test.context.DynamicPropertyRegistry registry) {
+    registry.add("monthly.reprice.go-live-months.COMMERCIAL", CostPricingPeriodUtils::currentPricingMonth);
+  }
   @Autowired JdbcTemplate jdbc;
   @Autowired QuoteCostingPreparationService service;
   @Autowired OaWorkflowAccessPolicy access;
@@ -121,7 +125,20 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
   }
 
   QuoteCostingPreparationService.Request request(Long item) {
-    return new QuoteCostingPreparationService.Request(item, month);
+    return new QuoteCostingPreparationService.Request(item, month, false);
+  }
+
+  @Test void explicitProductRecalculationPreservesForceThroughCheckAndExecution() throws Exception {
+    var request = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+        "{\"itemId\":"+items.getFirst()+",\"periodMonth\":\""+month+"\",\"force\":true}",
+        QuoteCostingPreparationService.Request.class);
+    assertThat(service.prepareAndCost(oaNo, request, "admin").product().getPipelineStatus()).isEqualTo("SUCCESS");
+    verify(pipeline).prepare(argThat(r -> r.force() && r.oaFormItemId().equals(items.getFirst())));
+    verify(pipeline).execute(argThat(r -> r.force() && r.oaFormItemId().equals(items.getFirst())));
+    verifyNoInteractions(batches, oa);
+    assertThatThrownBy(() -> service.prepareAndCost(oaNo,
+        new QuoteCostingPreparationService.Request(null, month, true), "admin"))
+        .hasMessageContaining("需要指定产品");
   }
 
   @Test

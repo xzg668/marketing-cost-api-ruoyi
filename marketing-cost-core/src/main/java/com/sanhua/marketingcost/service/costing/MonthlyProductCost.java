@@ -11,9 +11,13 @@ import java.util.*;
 
 /** Pure versioned computation. MAKE/PACK amounts and non-BOM material retain their existing rules. */
 public final class MonthlyProductCost {
-  public static final String ALGORITHM_VERSION = "MONTHLY_PRODUCT_COST_V2";
+  // V3 selects one U9 standard/alternative subtree before material costing.
+  public static final String ALGORITHM_VERSION = "MONTHLY_PRODUCT_COST_V3";
   public static final int SNAPSHOT_VERSION = 1;
-  public static boolean isMonthlyVersion(String version) { return ALGORITHM_VERSION.equals(version) || "MONTHLY_PRODUCT_COST_V1".equals(version); }
+  public static boolean isMonthlyVersion(String version) {
+    return ALGORITHM_VERSION.equals(version) || "MONTHLY_PRODUCT_COST_V2".equals(version)
+        || "MONTHLY_PRODUCT_COST_V1".equals(version);
+  }
   private MonthlyProductCost() {}
 
   /** A settlement contributes once; its raw-component explanation rows do not contribute. */

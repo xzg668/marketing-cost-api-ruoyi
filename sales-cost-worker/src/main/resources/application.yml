@@ -58,7 +58,7 @@ monthly:
 cost:
   run:
     # 必须与 API 保持一致；worker 会把实际执行核算时的算法版本固化到成本版本。
-    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:MONTHLY_PRODUCT_COST_V2}
+    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:MONTHLY_PRODUCT_COST_V3}
     worker:
       enabled: ${COST_RUN_WORKER_ENABLED:true}
       id: ${COST_RUN_WORKER_ID:${WORKER_ID:}}

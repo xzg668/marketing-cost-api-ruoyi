@@ -103,13 +103,13 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public ProductCostingResult prepare(ProductCostingRequest request) {
     ProductCostingContext context = contextResolver.resolve(request);
-    return executionGuard.execute(context, () -> prepareResolved(contextResolver.resolve(request)));
+    return executionGuard.execute(context, () -> prepareResolved(contextResolver.resolve(request), request.force()));
   }
 
-  private ProductCostingResult prepareResolved(ProductCostingContext context) {
+  private ProductCostingResult prepareResolved(ProductCostingContext context, boolean force) {
     oaWorkflowAccess.requireCosting(context.form().getId());
     try {
-      if (!successLookup.hasCurrentVersion(context))
+      if (force || !successLookup.hasCurrentVersion(context))
         return withSourceCheck(context, executeStages(context, true));
       ProductCostingContext current = contextResolver.resolveRevision(context);
       var reusable = successLookup.find(current);

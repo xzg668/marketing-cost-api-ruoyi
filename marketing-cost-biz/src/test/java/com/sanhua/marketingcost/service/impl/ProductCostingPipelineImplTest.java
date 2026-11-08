@@ -484,6 +484,50 @@ class ProductCostingPipelineImplTest {
   }
 
   @Test
+  void preAlternativeFixV2CostCannotBeReusedByPreparationOrOrdinaryExecution() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
+    when(itemMapper.selectById(11L)).thenReturn(item(88L));
+    var old = version();
+    old.setInputFingerprint("FULL-FP");
+    old.setAlgorithmVersion("MONTHLY_PRODUCT_COST_V2");
+    when(versionMapper.selectById(88L)).thenReturn(old);
+    stubReadyStages(0);
+    var preview = new QuotePricePrepareWorkbenchResponse();
+    preview.setReadiness(PricePrepareReadinessResult.ready(null, MONTH, "SUCCESS"));
+    when(priceService.checkPriceSources(anyString(), anyLong(), any())).thenReturn(preview);
+
+    var preparation = pipeline.prepare(request(false));
+    assertThat(preparation.getPipelineStatus()).isEqualTo("READY");
+    assertThat(preparation.isReusedSuccess()).isFalse();
+    assertThat(preparation.getCostVersionId()).isNull();
+    var execution = pipeline.execute(request(false));
+    assertThat(execution.getPipelineStatus()).isEqualTo("SUCCESS");
+    assertThat(execution.isReusedSuccess()).isFalse();
+    verify(costService).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test
+  void explicitRecalculationChecksBomAndPricesEvenForSameVersionAndInputs() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
+    when(itemMapper.selectById(11L)).thenReturn(item(88L));
+    var saved = version();
+    saved.setInputFingerprint("FULL-FP");
+    when(versionMapper.selectById(88L)).thenReturn(saved);
+    stubReadyStages(0);
+    var preview = new QuotePricePrepareWorkbenchResponse();
+    preview.setReadiness(PricePrepareReadinessResult.ready(null, MONTH, "SUCCESS"));
+    when(priceService.checkPriceSources(anyString(), anyLong(), any())).thenReturn(preview);
+
+    var result = pipeline.prepare(request(true));
+    assertThat(result.getPipelineStatus()).isEqualTo("READY");
+    assertThat(result.isReusedSuccess()).isFalse();
+    assertThat(result.getCostVersionId()).isNull();
+    verify(workbenchService).launchWorkbench("OA-1", 11L);
+    verify(priceService).checkPriceSources(anyString(), anyLong(), any());
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test
   void wrongQuotationOwnershipIsRejectedBeforeAnyWork() {
     OaFormItem otherItem = item(null);
     otherItem.setOaFormId(2L);

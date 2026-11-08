@@ -90,11 +90,11 @@ class CostingPerformanceIntegrationTest extends OriginalPricingIntegrationTestBa
       seedBackgroundMaterials();
       var single=seedQuote("PERF-SINGLE",1);
       var batch=seedQuote("PERF-WHOLE",3);
-      measure("single-first",() -> requireSuccess(preparation.prepareAndCost(single.oa(),new QuoteCostingPreparationService.Request(single.items().getFirst(),month),actor).product()));
+      measure("single-first",() -> requireSuccess(preparation.prepareAndCost(single.oa(),new QuoteCostingPreparationService.Request(single.items().getFirst(),month,false),actor).product()));
       jdbc.update("UPDATE lp_quality_loss_rate SET loss_rate=0.02 WHERE bare_product_code=?",single.products().getFirst()+"-BARE");
-      measure("single-recalculate",() -> requireSuccess(preparation.prepareAndCost(single.oa(),new QuoteCostingPreparationService.Request(single.items().getFirst(),month),actor).product()));
+      measure("single-recalculate",() -> requireSuccess(preparation.prepareAndCost(single.oa(),new QuoteCostingPreparationService.Request(single.items().getFirst(),month,false),actor).product()));
       measure("whole-prepare",() -> {
-        var result=preparation.prepareAndCost(batch.oa(),new QuoteCostingPreparationService.Request(null,month),actor);
+        var result=preparation.prepareAndCost(batch.oa(),new QuoteCostingPreparationService.Request(null,month,false),actor);
         assertThat(result.checks()).allSatisfy(check -> assertThat(check.getPipelineStatus()).isEqualTo("READY"));
         assertThat(result.batch()).isNotNull();return result;
       });

@@ -103,10 +103,10 @@ class QuoteRequestControllerSecurityTest {
       assertThat(controller.submitBatchCostRun("OA-1", null).isSuccess()).isTrue();
       assertThat(controller.submitProductCostRun("OA-1", 1L, null).isSuccess()).isTrue();
       var preparation = context.getBean(QuoteCostingPreparationController.class);
-      var body = new QuoteCostingPreparationService.Request(null, "2026-10");
+      var body = new QuoteCostingPreparationService.Request(null, "2026-10", false);
       assertThat(preparation.state("OA-1", null).isSuccess()).isTrue();
       assertThat(preparation.prepareAndCost("OA-1", body, authentication).isSuccess()).isTrue();
-      assertThat(preparation.prepareAndCost("OA-1", new QuoteCostingPreparationService.Request(1L, "2026-10"), authentication).isSuccess()).isTrue();
+      assertThat(preparation.prepareAndCost("OA-1", new QuoteCostingPreparationService.Request(1L, "2026-10", false), authentication).isSuccess()).isTrue();
     }
   }
 

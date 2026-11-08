@@ -25,7 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class QuoteCostingPreparationService {
   private final QuotePricingPeriod pricingPeriods;
 
-  public record Request(Long itemId, String periodMonth) {}
+  public record Request(Long itemId, String periodMonth, boolean force) {}
 
   public record State(
       long formId,
@@ -120,6 +120,7 @@ public class QuoteCostingPreparationService {
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public Outcome prepareAndCost(String oaNo, Request request, String operatorName) {
     if (request == null) throw new IllegalArgumentException("核算请求不能为空");
+    if (request.force() && request.itemId() == null) throw new IllegalArgumentException("主动重新核算需要指定产品");
     long formId = requireForm(oaNo);
     String month = pricingPeriods.requireActiveMonth(request.periodMonth());
     var items = activeItems(formId);
@@ -142,7 +143,7 @@ public class QuoteCostingPreparationService {
     });
     List<ProductCostingResult> checks = new ArrayList<>();
     for (long selectedItemId : selectedItems) {
-      checks.add(pipeline.prepare(new ProductCostingRequest(oaNo, selectedItemId, month, operatorName, false)));
+      checks.add(pipeline.prepare(new ProductCostingRequest(oaNo, selectedItemId, month, operatorName, request.force())));
     }
     if (checks.stream().anyMatch(check -> !"READY".equals(check.getPipelineStatus()))) {
       var current = state(oaNo, itemId);
@@ -189,7 +190,7 @@ public class QuoteCostingPreparationService {
     });
     access.requireCostPublication(formId, itemId);
     if (itemId != null) return new Outcome(state(oaNo, itemId), checks, null,
-        pipeline.execute(new ProductCostingRequest(oaNo, itemId, month, operatorName, false)));
+        pipeline.execute(new ProductCostingRequest(oaNo, itemId, month, operatorName, request.force())));
     var batchRequest = new QuoteBatchCostRunRequest();
     batchRequest.setPeriodMonth(month);
     return new Outcome(state(oaNo), checks, batches.submit(oaNo, batchRequest, operatorName), null);

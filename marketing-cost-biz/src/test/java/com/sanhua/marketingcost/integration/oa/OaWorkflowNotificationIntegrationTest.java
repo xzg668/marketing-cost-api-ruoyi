@@ -129,7 +129,7 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
      assertThat(materials.state(oaNo).canCost()).isTrue();
      assertThatThrownBy(()->access.requireCostPublication(formId)).hasMessageContaining("技术资料已更新");
      org.mockito.Mockito.verifyNoInteractions(nativeWorkflow);
-     var outcome=materials.prepareAndCost(oaNo,new com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService.Request(null,null),"admin");
+     var outcome=materials.prepareAndCost(oaNo,new com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService.Request(null,null,false),"admin");
      assertThat(outcome.preparation().status()).isEqualTo("AVAILABLE");
      org.mockito.Mockito.verifyNoInteractions(nativeWorkflow);
      assertThat(jdbc.queryForObject("SELECT finance_confirmed_fingerprint FROM lp_oa_technical_flow WHERE oa_form_id=?",String.class,formId)).isNotBlank();
