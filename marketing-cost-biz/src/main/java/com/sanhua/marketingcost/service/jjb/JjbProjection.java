@@ -24,7 +24,7 @@ public class JjbProjection {
       Map.entry("MANUFACTURE", "制造费用"), Map.entry("MANUFACTURE_COST", "制造成本"),
       Map.entry("ADJUSTED_MANUFACTURE_COST", "属性调整后制造成本"),
       Map.entry("MGMT_EXP", "管理费用"), Map.entry("SALES_EXP", "营业费用"), Map.entry("FIN_EXP", "财务费用"),
-      Map.entry("OTHER_INDEPENDENT", "其他独立费用"), Map.entry("BOM_BUCKET_WELD", "焊料"),
+      Map.entry("OTHER_INDEPENDENT", "其他独立费用"),
       Map.entry("BOM_BUCKET_PACKAGE", "包装"));
   private static final List<String> ORDINARY = List.of("MATERIAL", "DIRECT_LABOR", "INDIRECT_LABOR",
       "LOSS", "MANUFACTURE", "MANUFACTURE_COST", "ADJUSTED_MANUFACTURE_COST");
@@ -66,16 +66,12 @@ public class JjbProjection {
     }
     Set<String> reserved = new HashSet<>(ORDINARY); reserved.addAll(THREE);
     reserved.addAll(List.of("TOTAL", "FINAL_QUOTE", "CU_MATERIAL_ADJUSTMENT", "HOUSEHOLD_SUBTOTAL", "HOUSEHOLD_CONTRIBUTION"));
+    // Welding already appears as individual parts. Its classification subtotal must not be another sheet row.
+    reserved.add("BOM_BUCKET_WELD");
     // Keep every legitimate ordinary detail, including historical public non-product expenses.
     for (var cost : stored.costs()) if (!reserved.contains(cost.getCostCode()) && !feeIds.contains(cost.getId())) {
       if ("OTHER_INDEPENDENT".equals(cost.getCostCode()) && cost.getAmount() != null && BigDecimal.ZERO.compareTo(cost.getAmount()) == 0) continue;
-      var detail = cost(cost, "MATERIAL_DETAIL");
-      // The welding bucket is a classification subtotal of already listed parts, not another expense.
-      if ("BOM_BUCKET_WELD".equals(cost.getCostCode())) detail.amount(null)
-          .name("焊料汇总（已含在部品中）")
-          .remark(joinRemark(cost.getRemark(), "焊料明细合计 " + (cost.getAmount() == null ? "未记录" : money(cost.getAmount()) + " 元/件")
-              + "；已包含在上述部品金额中，不重复计入材料费"));
-      rows.add(detail.build());
+      rows.add(cost(cost, "MATERIAL_DETAIL").build());
     }
     rows = packagingDetails(rows, preparations, traces, warnings);
     for (String code : ORDINARY) addCost(rows, costMap, code, "ORDINARY", calc, warnings);

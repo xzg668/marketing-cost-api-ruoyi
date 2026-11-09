@@ -171,30 +171,24 @@ class JjbProjectionTest {
     var material = cost(2, "MATERIAL", "材料费", "0.600817");
     var model = projection.project(new Stored(version(), null, parts, List.of(bucket, material)),
         new OaForm(), new OaFormItem(), List.of());
-    var detail = model.rows().stream().filter(r -> "BOM_BUCKET_WELD".equals(r.code())).findFirst().orElseThrow();
-    assertThat(detail.amount()).isNull();
-    assertThat(detail.kind()).isEqualTo("COST");
-    assertThat(detail.remark()).contains("0.600817", "不重复计入材料费");
-    assertThat(detail.costItemIds()).containsExactly(1L);
-    assertThat(detail.sources()).containsExactly(new JjbReadModel.Source("historical_source", 101L, null));
+    assertThat(model.rows()).noneMatch(r -> "BOM_BUCKET_WELD".equals(r.code()));
+    for (String code : codes) assertThat(model.rows()).filteredOn(r -> code.equals(r.code())).hasSize(1);
     assertThat(model.rows().stream().filter(r -> Set.of("ORDINARY_PARTS", "MATERIAL_DETAIL").contains(r.section()))
         .map(JjbReadModel.Row::amount).filter(Objects::nonNull).map(BigDecimal::new).reduce(BigDecimal.ZERO, BigDecimal::add))
         .isEqualByComparingTo("0.600817");
     var output = new java.io.ByteArrayOutputStream(); new JjbExcelRenderer().write(model, output);
     try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(output.toByteArray()))) {
-      BigDecimal sum = BigDecimal.ZERO; boolean explanationFound = false;
+      BigDecimal sum = BigDecimal.ZERO; var exportedCodes = new ArrayList<String>();
       for (var row : workbook.getSheetAt(0)) {
         var label = row.getCell(1); var amount = row.getCell(6);
         if (label != null && "材料费".equals(label.toString())) break;
         if (amount != null && amount.getCellType() == org.apache.poi.ss.usermodel.CellType.NUMERIC)
           sum = sum.add(BigDecimal.valueOf(amount.getNumericCellValue()));
-        if (label != null && label.toString().contains("焊料汇总")) {
-          explanationFound = true;
-          assertThat(amount == null || amount.getCellType() == org.apache.poi.ss.usermodel.CellType.BLANK).isTrue();
-          assertThat(row.getCell(14).getCellComment().getString().getString()).contains("0.600817", "不重复计入材料费");
-        }
+        if (label != null) assertThat(label.toString()).doesNotContain("焊料汇总").isNotEqualTo("焊料");
+        if (row.getCell(0) != null) exportedCodes.add(row.getCell(0).toString());
       }
-      assertThat(explanationFound).isTrue(); assertThat(sum).isEqualByComparingTo("0.600817");
+      for (String code : codes) assertThat(Collections.frequency(exportedCodes, code)).isEqualTo(1);
+      assertThat(sum).isEqualByComparingTo("0.600817");
     }
     assertThat(bucket.getAmount()).isEqualByComparingTo("0.600817");
     assertThat(material.getAmount()).isEqualByComparingTo("0.600817");
