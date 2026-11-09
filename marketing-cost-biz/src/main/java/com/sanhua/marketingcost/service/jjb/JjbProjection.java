@@ -69,7 +69,13 @@ public class JjbProjection {
     // Keep every legitimate ordinary detail, including historical public non-product expenses.
     for (var cost : stored.costs()) if (!reserved.contains(cost.getCostCode()) && !feeIds.contains(cost.getId())) {
       if ("OTHER_INDEPENDENT".equals(cost.getCostCode()) && cost.getAmount() != null && BigDecimal.ZERO.compareTo(cost.getAmount()) == 0) continue;
-      rows.add(cost(cost, "MATERIAL_DETAIL").build());
+      var detail = cost(cost, "MATERIAL_DETAIL");
+      // The welding bucket is a classification subtotal of already listed parts, not another expense.
+      if ("BOM_BUCKET_WELD".equals(cost.getCostCode())) detail.amount(null)
+          .name("焊料汇总（已含在部品中）")
+          .remark(joinRemark(cost.getRemark(), "焊料明细合计 " + (cost.getAmount() == null ? "未记录" : money(cost.getAmount()) + " 元/件")
+              + "；已包含在上述部品金额中，不重复计入材料费"));
+      rows.add(detail.build());
     }
     rows = packagingDetails(rows, preparations, traces, warnings);
     for (String code : ORDINARY) addCost(rows, costMap, code, "ORDINARY", calc, warnings);
@@ -369,7 +375,7 @@ public class JjbProjection {
     for(var c:values) {
       var row=cost(c,section);
       if ("MATERIAL".equals(code)) row.remark(joinRemark(c.getRemark(),
-          "含部品、辅料、包装和部门经费；直接、辅助人工另计"));
+          "含部品、辅料、包装和部门经费；直接、辅助人工另计；按保存的核算口径汇总，六位小数明细加总可能存在舍入尾差"));
       if(calc!=null) {
         BigDecimal rate=switch(code) {
           case "LOSS" -> calc.ordinaryInputs().lossRate();case "MANUFACTURE" -> calc.ordinaryInputs().manufactureRate();

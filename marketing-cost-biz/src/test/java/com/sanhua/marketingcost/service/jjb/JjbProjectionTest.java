@@ -159,6 +159,47 @@ class JjbProjectionTest {
     }
     assertThat(part.getAmount()).isEqualByComparingTo("0.308900");
   }
+  @Test void weldingSubtotalDoesNotDuplicatePartsInPageOrExcelAmounts() throws Exception {
+    var parts = new ArrayList<CostRunPartItem>();
+    String[] codes = {"337106891", "311990114", "301010244"};
+    String[] amounts = {"0.053740", "0.024230", "0.522847"};
+    for (int i = 0; i < codes.length; i++) {
+      var part = new CostRunPartItem(); part.setId(20L + i); part.setPartCode(codes[i]);
+      part.setPartName(codes[i]); part.setAmount(new BigDecimal(amounts[i])); parts.add(part);
+    }
+    var bucket = cost(1, "BOM_BUCKET_WELD", "焊料", "0.600817");
+    var material = cost(2, "MATERIAL", "材料费", "0.600817");
+    var model = projection.project(new Stored(version(), null, parts, List.of(bucket, material)),
+        new OaForm(), new OaFormItem(), List.of());
+    var detail = model.rows().stream().filter(r -> "BOM_BUCKET_WELD".equals(r.code())).findFirst().orElseThrow();
+    assertThat(detail.amount()).isNull();
+    assertThat(detail.kind()).isEqualTo("COST");
+    assertThat(detail.remark()).contains("0.600817", "不重复计入材料费");
+    assertThat(detail.costItemIds()).containsExactly(1L);
+    assertThat(detail.sources()).containsExactly(new JjbReadModel.Source("historical_source", 101L, null));
+    assertThat(model.rows().stream().filter(r -> Set.of("ORDINARY_PARTS", "MATERIAL_DETAIL").contains(r.section()))
+        .map(JjbReadModel.Row::amount).filter(Objects::nonNull).map(BigDecimal::new).reduce(BigDecimal.ZERO, BigDecimal::add))
+        .isEqualByComparingTo("0.600817");
+    var output = new java.io.ByteArrayOutputStream(); new JjbExcelRenderer().write(model, output);
+    try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(output.toByteArray()))) {
+      BigDecimal sum = BigDecimal.ZERO; boolean explanationFound = false;
+      for (var row : workbook.getSheetAt(0)) {
+        var label = row.getCell(1); var amount = row.getCell(6);
+        if (label != null && "材料费".equals(label.toString())) break;
+        if (amount != null && amount.getCellType() == org.apache.poi.ss.usermodel.CellType.NUMERIC)
+          sum = sum.add(BigDecimal.valueOf(amount.getNumericCellValue()));
+        if (label != null && label.toString().contains("焊料汇总")) {
+          explanationFound = true;
+          assertThat(amount == null || amount.getCellType() == org.apache.poi.ss.usermodel.CellType.BLANK).isTrue();
+          assertThat(row.getCell(14).getCellComment().getString().getString()).contains("0.600817", "不重复计入材料费");
+        }
+      }
+      assertThat(explanationFound).isTrue(); assertThat(sum).isEqualByComparingTo("0.600817");
+    }
+    assertThat(bucket.getAmount()).isEqualByComparingTo("0.600817");
+    assertThat(material.getAmount()).isEqualByComparingTo("0.600817");
+  }
+
   @Test void oldPackagingOmissionIsIdentifiedWithoutRewritingHistoricalAmounts() {
     var parent=new CostRunPartItem();parent.setId(1L);parent.setPartCode("PACK");
     parent.setPricePrepareItemId(7L);parent.setAmount(new BigDecimal("0.308900"));
