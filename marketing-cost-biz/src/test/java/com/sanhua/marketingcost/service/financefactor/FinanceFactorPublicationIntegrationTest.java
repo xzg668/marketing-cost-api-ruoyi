@@ -50,7 +50,7 @@ import org.testcontainers.utility.MountableFile;
 @Tag("integration")
 class FinanceFactorPublicationIntegrationTest {
   private static final MySQLContainer<?> MYSQL =
-      new MySQLContainer<>("mysql:8.4").withCommand("--max-allowed-packet=64M")
+      new MySQLContainer<>(System.getProperty("mpp.mysql.image", "mysql:8.4")).withCommand("--max-allowed-packet=64M")
           .withDatabaseName("finance_factor")
           .withUsername("root")
           .withPassword("test-only-password");
@@ -196,11 +196,10 @@ class FinanceFactorPublicationIntegrationTest {
     var p1 = calculator.previewForRefresh(rule, customer, form);
     assertThat(p0.getError()).isNull();
     assertThat(p1.getError()).isNull();
-    assertThat(p1.getResult().subtract(p0.getResult())).isEqualByComparingTo("30");
+    assertThat(p1.getResult()).isEqualByComparingTo("219");
     var before = json.readTree(p0.getInputSnapshotJson());
     assertThat(before.path("inputs").path("Cu").decimalValue()).isEqualByComparingTo("90");
-    assertThat(before.path("inputs").path("Zn"))
-        .isEqualTo(json.readTree(p1.getInputSnapshotJson()).path("inputs").path("Zn"));
+    assertThat(json.readTree(p1.getInputSnapshotJson()).path("inputs").path("Zn").decimalValue()).isEqualByComparingTo("99");
     assertThat(before.path("calculatorVersion").asText()).isEqualTo("TECH_FORMULA_V1");
     var customerSnapshot = json.readTree(p1.getInputSnapshotJson());
     for (String stable : List.of("definitions", "factorKeys", "usedFinanceKeys"))
@@ -841,7 +840,8 @@ class FinanceFactorPublicationIntegrationTest {
       var unit =
           com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(entry.getValue().unit());
       assertThat(p1.requiredPrice(entry.getKey(), unit, true))
-          .isEqualByComparingTo(entry.getValue().price());
+          .isEqualByComparingTo(com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(entry.getKey())
+              ? p1.customerBand().factors().get(entry.getKey()).price() : entry.getValue().price());
       assertThat(p1.financial().required(entry.getKey()).sources())
           .isEqualTo(entry.getValue().sources());
     }
@@ -935,6 +935,29 @@ class FinanceFactorPublicationIntegrationTest {
     assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "210", "2026-11")).hasMessageContaining("2026-11", "没有已发布");
     assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "220", "2026-10")).hasMessageContaining("板换", "没有已发布");
     assertThatThrownBy(() -> monthlyExport("HOUSEHOLD", "210", "2026-10")).hasMessageContaining("没有已发布");
+  }
+
+  @Test
+  void original1109PublicationCapturesAllCuBandsAndExactHistoricalRevision() throws Exception {
+    byte[] file;
+    try (var in=getClass().getResourceAsStream("/finance-factor/finance-base-1109.xls")) { file=in.readAllBytes(); }
+    var scope=new FinanceFactorImportContext("COMMERCIAL","210","2026-11","2026.11.2（9万报价）","CU_90000");
+    var preview=service.preview(file,"1109.xls",scope);
+    assertThat(preview.workbook().problems()).isEmpty();
+    var publication=service.publish(file,"1109.xls",scope,preview.previewFingerprint(),"finance");
+    var reader=new FinanceFactorPriceReader(batches,prices,identities,sources);
+    var base=reader.read(scope,Condition.GENERAL,publication.revision());
+    assertThat(base.cuBands()).hasSize(4);
+    assertThat(reader.withCapturedBands(base.withCuBands(List.of()))).isEqualTo(base);
+    var context=new com.sanhua.marketingcost.service.pricing.PriceFactorContext("301990218",
+        new com.sanhua.marketingcost.service.pricing.PriceMonthSelection("2026-11","2026-11"),base,null);
+    var customer=context.withCustomerMaterials(com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.copperAndZinc(new java.math.BigDecimal("105000"),null));
+    assertThat(customer.requiredPrice("AVG|美国柜装黄铜",com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("58.4703101600419");
+    assertThat(customer.requiredPrice("AVG|H65黄铜边料",com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("60.996337260704");
+    assertThat(base.factors()).doesNotContainKey("AVG|304/2B/1219");
+    assertThat(reader.readCaptured(publication.batchId(),publication.revision(),"COMMERCIAL","210","2026-11","CU_90000",Condition.GENERAL)).isEqualTo(base);
+    assertThatThrownBy(()->reader.readCaptured(publication.batchId()+1,publication.revision(),"COMMERCIAL","210","2026-11","CU_90000",Condition.GENERAL)).hasMessageContaining("批次");
+    assertThat(service.publish(file,"1109.xls",scope,preview.previewFingerprint(),"finance").batchId()).isEqualTo(publication.batchId());
   }
 
   private FinanceFactorWorkbookExportService.ExportFile monthlyExport(String businessUnit, String organization, String selectedMonth) {

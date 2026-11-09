@@ -231,7 +231,7 @@ public class FinanceFactorPriceReader {
         throw new IllegalStateException("已发布财务方案存在重复因素：" + identity.getCanonicalFactorKey());
       }
     }
-    return new FactorPriceSnapshot(
+    var snapshot = new FactorPriceSnapshot(
         scope,
         publication.getId(),
         publication.getPublicationRevision(),
@@ -243,6 +243,67 @@ public class FinanceFactorPriceReader {
         publication.getUploadedBy(),
         publication.getPublishedAt(),
         publication.getPublicationNote());
+    if (!"210".equals(scope.priceOrgCode())) return snapshot;
+    var bands = new java.util.ArrayList<FactorPriceSnapshot.CuBand>();
+    for (String code : schemeCodes) {
+      Map<String, FactorValue> bandValues;
+      if (code.equals(scheme)) bandValues = values;
+      else {
+        var bandScope = new FactorPriceScope(scope.businessUnitType(), scope.priceOrgCode(), scope.priceMonth(), code, condition);
+        var bandRows = prices.findPublishedScheme(bandScope, publication.getPublicationRevision());
+        var bandIdentities = bandRows.isEmpty() ? Map.<Long, com.sanhua.marketingcost.entity.FactorIdentity>of()
+            : identities.selectBatchIds(bandRows.stream().map(p -> p.getFactorIdentityId()).distinct().toList())
+                .stream().collect(Collectors.toMap(i -> i.getId(), i -> i));
+        bandValues = new LinkedHashMap<>();
+        for (var row : bandRows) {
+          var identity = bandIdentities.get(row.getFactorIdentityId());
+          var refs = allSources.stream().filter(r -> row.getId().equals(r.getFactorMonthlyPriceId())).toList();
+          if (identity == null || identity.getCanonicalFactorKey() == null || row.getPrice() == null
+              || row.getUnit() == null || row.getTaxIncluded() == null || refs.isEmpty()
+              || !publication.getId().equals(row.getSourceUploadBatchId())
+              || !publication.getPublicationRevision().equals(row.getRevisionNo()))
+            throw new IllegalStateException("同修订铜价档位来源不完整：" + code);
+          if (bandValues.putIfAbsent(identity.getCanonicalFactorKey(), new FactorValue(identity.getId(), row.getId(),
+              identity.getFactorName(), identity.getShortName(), row.getPrice(), row.getUnit(),
+              row.getTaxIncluded() == 1, refs.stream().map(FinanceFactorPriceReader::source).toList())) != null)
+            throw new IllegalStateException("铜价档位因素重复：" + code);
+        }
+      }
+      var cu = bandValues.get(com.sanhua.marketingcost.service.pricing.PriceFactorContext.COPPER);
+      if (cu == null || !cu.taxIncluded()) throw new IllegalStateException("铜价档位缺少含税Cu：" + code);
+      var threshold = com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(cu.unit())
+          .convert(cu.price(), com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_TON);
+      // The scheme identity was generated from the original Cu row at import. Manual Cu
+      // maintenance changes its effective price, while preserving that band's identity/boundary.
+      if (code.matches("CU_[0-9]+(?:_[0-9]+)?")) threshold = new java.math.BigDecimal(code.substring(3).replace('_', '.'));
+      var bandThreshold = threshold;
+      if (bands.stream().anyMatch(b -> b.copperPerTon().compareTo(bandThreshold) == 0))
+        throw new IllegalStateException("铜价档位阈值重复：" + threshold);
+      bands.add(new FactorPriceSnapshot.CuBand(code, threshold, bandValues));
+    }
+    return snapshot.withCuBands(bands);
+  }
+
+  /** Only the exact immutable publication is read; never resolve a historical input to today's revision. */
+  public FactorPriceSnapshot readCaptured(Long batchId, Integer revision, String unit, String organization,
+      String month, String scheme, Condition condition) {
+    if (batchId == null || revision == null) throw new IllegalArgumentException("缺少保存的财务发布身份");
+    var captured = read(new FinanceFactorImportContext(unit, organization, month, null, scheme), condition, revision);
+    if (!batchId.equals(captured.batchId())) throw new IllegalArgumentException("保存的财务发布批次/修订不一致");
+    return captured;
+  }
+
+  public FactorPriceSnapshot withCapturedBands(FactorPriceSnapshot saved) {
+    if (!saved.cuBands().isEmpty() || saved.schemeCodes().size() <= 1 || !"210".equals(saved.scope().priceOrgCode())) return saved;
+    var full = readCaptured(saved.batchId(), saved.revision(), saved.scope().businessUnitType(), saved.scope().priceOrgCode(),
+        saved.scope().priceMonth(), saved.scope().schemeCode(), saved.scope().condition());
+    for (var entry : saved.factors().entrySet()) {
+      var original = full.required(entry.getKey()); var prior = entry.getValue();
+      if (!java.util.Objects.equals(original.monthlyPriceId(), prior.monthlyPriceId())
+          || original.price().compareTo(prior.price()) != 0 || !original.unit().equals(prior.unit())
+          || original.taxIncluded() != prior.taxIncluded()) throw new IllegalArgumentException("原发布因素与保存值不一致：" + entry.getKey());
+    }
+    return saved.withCuBands(full.cuBands());
   }
 
   private static Source source(FactorRowRef row) {

@@ -8,7 +8,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 /** Quote-local, tax-included base prices, normalized to CNY/ton before calculation. */
 public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDecimal silver,
     BigDecimal tin, BigDecimal sus304, BigDecimal sus316) {
-  public static final String CALCULATION_VERSION = "MONTHLY_MATERIAL_V4";
+  public static final String CALCULATION_VERSION = "MONTHLY_MATERIAL_CU_BANDS_V5";
   public CustomerMaterialPrices {
     requirePositive(copper, "Cu"); requirePositive(zinc, "Zn");
     requirePositive(silver, "Ag"); requirePositive(tin, "Sn");
@@ -47,7 +47,13 @@ public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDeci
         && sus304 == null && sus316 == null;
   }
 
+  /** Two supplemental factors absent from the demand form use its Cu band. */
+  public static boolean usesCopperBand(String factorKey) {
+    return java.util.Set.of("AVG|美国柜装黄铜", "AVG|H65黄铜边料").contains(canonicalKey(factorKey));
+  }
+
   public static boolean affects(String factorKey) {
+    if (usesCopperBand(factorKey)) return true;
     return switch (canonicalKey(factorKey)) {
       case "AVG|1#CU", "AVG|1#ZN", "AVG|1#AG", "AVG|1#SN" -> true;
       default -> BoardStainlessGrade.fromFactorKey(factorKey) != null;

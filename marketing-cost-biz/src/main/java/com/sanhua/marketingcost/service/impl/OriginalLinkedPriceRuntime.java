@@ -103,7 +103,8 @@ public class OriginalLinkedPriceRuntime {
       PriceFactorContext context =
           saved == null
               ? context(item, pricingMonth, customerCopperPerTon, oaForm)
-              : quoteContext(saved.context(), pricingMonth, customerCopperPerTon, oaForm);
+              : quoteContext(saved.context(), pricingMonth, customerCopperPerTon, oaForm,
+                  rule.factors().values().stream().anyMatch(factor -> com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(factor.canonicalKey())));
       var result =
           saved == null || changedInputs(rule, saved.linked(), context)
               ? calculator.calculate(rule, context)
@@ -210,12 +211,13 @@ public class OriginalLinkedPriceRuntime {
   }
 
   private PriceFactorContext quoteContext(
-      PriceFactorContext saved, String month, BigDecimal copper, OaForm oaForm) {
+      PriceFactorContext saved, String month, BigDecimal copper, OaForm oaForm, boolean usesCopperBand) {
     var context =
         new PriceFactorContext(
             saved.materialCode(),
             new PriceMonthSelection(month, saved.months().sourceMonth()),
-            saved.financial(),
+            usesCopperBand && copper != null && saved.financial().cuBands().isEmpty() && saved.financial().schemeCodes().size() > 1
+                ? finance.withCapturedBands(saved.financial()) : saved.financial(),
             copper,
             saved.boardInputs());
     if (saved.boardInputs() != null) {

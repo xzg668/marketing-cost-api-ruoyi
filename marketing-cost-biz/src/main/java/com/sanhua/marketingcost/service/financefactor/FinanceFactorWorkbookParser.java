@@ -33,7 +33,7 @@ import org.springframework.stereotype.Component;
 /** 仅处理商用方案表和板换固定价表；不把汇率附表或任意黄色单元格当作基价。 */
 @Component
 public class FinanceFactorWorkbookParser {
-  public static final String VERSION = "FINANCE_BASE_V1";
+  public static final String VERSION = "FINANCE_BASE_V2";
   private final FactorCanonicalKeyService canonicalKeys;
 
   public FinanceFactorWorkbookParser(FactorCanonicalKeyService canonicalKeys) {
@@ -64,17 +64,30 @@ public class FinanceFactorWorkbookParser {
           columns.stream().map(c -> new Scheme(c.code(), c.label())).distinct().toList();
       for (int index = header.row() + 1; index <= header.sheet().getLastRowNum(); index++) {
         Row row = header.sheet().getRow(index);
-        String name = text(cell(row, header.name()));
-        String shortName = text(cell(row, header.shortName()));
-        String unit = text(cell(row, header.unit()));
+        String name = text(cell(row, header.name()), evaluator);
+        String shortName = text(cell(row, header.shortName()), evaluator);
+        String unit = text(cell(row, header.unit()), evaluator);
         if (name.isBlank() && shortName.isBlank() && unit.isBlank()) {
           continue;
         }
         // 商用原表下半部分是独立汇率附表，不属于材料基价表。
         if (organization == MaterialOrganization.COMMERCIAL
-            && name.contains("汇率")
+            && (name.contains("汇率") || name.contains("均价") && name.contains("原稿"))
             && shortName.isBlank()
             && unit.isBlank()) break;
+        if (organization == MaterialOrganization.COMMERCIAL) {
+          var scopeHeader = header.sheet().getRow(header.row());
+          Integer scopeColumn = null;
+          for (Cell c : scopeHeader) if (compact(text(c)).equals("适用范围")) scopeColumn = c.getColumnIndex();
+          if (scopeColumn != null) {
+            String applicability = compact(text(cell(row, scopeColumn), evaluator));
+            if (applicability.equals("板换")) continue;
+            if (!applicability.isBlank() && !java.util.Set.of("制冷", "商用", "制冷/板换", "商用/板换").contains(applicability)) {
+              problems.add(problem(header, index, scopeColumn, "未识别的因素适用范围：" + applicability));
+              continue;
+            }
+          }
+        }
         if (name.isBlank()) name = shortName;
         if (shortName.isBlank()) shortName = name;
         String source = header.source() == null ? "平均价" : text(cell(row, header.source()));
@@ -335,6 +348,14 @@ public class FinanceFactorWorkbookParser {
     return cell == null
         || cell.getCellType() == CellType.BLANK
         || (cell.getCellType() == CellType.STRING && cell.getStringCellValue().isBlank());
+  }
+
+  private static String text(Cell cell, FormulaEvaluator evaluator) {
+    if (cell != null && cell.getCellType() == CellType.FORMULA) {
+      var value = evaluator.evaluate(cell);
+      if (value != null && value.getCellType() == CellType.STRING) return value.getStringValue().trim();
+    }
+    return text(cell);
   }
 
   private static String text(Cell cell) {

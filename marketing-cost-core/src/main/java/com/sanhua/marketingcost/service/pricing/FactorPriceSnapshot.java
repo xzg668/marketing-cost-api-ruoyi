@@ -17,10 +17,47 @@ public record FactorPriceSnapshot(
     List<String> schemeCodes,
     String publishedBy,
     java.time.LocalDateTime publishedAt,
-    String publicationNote) {
+    String publicationNote,
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+        List<CuBand> cuBands) {
+  public FactorPriceSnapshot(FactorPriceScope scope, Long batchId, Integer revision, String fileName,
+      String fileSha256, String contentHash, Map<String, FactorValue> factors, List<String> schemeCodes,
+      String publishedBy, java.time.LocalDateTime publishedAt, String publicationNote) {
+    this(scope, batchId, revision, fileName, fileSha256, contentHash, factors, schemeCodes,
+        publishedBy, publishedAt, publicationNote, List.of());
+  }
+
   public FactorPriceSnapshot {
     factors = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(factors));
     schemeCodes = List.copyOf(schemeCodes);
+    cuBands = cuBands == null ? List.of() : List.copyOf(cuBands);
+  }
+
+  /** A band's identity comes from the actual Cu row at import; later Cu maintenance preserves its boundary. */
+  public record CuBand(String schemeCode, BigDecimal copperPerTon, Map<String, FactorValue> factors) {
+    public CuBand {
+      if (schemeCode == null || copperPerTon == null || copperPerTon.signum() <= 0)
+        throw new IllegalArgumentException("财务铜价档位无效");
+      factors = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(factors));
+    }
+    public CuBand retain(java.util.Set<String> keys) {
+      var selected = new LinkedHashMap<String, FactorValue>();
+      factors.forEach((key, value) -> { if (keys.contains(key)) selected.put(key, value); });
+      return new CuBand(schemeCode, copperPerTon, selected);
+    }
+  }
+
+  public CuBand customerBand(BigDecimal copperPerTon) {
+    if (copperPerTon == null || cuBands.isEmpty() || !"210".equals(scope.priceOrgCode())) return null;
+    var sorted = cuBands.stream().sorted(java.util.Comparator.comparing(CuBand::copperPerTon)).toList();
+    CuBand selected = sorted.getFirst();
+    for (var band : sorted) if (band.copperPerTon().compareTo(copperPerTon) <= 0) selected = band;
+    return selected;
+  }
+
+  public FactorPriceSnapshot withCuBands(List<CuBand> bands) {
+    return new FactorPriceSnapshot(scope, batchId, revision, fileName, fileSha256, contentHash,
+        factors, schemeCodes, publishedBy, publishedAt, publicationNote, bands);
   }
 
   public FactorPriceSnapshot copperOnly() {

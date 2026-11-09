@@ -315,6 +315,10 @@ public final class PreparedFormulaInputs {
         factors == null ? null : factors.withCustomerMaterials(prices));
   }
 
+  public PreparedFormulaInputs withCustomerContext(PriceFactorContext factors, Scrap customerScrap) {
+    return new PreparedFormulaInputs(catalog, financial, customerScrap, factors);
+  }
+
   public Catalog catalog() { return catalog; }
   public Financial financial() { return financial; }
   public Scrap scrap() { return scrap; }

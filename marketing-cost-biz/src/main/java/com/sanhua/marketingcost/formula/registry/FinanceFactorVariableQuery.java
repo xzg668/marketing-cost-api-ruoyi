@@ -129,11 +129,13 @@ public class FinanceFactorVariableQuery {
                   form != null && Boolean.TRUE.equals(form.getBoardTender())));
     }
     if (!request.isMonthlyReprice() && !request.isFinanceQuoteBase()) {
+      var customer = form == null
+          ? com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.copperAndZinc(null, null)
+          : com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.fromQuotation(form);
       BigDecimal copper = request.getOverrides().get("Cu");
-      if (copper != null)
-        context = context.withCustomerCopperPerTon(copper.multiply(new BigDecimal("1000")));
-      else if (form != null && form.getCopperPrice() != null)
-        context = context.withCustomerCopperPerTon(form.getCopperPrice());
+      if (copper != null) customer = new com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices(
+          copper.multiply(new BigDecimal("1000")), customer.zinc(), customer.silver(), customer.tin(), customer.sus304(), customer.sus316());
+      context = context.withCustomerMaterials(customer);
     }
     request.setPriceFactors(context);
     return context;

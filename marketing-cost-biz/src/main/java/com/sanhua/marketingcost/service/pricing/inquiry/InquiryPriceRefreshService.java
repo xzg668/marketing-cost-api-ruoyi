@@ -28,7 +28,7 @@ public final class InquiryPriceRefreshService {
       Integer financeRevision,
       String financeMonth,
       String financeScheme,
-      Map<String, FactorPriceSnapshot.FactorValue> financeFactors) {}
+      Map<String, FactorPriceSnapshot.FactorValue> financeFactors, FactorPriceSnapshot financial) {}
 
   private final InquiryPriceRepository repository;
   private final FinanceFactorPriceReader finance;
@@ -113,7 +113,7 @@ public final class InquiryPriceRefreshService {
               linked && financial != null ? financial.revision() : null,
               linked && financial != null ? financial.scope().priceMonth() : null,
               linked && financial != null ? financial.scope().schemeCode() : null,
-              Map.copyOf(factors));
+              Map.copyOf(factors), linked ? financial : null);
       long batch = linked && financial != null ? financial.batchId() : 0;
       String hash =
           MonthlyPriceDocumentCodec.sha256(

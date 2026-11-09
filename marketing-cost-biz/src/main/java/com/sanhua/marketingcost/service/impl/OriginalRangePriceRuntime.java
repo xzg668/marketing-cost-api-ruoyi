@@ -124,8 +124,12 @@ public final class OriginalRangePriceRuntime {
                 ? prepared.form()
                 : oa.selectOne(
                     Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNo).last("LIMIT 1"));
-        if (form != null && form.getCopperPrice() != null)
-          context = context.withCustomerCopperPerTon(form.getCopperPrice());
+        if (form != null) {
+          if (com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(rule.factorKey())
+              && form.getCopperPrice() != null && context.financial().cuBands().isEmpty() && context.financial().schemeCodes().size() > 1)
+            context = new PriceFactorContext(context.materialCode(), context.months(), finance.withCapturedBands(context.financial()), null, context.boardInputs());
+          context = context.withCustomerMaterials(com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.fromQuotation(form));
+        }
       }
       var result =
           saved == null

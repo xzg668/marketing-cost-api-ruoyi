@@ -15,9 +15,17 @@ public record PriceFactorContext(
     @com.fasterxml.jackson.annotation.JsonFormat(
             shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
         BigDecimal customerZincPricePerTon,
-    CustomerMaterialPrices customerMaterialPrices) {
+    CustomerMaterialPrices customerMaterialPrices,
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        FactorPriceSnapshot.CuBand customerBand) {
   public static final String COPPER = "AVG|1#CU";
   public static final String ZINC = "AVG|1#ZN";
+
+  public PriceFactorContext(String materialCode, PriceMonthSelection months, FactorPriceSnapshot financial,
+      BigDecimal copper, BoardPriceInputs board, BigDecimal zinc, CustomerMaterialPrices prices) {
+    this(materialCode, months, financial, copper, board, zinc, prices,
+        financial == null ? null : financial.customerBand(prices == null ? copper : prices.copper()));
+  }
 
   /** Existing snapshots and callers retain the captured Cu/Zn representation. */
   public PriceFactorContext(String materialCode, PriceMonthSelection months,
@@ -125,7 +133,8 @@ public record PriceFactorContext(
             financial.schemeCodes(),
             financial.publishedBy(),
             financial.publishedAt(),
-            financial.publicationNote());
+            financial.publicationNote(),
+            financial.cuBands().stream().map(band -> band.retain(used.keySet())).toList());
     return new PriceFactorContext(
         materialCode, months, selected, customerCopperPricePerTon, boardInputs, customerZincPricePerTon,
         customerMaterialPrices);
@@ -137,6 +146,7 @@ public record PriceFactorContext(
       return "CUSTOMER_SUS";
     if (customerMetalPricePerTon(canonicalKey) != null)
       return "OA_LOCKED";
+    if (customerBand != null && CustomerMaterialPrices.usesCopperBand(canonicalKey)) return "FINANCE_CU_BAND";
     return "FINANCE_FACTOR";
   }
 
@@ -152,13 +162,14 @@ public record PriceFactorContext(
       if (!taxIncluded) throw new IllegalArgumentException("客户材料基价为含税价");
       return FactorPriceUnit.CNY_TON.convert(customerSus, targetUnit);
     }
-    var factor = financial.factors().get(key);
+    var factor = customerBand == null || !CustomerMaterialPrices.usesCopperBand(key) || customerMetalPricePerTon(key) != null
+        ? financial.factors().get(key) : customerBand.factors().get(key);
     if (factor == null || factor.price() == null) {
       throw new IllegalArgumentException(
           "物料="
               + materialCode
               + "，缺少财务因素="
-              + key
+              + key + (customerBand == null ? "" : "，客户铜价档=" + customerBand.schemeCode())
               + "，来源月="
               + months.sourceMonth()
               + "，批次="

@@ -58,8 +58,9 @@ public final class MonthlyPriceScenarios {
     });
     var projected = new LinkedHashMap<Long, Pair>();
     var visiting = new HashSet<Long>();
+    var publications = new HashMap<String, FactorPriceSnapshot>();
     for (long key : prices.keySet())
-      project(key, customerPrices, prices, candidates, keys, dates, projected, visiting);
+      project(key, customerPrices, prices, candidates, keys, dates, projected, visiting, publications);
     var result = new LinkedHashMap<MonthlyPriceRequest, PreviewPair>();
     keys.forEach((request, key) -> {
       var pair = projected.get(key);
@@ -76,11 +77,22 @@ public final class MonthlyPriceScenarios {
   private final PriceLinkedFormulaPreviewServiceImpl legacyLinked;
   private final SettlementPriceCalculator settlement;
   private final ScrapPriceCalculator scrap;
+  private final com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader finance;
 
   public MonthlyPriceScenarios(MonthlyPriceDocumentCodec codec, OriginalLinkedRuleCalculator linked,
       OriginalRangeRuleCalculator originalRange, OriginalRangeRuleSnapshot rangeSnapshots,
       RangePriceResolver legacyRange, PriceLinkedFormulaPreviewServiceImpl legacyLinked,
       SettlementPriceCalculator settlement, ScrapPriceCalculator scrap) {
+    this(codec, linked, originalRange, rangeSnapshots, legacyRange, legacyLinked, settlement, scrap, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public MonthlyPriceScenarios(MonthlyPriceDocumentCodec codec, OriginalLinkedRuleCalculator linked,
+      OriginalRangeRuleCalculator originalRange, OriginalRangeRuleSnapshot rangeSnapshots,
+      RangePriceResolver legacyRange, PriceLinkedFormulaPreviewServiceImpl legacyLinked,
+      SettlementPriceCalculator settlement, ScrapPriceCalculator scrap,
+      com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader finance) {
+    this.finance = finance;
     this.codec = codec; this.linked = linked; this.originalRange = originalRange;
     this.rangeSnapshots = rangeSnapshots; this.legacyRange = legacyRange; this.legacyLinked = legacyLinked;
     this.settlement = settlement; this.scrap = scrap;
@@ -113,15 +125,16 @@ public final class MonthlyPriceScenarios {
     }
     var result = new LinkedHashMap<Long, Pair>();
     var visiting = new HashSet<Long>();
+    var publications = new HashMap<String, FactorPriceSnapshot>();
     var keys = new HashMap<MonthlyPriceRequest, Long>();
     requests.forEach((request, selected) -> keys.put(request, selected.monthlyPriceId()));
-    for (long id : byId.keySet()) project(id, customerPrices, byId, requests, keys, firstAdoptionDates, result, visiting);
+    for (long id : byId.keySet()) project(id, customerPrices, byId, requests, keys, firstAdoptionDates, result, visiting, publications);
     return Map.copyOf(result);
   }
 
   private Pair project(long id, CustomerMaterialPrices customerPrices, Map<Long, Selection> prices, Map<MonthlyPriceRequest, Selection> requests,
       Map<MonthlyPriceRequest, Long> keys, Map<Long, LocalDate> firstAdoptionDates,
-      Map<Long, Pair> result, Set<Long> visiting) {
+      Map<Long, Pair> result, Set<Long> visiting, Map<String, FactorPriceSnapshot> publications) {
     if (result.containsKey(id)) return result.get(id);
     if (!visiting.add(id)) throw new IllegalArgumentException("Cyclic monthly price evidence");
     var selected = Objects.requireNonNull(prices.get(id), "Missing adopted dependency");
@@ -132,13 +145,18 @@ public final class MonthlyPriceScenarios {
     BigDecimal financial;
     BigDecimal customer;
     HouseholdMetalCalculation.Trace householdCalculation=null;
+    var customerContexts = new ArrayList<PriceFactorContext>();
     switch (kind) {
       case "HOUSEHOLD_INQUIRY" -> {
         var snapshot = read(fact.evidence().json(), HouseholdMonthlyPriceSource.Snapshot.class);
         var source = snapshot.source().evidence().source();
         financial = new BigDecimal(source.unitPrice()); customer = financial;
         if(snapshot.metalInputs()!=null) {
-          householdCalculation=HouseholdMetalCalculation.calculate(financial,snapshot.metalInputs(),customerPrices);
+          var metal = snapshot.metalInputs();
+          var projected = customerContext(metal.financial(), customerPrices, publications, customerContexts);
+          householdCalculation=HouseholdMetalCalculation.calculate(financial,
+              new HouseholdMetalCalculation.Inputs(metal.copperGrams(), metal.zincGrams(),
+                  projected == null ? null : projected.financialOnly()),customerPrices);
           customer=householdCalculation.calculatedW();
         }
         if (fact.householdRate() == null || fact.householdRate().compareTo(new BigDecimal(source.householdRate())) != 0)
@@ -161,10 +179,25 @@ public final class MonthlyPriceScenarios {
           var inputs = new java.util.LinkedHashMap<String,BigDecimal>();
           calculation.path("inputs").fields().forEachRemaining(entry -> inputs.put(entry.getKey(),new BigDecimal(entry.getValue().asText())));
           financial = com.sanhua.marketingcost.formula.registry.ExpressionEvaluator.evaluate(calculation.path("expression").asText(),inputs).setScale(18,RoundingMode.HALF_UP);
+          FactorPriceSnapshot inquiryBase = calculation.path("financial").isObject()
+              ? convert(calculation.path("financial"), FactorPriceSnapshot.class) : null;
+          if (inquiryBase == null && finance != null && customerPrices.copper() != null
+              && calculation.path("financeBatchId").canConvertToLong()) {
+            inquiryBase = finance.readCaptured(calculation.path("financeBatchId").longValue(),
+                calculation.path("financeRevision").intValue(), selectedRequest(id, requests, keys).family().businessUnitType(),
+                "210", calculation.path("financeMonth").asText(), calculation.path("financeScheme").asText(), FactorPriceScope.Condition.GENERAL);
+          }
+          var inquiryContext = inquiryBase == null ? null : customerContext(new PriceFactorContext(
+              selectedRequest(id, requests, keys).family().materialCode(),
+              new PriceMonthSelection(selectedRequest(id, requests, keys).family().month().toString(), inquiryBase.scope().priceMonth()),
+              inquiryBase, null), customerPrices, publications, customerContexts);
           calculation.path("factors").fields().forEachRemaining(entry -> {
             String factor = entry.getValue().asText();
             BigDecimal customerMetal = customerPrices.pricePerTon(factor);
-            if (customerMetal != null) {
+            if (inquiryContext != null) {
+              inputs.put(entry.getKey(), inquiryContext.requiredPrice(factor,
+                  FactorPriceUnit.require(calculation.path("financeFactors").path(factor).path("unit").asText()), true));
+            } else if (customerMetal != null) {
               String unit = calculation.path("financeFactors").path(factor).path("unit").asText();
               inputs.put(entry.getKey(),com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_TON.convert(customerMetal,
                   com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(unit)));
@@ -184,14 +217,14 @@ public final class MonthlyPriceScenarios {
         var saved = read(source.selectedPublication().getCalculationJson(), FinanceEffectivePriceService.Calculation.class);
         var context = convert(read(source.calculationJson(), JsonNode.class).path("context"), PriceFactorContext.class);
         financial = linked.calculate(saved.linkedRule(), context.financialOnly()).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
-        customer = linked.calculate(saved.linkedRule(), context.withCustomerMaterials(customerPrices)).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
+        customer = linked.calculate(saved.linkedRule(), customerContext(context, customerPrices, publications, customerContexts)).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
       }
       case "RANGE_FACTOR" -> {
         var source = read(fact.evidence().json(), MonthlyOriginalRangePriceSource.Snapshot.class).source();
         var saved = read(source.calculationJson(), OriginalRangePriceRuntime.Calculation.class);
         var rule = rangeSnapshots.read(source.selected()).rule();
         financial = originalRange.calculate(rule, saved.context().financialOnly()).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
-        customer = originalRange.calculate(rule, saved.context().withCustomerMaterials(customerPrices)).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
+        customer = originalRange.calculate(rule, customerContext(saved.context(), customerPrices, publications, customerContexts)).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
       }
       case "RANGE_LEGACY_FACTOR" -> {
         var source = read(fact.evidence().json(), MonthlyLegacyRangePriceSource.Snapshot.class).source();
@@ -199,7 +232,7 @@ public final class MonthlyPriceScenarios {
             .map(Map.Entry::getKey).findFirst().orElseThrow();
         LocalDate adoptionDate = firstAdoptionDates.get(id);
         financial = range(source, source.financialInputs(), request, adoptionDate);
-        customer = range(source, source.financialInputs().withCustomerMaterials(customerPrices), request, adoptionDate);
+        customer = range(source, customerContext(source.financialInputs(), customerPrices, publications, customerContexts), request, adoptionDate);
       }
       case "SCRAP_PRICE" -> {
         var snapshot = read(fact.evidence().json(), MonthlyScrapPriceSource.Snapshot.class);
@@ -209,7 +242,7 @@ public final class MonthlyPriceScenarios {
         row.setPriceMonth(snapshot.requestedMonth());
         financial = scrap.calculate(scrap.prepare(row, captured.input().factors()));
         customer = scrap.calculate(scrap.prepare(row, captured.input().factors() == null ? null
-            : captured.input().factors().withCustomerMaterials(customerPrices)));
+            : customerContext(captured.input().factors(), customerPrices, publications, customerContexts)));
       }
       case "SETTLE_FIXED", "SETTLE_LINKED" -> {
         var source = root.path("source");
@@ -220,6 +253,13 @@ public final class MonthlyPriceScenarios {
         var base = source.path("base").isNull() ? null : convert(source.path("base"), SettlementBasePrice.class);
         financial = settlement.calculate(rule, base).unitPrice();
         var copper = customerPrices.copper(); var zinc = customerPrices.zinc();
+        if (base != null && base.financial() != null) {
+          var ctx = customerContext(new PriceFactorContext(rule.getMaterialCode(),
+              new PriceMonthSelection(base.priceMonth(), base.priceMonth()), base.financial(), null),
+              customerPrices, publications, customerContexts);
+          copper = ctx.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_TON, true);
+          zinc = ctx.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_TON, true);
+        }
         var projected = base == null || (copper == null && zinc == null) ? base : new SettlementBasePrice(base.id(), base.businessUnitType(),
             base.priceMonth(), base.revisionNo(), base.active(), copper == null ? base.copperPrice() : copper.movePointLeft(3),
             zinc == null ? base.zincPrice() : zinc.movePointLeft(3), base.unit(), base.taxBasis(), base.sourceKind(), base.sourceFileSha256(),
@@ -249,7 +289,7 @@ public final class MonthlyPriceScenarios {
         for (var dependency : fact.dependencies()) {
           var child = Objects.requireNonNull(requests.get(dependency), "Missing captured scrap dependency");
           var pair = project(Objects.requireNonNull(keys.get(dependency), "Missing preview dependency identity"),
-              customerPrices, prices, requests, keys, firstAdoptionDates, result, visiting);
+              customerPrices, prices, requests, keys, firstAdoptionDates, result, visiting, publications);
           p0Scrap.put(dependency.family().materialCode(), new PreparedFormulaInputs.ScrapPricePerKgExclTax(pair.financialPrice(), child.fact().evidence()));
           p1Scrap.put(dependency.family().materialCode(), new PreparedFormulaInputs.ScrapPricePerKgExclTax(pair.customerPrice(), child.fact().evidence()));
         }
@@ -260,7 +300,8 @@ public final class MonthlyPriceScenarios {
         LocalDate date = convert(calculation.path("priceAsOfDate"), LocalDate.class);
         financial = formula(rule, month, date, prepared);
         customer = customerPrices.isEmpty() ? financial : formula(rule, month, date,
-            prepared.withCustomerMaterials(customerPrices, new PreparedFormulaInputs.Scrap(references, p1Scrap)));
+            prepared.withCustomerContext(customerContext(factors, customerPrices, publications, customerContexts),
+                new PreparedFormulaInputs.Scrap(references, p1Scrap)));
       }
       default -> throw new IllegalArgumentException("Unknown monthly source: " + kind);
     }
@@ -273,6 +314,7 @@ public final class MonthlyPriceScenarios {
     evidence.put("customerCopperPerTon", customerPrices.copper()); evidence.put("financialPrice", financial);
     evidence.put("customerZincPerTon", customerPrices.zinc());
     evidence.put("customerMaterialPrices", customerPrices);
+    if (!customerContexts.isEmpty()) evidence.put("customerFactorContexts", customerContexts);
     if(householdCalculation!=null) {
       evidence.put("householdCalculation",householdCalculation);
       evidence.put("originalW",root.path("source").path("evidence").path("source").path("financialReference").path("W"));
@@ -282,6 +324,34 @@ public final class MonthlyPriceScenarios {
     evidence.put("customerPrice", customer); evidence.put("projectionVersion", CustomerMaterialPrices.CALCULATION_VERSION);
     var pair = new Pair(id, fact.evidence().sha256(), financial, customer, codec.unwrap(codec.encode(evidence)));
     result.put(id, pair); visiting.remove(id); return pair;
+  }
+
+  private MonthlyPriceRequest selectedRequest(long id, Map<MonthlyPriceRequest, Selection> requests,
+      Map<MonthlyPriceRequest, Long> keys) {
+    return requests.keySet().stream().filter(request -> Objects.equals(keys.get(request), id)).findFirst().orElseThrow();
+  }
+
+  private PriceFactorContext customerContext(PriceFactorContext base, CustomerMaterialPrices customer,
+      Map<String, FactorPriceSnapshot> publications, List<PriceFactorContext> traces) {
+    if (base == null) return null;
+    var captured = base.financial();
+    if (finance != null && customer.copper() != null && captured.cuBands().isEmpty()
+        && "210".equals(captured.scope().priceOrgCode())) {
+      String key = captured.batchId() + ":" + captured.revision() + ":" + captured.scope();
+      var full = publications.computeIfAbsent(key, ignored -> finance.readCaptured(captured.batchId(), captured.revision(),
+          captured.scope().businessUnitType(), captured.scope().priceOrgCode(), captured.scope().priceMonth(),
+          captured.scope().schemeCode(), captured.scope().condition()));
+      for (var entry : captured.factors().entrySet()) {
+        var original = full.required(entry.getKey()); var saved = entry.getValue();
+        if (!Objects.equals(original.monthlyPriceId(), saved.monthlyPriceId()) || original.price().compareTo(saved.price()) != 0
+            || !original.unit().equals(saved.unit()) || original.taxIncluded() != saved.taxIncluded())
+          throw new IllegalArgumentException("保存财务因素与原发布不一致：" + entry.getKey());
+      }
+      base = new PriceFactorContext(base.materialCode(), base.months(), captured.withCuBands(full.cuBands()), null, base.boardInputs());
+    }
+    var result = base.withCustomerMaterials(customer);
+    if (result.customerBand() != null) traces.add(result.evidenceForFactors(base.financial().factors().keySet()));
+    return result;
   }
 
   private BigDecimal formula(PriceLinkedItem rule, String month, LocalDate date, PreparedFormulaInputs prepared) {

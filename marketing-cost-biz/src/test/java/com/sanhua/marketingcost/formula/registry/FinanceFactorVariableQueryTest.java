@@ -89,7 +89,7 @@ class FinanceFactorVariableQueryTest {
   }
 
   @Test
-  void customerCopperOverrideNeverChangesZincAndMonthlyRepriceUsesFinance() {
+  void explicitCustomerZincWinsAndMonthlyRepriceStillUsesFinance() {
     var form = new OaForm();
     form.setCopperPrice(new BigDecimal("100000"));
     form.setZincPrice(new BigDecimal("99000"));
@@ -97,7 +97,7 @@ class FinanceFactorVariableQueryTest {
     var copper = Map.<String, Object>of("factorCode", "Cu", "priceSource", "平均价");
     var zinc = Map.<String, Object>of("shortName", "1#Zn", "priceSource", "平均价");
     assertThat(query.query(copper, context).orElseThrow().price()).isEqualByComparingTo("100");
-    assertThat(query.query(zinc, context).orElseThrow().price()).isEqualByComparingTo("21.636");
+    assertThat(query.query(zinc, context).orElseThrow().price()).isEqualByComparingTo("99");
     context.override("Cu", new BigDecimal("95"), "FINANCE_QUOTE_BASE");
     assertThat(query.query(copper, context).orElseThrow())
         .satisfies(

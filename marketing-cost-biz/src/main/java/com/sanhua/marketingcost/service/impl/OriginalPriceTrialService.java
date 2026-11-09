@@ -61,9 +61,10 @@ public class OriginalPriceTrialService {
     var source = FinanceEffectivePriceService.SourceRule.linked(item);
     var context = context(source.key(), item.getPricingMonth(), request);
     var saved = effectivePrices.calculation(effectivePrices.require(item, context.financial()));
-    context = savedContext(saved.context(), request.pricingMonth());
     var rule = saved.linkedRule();
     if (rule == null || saved.linked() == null) throw new IllegalArgumentException("财务有效价缺少联动计算依据");
+    context = savedContext(saved.context(), request.pricingMonth(), request.customerCopperPerTon() != null
+        && rule.factors().values().stream().anyMatch(factor -> com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(factor.canonicalKey())));
     var customerContext =
         request.customerCopperPerTon() == null
             ? context
@@ -98,7 +99,8 @@ public class OriginalPriceTrialService {
     var context = context(rule.identity(), item.getPricingMonth(), request);
     var savedPrice =
         effectivePrices.calculation(effectivePrices.require(item, context.financial()));
-    context = savedContext(savedPrice.context(), request.pricingMonth());
+    context = savedContext(savedPrice.context(), request.pricingMonth(), request.customerCopperPerTon() != null
+        && com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(rule.factorKey()));
     var customerContext =
         request.customerCopperPerTon() == null
             ? context
@@ -239,18 +241,21 @@ public class OriginalPriceTrialService {
     return batch.getFileName();
   }
 
-  private PriceFactorContext savedContext(PriceFactorContext saved, String month) {
+  private PriceFactorContext savedContext(PriceFactorContext saved, String month, boolean customer) {
     return new PriceFactorContext(
         saved.materialCode(),
         new com.sanhua.marketingcost.service.pricing.PriceMonthSelection(
             month, saved.months().sourceMonth()),
-        saved.financial(),
+        customer && saved.financial().cuBands().isEmpty() && saved.financial().schemeCodes().size() > 1
+            ? finance.withCapturedBands(saved.financial()) : saved.financial(),
         null,
         saved.boardInputs());
   }
 
   private PriceFactorContext context(MaterialPriceRuleKey key, String ruleMonth, Request request) {
     if (request == null) throw new IllegalArgumentException("请选择试算月份");
+    if (request.customerCopperPerTon() != null && request.customerCopperPerTon().signum() <= 0)
+      throw new IllegalArgumentException("客户Cu必须大于0");
     var month = FactorPriceScope.month(request.pricingMonth());
     if (month.compareTo(ruleMonth) < 0) throw new IllegalArgumentException("试算月份不能早于原稿月份");
     return finance.readDefault(

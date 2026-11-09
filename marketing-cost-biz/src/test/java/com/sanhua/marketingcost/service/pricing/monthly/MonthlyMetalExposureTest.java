@@ -13,11 +13,11 @@ class MonthlyMetalExposureTest {
   final MonthlyMetalExposure exposure = new MonthlyMetalExposure(codec);
 
   @Test void silverTinAndBoardGradesAreMaterialDifferenceFactors() {
-    for (String key : List.of("AVG|1#AG", "AVG|SN", "AVG|304/2B/1219", "AVG|316L/2B 1.0*1219*C")) {
+    for (String key : List.of("AVG|1#AG", "AVG|SN", "AVG|304/2B/1219", "AVG|316L/2B 1.0*1219*C", "AVG|美国柜装黄铜", "AVG|H65黄铜边料")) {
       var range = selection(1, "RANGE_FACTOR", Map.of("calculationJson", json(Map.of("factorKey", key))), Set.of());
       assertThat(exposure.read(Map.of(request("NEW-METALS"), range))).as(key).containsEntry(1L, true);
     }
-    for (String key : List.of("AVG|PCU", "AVG|A00", "AVG|黄金AU9999", "AVG|3040")) {
+    for (String key : List.of("AVG|PCU", "AVG|A00", "AVG|黄金AU9999", "AVG|3040", "", "NOT_A_FACTOR")) {
       var range = selection(1, "RANGE_FACTOR", Map.of("calculationJson", json(Map.of("factorKey", key))), Set.of());
       assertThat(exposure.read(Map.of(request("UNCHANGED"), range))).as(key).containsEntry(1L, false);
     }

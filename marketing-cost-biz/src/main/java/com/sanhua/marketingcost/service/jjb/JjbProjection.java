@@ -175,7 +175,7 @@ public class JjbProjection {
     var header = new Header(item.getProductName(),item.getSunlModel(),form.getCustomer(),item.getCustomerCode(),item.getCustomerDrawing(),
         "表头取报价需求单；核算金额、费率及财务Cu取所选保存版本",money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation);
     rows = new JjbPricePresentation(json).apply(rows, calc, preparations);
-    return new JjbReadModel(identity,header,rows,calc==null?List.of():monthly(calc),
+    return new JjbReadModel(identity,header,rows,calc==null?List.of():monthly(calc, snapshot.priceScenarios()),
         new Totals(money(t1),money(v.getCuMaterialAdjustment()),money(v.getFinalQuoteAmount())),warnings);
   }
 
@@ -348,12 +348,45 @@ public class JjbProjection {
     return Map.copyOf(values);
   }
 
-  private List<MonthlyPrice> monthly(MonthlyProductCost.Result calc) {
+  private List<MonthlyPrice> monthly(MonthlyProductCost.Result calc,
+      List<com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceScenarios.Pair> scenarios) {
     var groups = calc.adoptedPrices().stream().collect(Collectors.groupingBy(p -> p.selection().monthlyPriceId(),TreeMap::new,Collectors.toList()));
     var result = new ArrayList<MonthlyPrice>();
     groups.forEach((id, group) -> {
       var p=group.getFirst();var fact=p.selection().fact();var family=p.request().family();var evidence=tree(fact.evidence().json());
       var src=evidence.path("source");var selected=src.has("selected")?src.path("selected"):src;
+      var details = new LinkedHashMap<>(JjbSourceEvidence.describe(evidence));
+      scenarios.stream().filter(pair -> pair.monthlyPriceId() == id).findFirst().ifPresent(pair -> {
+        details.put("financialScenarioPrice", decimal(pair.financialPrice()));
+        details.put("customerScenarioPrice", decimal(pair.customerPrice()));
+        var customer = tree(pair.customerEvidenceJson());
+        var bands = new LinkedHashSet<String>(); var factors = new LinkedHashSet<String>();
+        for (var context : customer.path("customerFactorContexts")) {
+          bands.add(context.path("customerBand").path("schemeCode").asText());
+          context.path("financial").path("factors").fields().forEachRemaining(entry -> {
+            String key = entry.getKey(); var base = entry.getValue();
+            boolean byBand = com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(key);
+            var selectedFactor = byBand ? context.path("customerBand").path("factors").path(key) : base;
+            String value = selectedFactor.path("price").asText();
+            var explicit = switch (com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.canonicalKey(key)) {
+              case "AVG|1#CU" -> customer.path("customerMaterialPrices").path("copper");
+              case "AVG|1#ZN" -> customer.path("customerMaterialPrices").path("zinc");
+              case "AVG|1#AG" -> customer.path("customerMaterialPrices").path("silver");
+              case "AVG|1#SN" -> customer.path("customerMaterialPrices").path("tin");
+              default -> json.nullNode();
+            };
+            if (!explicit.isMissingNode() && !explicit.isNull()) value = decimal(
+                com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_TON.convert(new BigDecimal(explicit.asText()),
+                    com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(base.path("unit").asText())));
+            if (!value.isBlank()) factors.add(base.path("factorName").asText(key) + "：" + base.path("price").asText()
+                + " → " + value + " " + base.path("unit").asText() + (explicit.isMissingNode() || explicit.isNull() ? byBand ? "（按Cu档）" : "（基准因素）" : "（需求单填写）"));
+          });
+        }
+        if (!bands.isEmpty()) {
+          details.put("customerCuBand", String.join("；", bands));
+          details.put("factorSubstitution", String.join("；", factors));
+        }
+      });
       result.add(new MonthlyPrice(id,family.materialCode(),fact.type().name(),family.unit(),family.currency(),family.taxBasis().name(),
           decimal(fact.price()),decimal(fact.householdRate()),fact.evidence().sha256(),
           p.selection().applicability().fragments().stream().flatMap(f -> f.organizations().stream()).distinct().sorted().toList(),
@@ -361,7 +394,7 @@ public class JjbProjection {
           text(evidence,"sourceKind"),first(text(evidence,"householdSourceId"),text(selected,"id"),text(src,"versionId")),
           first(text(src,"revisionNo"),text(selected,"ruleRevision"),text(selected,"technicalVersionId")),
           first(text(src,"importBatchId"),text(selected,"sourceBatchNo")),first(text(selected,"supplierName"),text(selected,"supplierCode")),
-          JjbSourceEvidence.describe(evidence)));
+          details));
     });return result;
   }
   private void addCost(List<Row> rows,Map<String,List<CostRunCostItem>> map,String code,String section,MonthlyProductCost.Result calc,List<String> warnings) {

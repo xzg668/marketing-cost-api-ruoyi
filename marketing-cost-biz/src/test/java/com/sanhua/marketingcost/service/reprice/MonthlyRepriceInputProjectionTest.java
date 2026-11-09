@@ -102,7 +102,7 @@ class MonthlyRepriceInputProjectionTest {
     }
     // Deliberately identical projected amounts expose a missing input, rather than relying on output differences.
     assertThat(capture(original).sameInputs(capture(other))).as(factor+" quotation condition").isFalse();
-    assertThat(same.canonical()).contains("customerMaterialPrices","MONTHLY_MATERIAL_V4","materialPriceProjection");
+    assertThat(same.canonical()).contains("customerMaterialPrices",com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION,"materialPriceProjection");
   }
 
   private static void setCustomerPrices(OaForm form) {

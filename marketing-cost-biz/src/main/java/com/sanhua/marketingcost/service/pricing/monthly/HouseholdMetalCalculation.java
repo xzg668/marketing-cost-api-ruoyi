@@ -29,8 +29,9 @@ public final class HouseholdMetalCalculation {
   public static Trace calculate(BigDecimal original,Inputs input,CustomerMaterialPrices customer) {
     BigDecimal cu=base(input,PriceFactorContext.COPPER,input.copperGrams());
     BigDecimal zn=base(input,PriceFactorContext.ZINC,input.zincGrams());
-    BigDecimal customerCu=customer.copper()==null?cu:customer.copper().movePointLeft(3);
-    BigDecimal customerZn=customer.zinc()==null?zn:customer.zinc().movePointLeft(3);
+    var projected=input.financial()==null?null:input.financial().withCustomerMaterials(customer);
+    BigDecimal customerCu=input.copperGrams().signum()==0?cu:projected.requiredPrice(PriceFactorContext.COPPER,FactorPriceUnit.CNY_KG,true);
+    BigDecimal customerZn=input.zincGrams().signum()==0?zn:projected.requiredPrice(PriceFactorContext.ZINC,FactorPriceUnit.CNY_KG,true);
     BigDecimal cuDiff=delta(customerCu,cu,input.copperGrams()),znDiff=delta(customerZn,zn,input.zincGrams());
     var divisor=new BigDecimal("1.13");
     var result=original.add(cuDiff.add(znDiff).divide(divisor,18,RoundingMode.HALF_UP));
