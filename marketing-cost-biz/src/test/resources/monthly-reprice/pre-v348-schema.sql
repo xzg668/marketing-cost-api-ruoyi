@@ -343,3 +343,5 @@ CREATE TABLE `lp_business_change_log` (
   KEY `idx_business_change_changed_at` (`changed_at`)
 ) ENGINE=InnoDB AUTO_INCREMENT=113 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='统一业务变更日志表';
 SET FOREIGN_KEY_CHECKS=1;
+
+ALTER TABLE lp_supplier_supply_ratio ADD COLUMN selection_rule VARCHAR(255) NULL;

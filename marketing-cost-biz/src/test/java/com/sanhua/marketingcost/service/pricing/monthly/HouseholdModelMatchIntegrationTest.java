@@ -46,31 +46,25 @@ class HouseholdModelMatchIntegrationTest {
   static MonthlyAdoptionPlan adopt(MonthlyPriceRequest request) {
     return operation.adopt(context("COMMERCIAL",request.family().month().toString(),request.priceOrgCode()),planFor(request,candidate(request))).plan();
   }
-  @Test void modelAndSpecificationMatchWithoutInventingSourceCodesAndCodeAlwaysWins()throws Exception {
-    String material=code(),spec="MODEL-"+UUID.randomUUID(),month="2070-11";finance(month,1,"90","22");
-    long missing=inquiry(null,spec,month,"18.9343");master(material,"COMMERCIAL",spec,"OTHER");
-    var request=requestFor(material,month,"210",null);var adopted=adopt(request);var old=adopted.selections().get(request);
-    assertThat(jdbc.queryForObject("SELECT material_code FROM lp_household_inquiry_price WHERE id=?",String.class,missing)).isNull();
-    assertThat(jdbc.queryForObject("SELECT material_code FROM lp_material_monthly_price WHERE id=?",String.class,old.monthlyPriceId())).isEqualTo(material);
-    var snapshot=codec.decode(codec.wrap(old.fact().evidence().json()),HouseholdMonthlyPriceSource.Snapshot.class);
-    assertThat(snapshot.match().matchedValue()).isEqualTo(spec);assertThat(snapshot.match().requestedMaterialCode()).isEqualTo(material);
-    assertThat(old.applicability().fragments()).allMatch(fragment->fragment.organizations().equals(Set.of("210")));
-    long exact=inquiry(material,"DIFFERENT SPEC",month,"21");
-    var replaced=adopt(request).selections().get(request);assertThat(replaced.fact().price()).isEqualByComparingTo("21");
-    assertThat(replaced.monthlyPriceId()).isNotEqualTo(old.monthlyPriceId());
-    assertThat(priceStorage.readByIds("COMMERCIAL",Set.of(replaced.monthlyPriceId())).getFirst().householdSourceId()).isEqualTo(exact);
-    assertThat(priceStorage.readByIds("COMMERCIAL",Set.of(old.monthlyPriceId())).getFirst().evidence()).isEqualTo(old.fact().evidence());
-    String specOnly=code();master(specOnly,"COMMERCIAL","OTHER",spec);
-    assertThat(candidate(requestFor(specOnly,month,"210",null)).fact().price()).isEqualByComparingTo("18.9343");
-    assertThat(candidate(requestFor(code(),month,"210",spec)).fact().price()).isEqualByComparingTo("18.9343");
-    assertThat(household.read(context("COMMERCIAL",month,"220"),Set.of(requestFor(specOnly,month,"220",null))).values()).isEmpty();
-    String foreign=code(),onlyCodedSpec="EXPLICIT-"+UUID.randomUUID();inquiry(code(),onlyCodedSpec,month,"99");master(foreign,"COMMERCIAL",onlyCodedSpec,null);
-    assertThat(household.read(context("COMMERCIAL",month,"210"),Set.of(requestFor(foreign,month,"210",null))).values()).isEmpty();
+  static MonthlyPriceRequest specificationRequest(String month,String specification) {
+    return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(java.time.YearMonth.parse(month),"COMMERCIAL","",
+        specification,"支","CNY",TaxBasis.EXCLUDED,null,true),"210",NonCuConditions.empty(),BigDecimal.ONE);
   }
-  @Test void modelSourceMonthUpdatePreservesHistoryAndRejectsStaleAdoption()throws Exception {
-    String material=code(),spec="SPEC-"+UUID.randomUUID(),nov="2071-11",dec="2071-12";finance(nov,1,"90","22");finance(dec,1,"100","24");
-    long first=inquiry(null,spec,nov,"18.9343");var request=requestFor(material,dec,"210",spec);var old=adopt(request).selections().get(request);
-    assertThat(codec.decode(codec.wrap(old.fact().evidence().json()),HouseholdMonthlyPriceSource.Snapshot.class).metalInputs().financial().months().sourceMonth()).isEqualTo(dec);
+  @Test void aCodedBomNeverBorrowsASpecificationPriceAndItsOwnCodeIgnoresDisplayFields() throws Exception {
+    String material=code(),spec="SPEC-"+UUID.randomUUID(),month="2070-11";finance(month,1,"90","22");
+    inquiry(null,spec,month,"18.9343");master(material,"COMMERCIAL",spec,spec);
+    var coded=requestFor(material,month,"210",spec);
+    assertThat(household.read(context("COMMERCIAL",month,"210"),Set.of(coded)).values()).isEmpty();
+    var anonymous=specificationRequest(month,spec);var old=adopt(anonymous).selections().get(anonymous);
+    assertThat(old.fact().price()).isEqualByComparingTo("18.9343");
+    assertThat(priceStorage.readByIds("COMMERCIAL",Set.of(old.monthlyPriceId())).getFirst().family().materialCode()).isEmpty();
+    inquiry(material,"DIFFERENT SPEC",month,"21");
+    assertThat(candidate(coded).fact().price()).isEqualByComparingTo("21");
+    assertThat(adopt(anonymous).selections().get(anonymous).monthlyPriceId()).isEqualTo(old.monthlyPriceId());
+  }
+  @Test void specificationPriceUpdatesPreserveHistoryAndRejectStaleAdoption() throws Exception {
+    String spec="SPEC-"+UUID.randomUUID(),nov="2071-11",dec="2071-12";finance(nov,1,"90","22");finance(dec,1,"100","24");
+    long first=inquiry(null,spec,nov,"18.9343");var request=specificationRequest(dec,spec);var old=adopt(request).selections().get(request);
     long december=inquiry(null,spec,dec,"21");
     assertThatThrownBy(()->operation.adopt(context("COMMERCIAL",dec,"210"),planFor(request,old))).isInstanceOf(MonthlyPriceProblem.class);
     var current=adopt(request).selections().get(request);assertThat(current.fact().price()).isEqualByComparingTo("21");
@@ -78,33 +72,20 @@ class HouseholdModelMatchIntegrationTest {
     assertThat(inquiries.current("COMMERCIAL",spec,dec,1,20).rows().getFirst().id()).isEqualTo(december);
     assertThat(inquiries.historyById("COMMERCIAL",first,1,20).total()).isEqualTo(3);
     assertThat(priceStorage.readByIds("COMMERCIAL",Set.of(old.monthlyPriceId())).getFirst().unitPrice()).isEqualByComparingTo("18.9343");
-    var stale=candidate(requestFor(code(),dec,"210",spec));String target=code();var targetRequest=requestFor(target,dec,"210",spec);
-    inquiry(target,"EXACT",dec,"30");
-    assertThatThrownBy(()->operation.adopt(context("COMMERCIAL",dec,"210"),planFor(targetRequest,stale))).isInstanceOf(MonthlyPriceProblem.class);
   }
-  @Test void conflictingModelAndSpecificationMatchesAreReportedAndNeverPickedArbitrarily()throws Exception {
+  @Test void noCodeMatchesTheBomSpecificationWithoutModelExpansion() throws Exception {
     String material=code(),model="MODEL-"+UUID.randomUUID(),spec="SPEC-"+UUID.randomUUID(),month="2072-11";
     finance(month,1,"90","22");inquiry(null,model,month,"20");inquiry(null,spec,month,"21");master(material,"COMMERCIAL",model,spec);
-    var request=requestFor(material,month,"210",null);var response=household.read(context("COMMERCIAL",month,"210"),Set.of(request));
-    assertThat(response.values()).isEmpty();assertThat(response.problems().get(request).message()).contains("多个来源");
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?",Integer.class,material)).isZero();
+    assertThat(candidate(specificationRequest(month,spec)).fact().price()).isEqualByComparingTo("21");
+    assertThat(household.read(context("COMMERCIAL",month,"210"),Set.of(requestFor(material,month,"210",null))).values()).isEmpty();
   }
-  @Test void modelMatchedCostSavesOriginalWAndCustomerDifferenceWithRealBomMaterial()throws Exception {
-    String material=code(),spec="COST-"+UUID.randomUUID(),month="2073-11";finance(month,1,"90","22");inquiry(null,spec,month,"18.9343");master(material,"COMMERCIAL",spec,null);
-    var request=requestFor(material,month,"210",null);var adopted=adopt(request);
-    var customer=CustomerMaterialPrices.copperAndZinc(new BigDecimal("120000"),new BigDecimal("28000"));
-    String financeNo="FIN-"+UUID.randomUUID(),customerNo="OA-"+UUID.randomUUID();
-    var version=versionService.createRunning("MODEL-"+UUID.randomUUID(),1L,"TOP",month,month,financeNo,"COMMERCIAL");
-    version.setFinancePricePrepareNo(financeNo);version.setOaPricePrepareNo(customerNo);versionMapper.updateById(version);
-    long fin=prepare(version,request,financeNo,"root/HH",new BigDecimal("2.5"),new BigDecimal("18.9343"));
-    long quote=prepare(version,request,customerNo,"root/HH",new BigDecimal("2.5"),new BigDecimal("20.462441592920353982"));
-    var zero=BigDecimal.ZERO;var ordinary=new Ordinary(List.of(),zero,zero,zero,zero,zero,new BigDecimal("1.05"),zero,new BigDecimal(".20"),zero,zero);
-    var saved=costing.calculateAndSaveMaterials("COMMERCIAL",version.getId(),adopted,ordinary,null,customer,Map.of("root/HH",new PreparationBinding(fin,quote)));
-    assertThat(saved.version().getCuMaterialAdjustment()).isEqualByComparingTo("4.524567");
-    var restored=costing.read("COMMERCIAL",version.getId());assertThat(restored.snapshot()).isEqualTo(saved.snapshot());
-    var sheet=new com.sanhua.marketingcost.service.jjb.JjbProjection(new com.fasterxml.jackson.databind.ObjectMapper()).project(restored,new com.sanhua.marketingcost.entity.OaForm(),new com.sanhua.marketingcost.entity.OaFormItem(),List.of());
-    var row=sheet.rows().stream().filter(value->value.kind().equals("HOUSEHOLD")).findFirst().orElseThrow();
-    assertThat(row.code()).isEqualTo(material);assertThat(row.householdCalculation()).containsEntry("calculatedW","20.462441592920353982");
-    assertThat(row.householdCalculation().get("originalWFormula")).contains("$W$1-$V$1");
+  @Test void savedSpecificationPriceReplaysCustomerCopperAndZincDifference() throws Exception {
+    String spec="COST-"+UUID.randomUUID(),month="2073-11";finance(month,1,"90","22");inquiry(null,spec,month,"18.9343");
+    var request=specificationRequest(month,spec);var adopted=adopt(request);var selection=adopted.selections().get(request);
+    var restored=operation.readByIds("COMMERCIAL",Set.of(selection.monthlyPriceId())).get(selection.monthlyPriceId());
+    var pair=MonthlyScenarioTestSupport.create(null).calculateMaterials(Map.of(request,restored),CustomerMaterialPrices.copperAndZinc(new BigDecimal("120000"),new BigDecimal("28000")),Map.of()).get(selection.monthlyPriceId());
+    assertThat(pair.financialPrice()).isEqualByComparingTo("18.9343");
+    assertThat(pair.customerPrice()).isEqualByComparingTo("20.462441592920353982");
+    assertThat(restored).isEqualTo(selection);
   }
 }

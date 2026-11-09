@@ -26,7 +26,7 @@ public final class MonthlySettlementPriceSource {
     var codes=new TreeMap<String,List<MonthlyPriceRequest>>();
     for(var request:requested.keySet()){
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()) || requested.get(request)==null)throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Settlement source scope or price type differs from request");
-      codes.computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+      codes.computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     var materials=new ArrayList<>(codes.keySet());
     for(int start=0;start<materials.size();start+=256){
@@ -45,12 +45,14 @@ public final class MonthlySettlementPriceSource {
           if(result.evidence().inputSnapshotJson()==null)throw new IllegalArgumentException("结算结果缺少完整保存依据");
           var decoded=json.readTree(result.evidence().inputSnapshotJson());if(!(decoded instanceof ObjectNode captured))throw new IllegalArgumentException("结算结果依据必须是对象");
           var rule=captured.path("rule");
+          if(!request.matchesSpecification(rule.path("specModel").asText(null))) {
+            problems.put(request,new Problem(Failure.MISSING,"结算来源规格不匹配"));continue;
+          }
           if(!"lp_settlement_price".equals(captured.path("sourceTable").asText()) || rule.path("id").asLong()<=0 || captured.path("effectivePrice").path("id").asLong()<=0
-              || !context.businessUnitType().equals(rule.path("businessUnitType").asText()) || !request.family().materialCode().equals(rule.path("materialCode").asText())
+              || !context.businessUnitType().equals(rule.path("businessUnitType").asText()) || !request.materialCode().equals(rule.path("materialCode").asText())
               || !binding.getValue().priceType().name().equals(rule.path("priceType").asText()) || !captured.path("unitPrice").isNumber() || captured.path("unitPrice").decimalValue().compareTo(result.unitPrice())!=0)throw new IllegalArgumentException("结算保存金额、身份或来源依据不一致");
-          String sourceUnit=rule.path("materialUnit").asText("");
-          if(!"BOM_MATERIAL_UNIT".equals(rule.path("unitBasis").asText()) || (!sourceUnit.isBlank() && !sourceUnit.strip().equals(request.family().unit()))
-              || !"CNY".equals(request.family().currency()) || request.family().taxBasis()!=TaxBasis.EXCLUDED || request.family().requestedSupplierCode()!=null)throw new IllegalArgumentException("结算单位、币种、税或指定供应商口径不适用，不能猜测转换");
+          if(!"BOM_MATERIAL_UNIT".equals(rule.path("unitBasis").asText())
+              || !"CNY".equals(request.family().currency()) || request.family().taxBasis()!=TaxBasis.EXCLUDED || request.family().requestedSupplierCode()!=null)throw new IllegalArgumentException("结算金额基础、币种、税或指定供应商口径不适用，不能猜测转换");
           // SettlementPriceEvidence adds this per-read consumer field; it is not a public price input.
           captured.remove("consumerOrgCode");
           var snapshot=new Snapshot(1,binding.getValue().priceType().name(),captured,new Basis(request.family().unit(),"CNY",TaxBasis.EXCLUDED,"BOM_MATERIAL_UNIT","EXISTING_CNY_SETTLEMENT_CONTRACT","EXISTING_SETTLEMENT_EXCLUDED_TAX_CONTRACT"));

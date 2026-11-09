@@ -90,10 +90,18 @@ public final class MonthlyQuotationPrices {
 
   private final MonthlyMaterialPrices prices;
   private final HouseholdMonthlyPriceSource household;
+  private final BomSpecificationPriceIdentity specifications;
 
   public MonthlyQuotationPrices(MonthlyMaterialPrices prices, HouseholdMonthlyPriceSource household) {
+    this(prices, household, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public MonthlyQuotationPrices(MonthlyMaterialPrices prices, HouseholdMonthlyPriceSource household,
+      BomSpecificationPriceIdentity specifications) {
     this.prices = Objects.requireNonNull(prices);
     this.household = Objects.requireNonNull(household);
+    this.specifications = specifications;
   }
 
   public Batch read(Context context, Collection<Item> items) {
@@ -115,23 +123,27 @@ public final class MonthlyQuotationPrices {
     if (stable.size() > MAX_BATCH_OBJECTS)
       throw new IllegalArgumentException("月价读取每批最多 " + MAX_BATCH_OBJECTS + " 个产品对象");
     if (stable.isEmpty()) return List.of();
-    var requested = stable.stream().map(demand -> requests(demand.context(), demand.items())).toList();
+    var failures = new ArrayList<Map<Item, Problem>>();
+    var requested = new ArrayList<Map<Item, List<MonthlyPriceRequest>>>();
+    for (var demand : stable) {
+      var inputs = new LinkedHashMap<Item, List<MonthlyPriceRequest>>();
+      var issues = new LinkedHashMap<Item, Problem>();
+      for (var item : demand.items()) {
+        try { inputs.putIfAbsent(item, requestsFor(demand.context(), item)); }
+        catch (MonthlyPriceProblem missing) { issues.put(item, new Problem(missing.reason(), missing.getMessage())); }
+      }
+      requested.add(inputs); failures.add(issues);
+    }
     var all = new LinkedHashSet<MonthlyPriceRequest>();
     requested.forEach(items -> items.values().forEach(all::addAll));
     var saved = prices.lookup(all);
     var result = new ArrayList<Batch>(stable.size());
-    for (int i = 0; i < stable.size(); i++)
-      result.add(read(stable.get(i).context(), requested.get(i), saved, resolveMissing));
-    return List.copyOf(result);
-  }
-
-  private static Map<Item, List<MonthlyPriceRequest>> requests(Context context, Collection<Item> items) {
-    var requests = new LinkedHashMap<Item, List<MonthlyPriceRequest>>();
-    for (var item : items) {
-      Objects.requireNonNull(item.purpose(), "Price purpose is required");
-      requests.putIfAbsent(item, requests(context, item));
+    for (int i = 0; i < stable.size(); i++) {
+      var batch = read(stable.get(i).context(), requested.get(i), saved, resolveMissing);
+      var issues = new LinkedHashMap<>(batch.problems()); issues.putAll(failures.get(i));
+      result.add(new Batch(batch.values(), issues, batch.candidates()));
     }
-    return requests;
+    return List.copyOf(result);
   }
 
   private Batch read(Context context, Map<Item, List<MonthlyPriceRequest>> requests, Lookup saved, boolean resolveMissing) {
@@ -175,7 +187,14 @@ public final class MonthlyQuotationPrices {
   /** Reads saved types and household candidates only; ordinary gaps belong to later preparation. */
   public Batch probeHousehold(Context context, Collection<Item> items) {
     var requests = new LinkedHashMap<Item, List<MonthlyPriceRequest>>();
-    items.forEach(item -> requests.putIfAbsent(item, requests(context, item)));
+    for (var item : items) {
+      try { requests.putIfAbsent(item, requestsFor(context, item)); }
+      catch (MonthlyPriceProblem missing) {
+        // A code-less, unpriced child may be suppressed by a priced parent. Its ordinary
+        // preparation reports this gap only if the settlement engine actually uses it.
+        if (item.materialCode() != null && !item.materialCode().isBlank()) throw missing;
+      }
+    }
     var all = new LinkedHashSet<MonthlyPriceRequest>(); requests.values().forEach(all::addAll);
     var saved = prices.lookup(all);
     var found = new LinkedHashMap<MonthlyPriceRequest, Candidate>();
@@ -227,6 +246,25 @@ public final class MonthlyQuotationPrices {
         new MonthlyPriceFamilyKey(context.month(), context.businessUnitType(), item.materialCode(),
             item.specification(), item.unit(), "CNY", tax, item.supplier()),
         item.organization(), item.conditions(), item.basisQuantity(),
+        context.annualUsage() == null ? null : context.annualUsage().piecesIfKnown())).toList();
+  }
+
+  String specificationUnit(Context context,String organization,String specification) {
+    return specifications.resolve(context,organization,specification).unit();
+  }
+
+  List<MonthlyPriceRequest> requestsFor(Context context, Item item) {
+    Objects.requireNonNull(item.purpose(), "Price purpose is required");
+    if (item.materialCode() != null && !item.materialCode().isBlank()) return requests(context, item);
+    if (specifications == null)
+      throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING, "BOM规格取价查询未配置");
+    var identity = specifications.resolve(context, item.organization(), item.specification());
+    String code = identity.materialCode();
+    String unit = item.unit() == null || item.unit().isBlank() ? identity.unit() : item.unit();
+    var taxes = item.taxBasis() == null ? List.of(TaxBasis.INCLUDED,TaxBasis.EXCLUDED) : List.of(item.taxBasis());
+    return taxes.stream().map(tax -> new MonthlyPriceRequest(new MonthlyPriceFamilyKey(context.month(),
+        context.businessUnitType(),code,item.specification(),unit,"CNY",tax,item.supplier(),true),
+        item.organization(),item.conditions(),item.basisQuantity(),
         context.annualUsage() == null ? null : context.annualUsage().piecesIfKnown())).toList();
   }
 

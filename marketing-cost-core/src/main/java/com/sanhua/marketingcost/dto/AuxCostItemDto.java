@@ -3,6 +3,11 @@ package com.sanhua.marketingcost.dto;
 import java.math.BigDecimal;
 
 public class AuxCostItemDto {
+  @lombok.Getter @lombok.Setter private String sourceRowIds;
+  @lombok.Getter @lombok.Setter private String sourceTable;
+  @lombok.Getter @lombok.Setter private String sourcePeriod;
+  @lombok.Getter @lombok.Setter private BigDecimal excludedSurfaceAmount;
+  @lombok.Getter @lombok.Setter private String exclusionEvidence;
   private String materialCode;
   private String refMaterialCode;
   private String auxSubjectCode;

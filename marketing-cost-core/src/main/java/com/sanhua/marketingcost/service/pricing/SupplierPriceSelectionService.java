@@ -20,6 +20,7 @@ public class SupplierPriceSelectionService {
   public static final String REVIEW_REQUIRED = "SUPPLIER_RATIO_REVIEW_REQUIRED";
   public static final String WAIT_IMPORT = "WAIT_IMPORT";
   public static final String FALLBACK_HIGH = "FALLBACK_HIGH";
+  public static final String NO_PRIMARY_SUPPLIER_PRICE = "NO_PRIMARY_SUPPLIER_PRICE";
 
   public record Selection(
       SupplierPriceCandidate candidate,
@@ -38,8 +39,9 @@ public class SupplierPriceSelectionService {
   }
 
   public Selection select(SupplierPriceScope scope, List<SupplierPriceCandidate> candidates) {
-    return select(scope, candidates,
-        candidates.size() < 2 || samePrice(candidates) ? List.of() : activeRatios(scope));
+    boolean supplierFree=candidates.stream().allMatch(c->(c.supplierCode()==null || c.supplierCode().isBlank())
+        && (c.supplierName()==null || c.supplierName().isBlank()));
+    return select(scope, candidates, supplierFree?List.of():activeRatios(scope));
   }
 
   public Selection select(
@@ -71,6 +73,16 @@ public class SupplierPriceSelectionService {
       List<SupplierSupplyRatio> active,java.util.function.Supplier<SupplierPriceDecision> readDecision,
       boolean packagingHighestFallback){
     int originalCount = candidates.size();
+    var primary=SupplierRatioPricePolicy.primarySuppliers(active);
+    if(!primary.isEmpty()) {
+      candidates=SupplierRatioPricePolicy.forPrimarySupplier(candidates,active,
+          SupplierPriceCandidate::supplierCode,SupplierPriceCandidate::supplierName);
+      if(candidates.isEmpty())return new Selection(null,null,NO_PRIMARY_SUPPLIER_PRICE,
+          "本价格来源没有供货比率主供方的价格，继续查找后续来源",null);
+      var chosen=SupplierRatioPricePolicy.highest(highestPerSupplier(candidates));
+      return new Selection(chosen,SupplierRatioPricePolicy.match(SupplierRatioPricePolicy.index(primary),chosen),
+          "RATIO_MAX","先按供货比率确定主供方，再采用该方价格；比率并列时取最高价",null);
+    }
     candidates = highestPerSupplier(candidates);
     // A unique valid quotation is sufficient; a zero/missing ratio is not a price invalidation.
     if (candidates.size() == 1 && originalCount > 1) return new Selection(candidates.getFirst(), null,
@@ -95,6 +107,11 @@ public class SupplierPriceSelectionService {
     if (chosen != null) {
       return new Selection(
           chosen, SupplierRatioPricePolicy.match(bySupplier, chosen), "RATIO_MAX", "按最大供货比率取价，比率并列时取最高价", null);
+    }
+    if (active.stream().anyMatch(r -> configuredHighest(r.getSelectionRule()))) {
+      chosen = SupplierRatioPricePolicy.highest(candidates);
+      return new Selection(chosen, SupplierRatioPricePolicy.match(bySupplier, chosen),
+          "CONFIGURED_HIGH", "供货比率无法确定供应商，按供货比率表配置取最高有效单价", null);
     }
     if (packagingHighestFallback) {
       chosen = SupplierRatioPricePolicy.highest(candidates);
@@ -139,6 +156,14 @@ public class SupplierPriceSelectionService {
         status,
         message,
         review);
+  }
+
+  private static boolean configuredHighest(String rule) {
+    if (rule == null) return false;
+    String normalized = rule.replaceAll("[\\s\\p{P}\u3000]+", "")
+        .replace("比率", "比例").replace("时", "");
+    return java.util.Set.of("无供货比例取最高价", "无比例取最高价", "取最高价", "最高价")
+        .contains(normalized);
   }
 
   private static List<SupplierPriceCandidate> highestPerSupplier(List<SupplierPriceCandidate> candidates) {

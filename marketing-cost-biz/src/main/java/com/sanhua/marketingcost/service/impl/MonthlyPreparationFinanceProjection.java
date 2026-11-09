@@ -112,7 +112,7 @@ final class MonthlyPreparationFinanceProjection {
   private BigDecimal base(PricePrepareItem source, MonthlyPreparationInputs inputs, MonthlyPreparationPrice value,
       String code, BigDecimal p1, BigDecimal physicalQuantity, Map<MonthlyPriceRequest, BigDecimal> uses, boolean ordinary) {
     var request = value.request(); var selected = value.selection();
-    if (!Objects.equals(code, request.family().materialCode())
+    if (!request.matchesBomMaterialCode(code)
         || !Objects.equals(source.getBusinessUnitType(), request.family().businessUnitType())
         || (!ordinary && !Objects.equals(source.getPriceOrgCode(), request.priceOrgCode()))
         || !Objects.equals(source.getPeriodMonth(), request.family().month().toString())

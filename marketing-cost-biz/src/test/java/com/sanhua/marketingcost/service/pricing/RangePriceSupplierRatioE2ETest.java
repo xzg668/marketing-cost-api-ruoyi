@@ -151,6 +151,7 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
               + "material_shape VARCHAR(64) NULL,"
               + "supplier_name VARCHAR(180) NOT NULL,"
               + "supplier_code VARCHAR(64) NULL,"
+              + "selection_rule VARCHAR(255) NULL,"
               + "supply_ratio DECIMAL(18,6) NULL DEFAULT NULL,"
               + "effective_from DATE NULL,"
               + "effective_to DATE NULL,"

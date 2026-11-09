@@ -80,3 +80,5 @@ CREATE TABLE `lp_supplier_supply_ratio` (
   KEY `idx_supplier_ratio_source` (`source_type`,`source_batch_no`),
   KEY `idx_supplier_ratio_active` (`business_unit_type`,`material_code`,`is_active`,`deleted`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='供应商供货比例主数据：用于多供应商价格命中时选择主供供应商';
+
+ALTER TABLE lp_supplier_supply_ratio ADD COLUMN selection_rule VARCHAR(255) NULL;

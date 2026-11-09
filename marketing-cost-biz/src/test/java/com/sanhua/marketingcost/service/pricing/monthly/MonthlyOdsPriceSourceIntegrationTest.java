@@ -48,6 +48,52 @@ class MonthlyOdsPriceSourceIntegrationTest {
   static Selection selected(Candidates result,MonthlyPriceRequest request){assertThat(result.problems()).isEmpty();return result.values().get(request).selection();}
   static MonthlyAdoptionPlan plan(MonthlyPriceRequest request,Selection selected){return new MonthlyAdoptionPlan(Map.of(request,selected),List.of(new Use("finished/material",request,BigDecimal.ONE)),Set.of());}
 
+  @Test void latestApprovalWinsEvenWhenItsPurchaseOrderIsOlderAndItsPriceIsLower() {
+    String material=code();order(material,"MAIN",null,"1102.6549");order(material,"MAIN",null,"1094.6903");ratio(material,"MAIN","1");
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET source=IF(price=1094.6903,'订单价格审批单-DDJGCG05202604150004','订单价格审批单-DDJGCG05202603200008'),order_no=IF(price=1094.6903,'CGDDCG05202512090037','CGDDCG05202603200153') WHERE material_code=?",material);
+    var r=request(material,null);var picked=selected(source.orders(context(null,null),Set.of(r)),r);
+    assertThat(picked.fact().price()).isEqualByComparingTo("1094.6903");
+    assertThat(picked.fact().evidence().json()).contains("DDJGCG05202604150004","LATEST_SOURCE_APPROVAL");
+  }
+
+  @Test void latestTinWireApprovalWinsOverTheHistoricalHighestOrderPrice() {
+    String material=code();order(material,"S002981",null,"1259.115");order(material,"S002981",null,"937.12");order(material,"S002981",null,"910.85");
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET source=CASE price WHEN 1259.115 THEN '订单价格审批单-DDJGCG05202603230003' WHEN 937.12 THEN '订单价格审批单-DDJGCG05202610140001' ELSE '订单价格审批单-DDJGCG05202610150009' END WHERE material_code=?",material);
+    var r=request(material,null);var c=context(null,null);var picked=selected(operation.resolveCandidates(c,Set.of(r)),r);
+    assertThat(picked.fact().price()).isEqualByComparingTo("910.85");
+    var adopted=operation.adopt(c,plan(r,picked)).plan().selections().get(r);
+    assertThat(operation.lookup(Set.of(r)).values().get(r)).isEqualTo(adopted);
+  }
+
+  @Test void selectedEvidenceRetainsTheNewestApprovalEvenWhenPricesAreIdentical() throws Exception {
+    String material=code();order(material,"S1",null,"10");order(material,"S1",null,"10");
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET source='订单价格审批单-DDJGCG05202610140001' WHERE material_code=?",material);
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET source='订单价格审批单-DDJGCG05202610150009' WHERE material_code=? ORDER BY id DESC LIMIT 1",material);
+    var r=request(material,null);var picked=selected(source.orders(context(null,null),Set.of(r)),r);
+    var evidence=new ObjectMapper().readTree(picked.fact().evidence().json());
+    assertThat(evidence.at("/source/selected/source").asText()).endsWith("202610150009");
+  }
+
+  @Test void sameApprovalDateUsesHighestPriceRegardlessOfDocumentSequence() {
+    String material=code();order(material,"S1",null,"12");order(material,"S1",null,"10");
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET source=IF(price=12,'订单价格审批单-DDJGCG05202610150001','订单价格审批单-DDJGCG05202610150999') WHERE material_code=?",material);
+    var r=request(material,null);
+    assertThat(selected(source.orders(context(null,null),Set.of(r)),r).fact().price()).isEqualByComparingTo("12");
+  }
+
+  @Test void mainSupplierContinuesPastFixedToItsOrderPrice() {
+    String material=code();var request=request(material,null);var c=context(null,null);
+    MonthlyFixedPriceSourceIntegrationTest.price(material,"210","OTHER","1057.5221","2025-01-01","2025-12-31");
+    ratio(material,"MAIN","1");order(material,"MAIN",null,"1094.6903");
+    var fixed=MonthlyFixedPriceSourceIntegrationTest.source.read(c,Set.of(request));
+    assertThat(fixed.values()).isEmpty();assertThat(fixed.problems().get(request).reason()).isEqualTo(Failure.MISSING);
+    var next=selected(operation.resolveCandidates(c,Set.of(request)),request);
+    assertThat(next.fact().price()).isEqualByComparingTo("1094.6903");
+    var adopted=operation.adopt(c,plan(request,next));
+    assertThat(operation.lookup(Set.of(request)).values().get(request).monthlyPriceId())
+        .isEqualTo(adopted.plan().selections().get(request).monthlyPriceId());
+  }
+
   @Test void currentDatedPriceWinsOverNullAndFuturePrices() {
     String code=code();order(code,"S1",null,"999");order(code,"S1","2026-09-01","888");order(code,"S1","2026-11-01","11");order(code,"S1","2026-11-01","12");
     var request=request(code,null);var price=selected(source.orders(context(null,null),Set.of(request)),request);
@@ -127,7 +173,9 @@ class MonthlyOdsPriceSourceIntegrationTest {
   }
   @Test void supplyRatioCannotSelectASupplierWhoseQuantityBandDoesNotMatch() {
     String code=code();tier(code,"S1","2026-01-01","2026-12-31","1","50000","10");tier(code,"S2","2026-01-01","2026-12-31","50000",null,"20");ratio(code,"S1","0.1");ratio(code,"S2","0.9");var r=request(code,"360000");
-    assertThat(selected(source.tiers(context("360000","PIECES"),Set.of(r)),r).fact().price()).isEqualByComparingTo("10");
+    var result=source.tiers(context("360000","PIECES"),Set.of(r));
+    assertThat(result.values()).isEmpty();
+    assertThat(result.problems().get(r).reason()).isEqualTo(Failure.MISSING);
   }
   @Test void adoptedTierSurvivesSourceReplacementAndReusesOnlyItsApplicableDemand() {
     useTiers=true;String code=code();tier(code,"S1","2026-01-01","2026-12-31","1","20000","10");tier(code,"S1","2026-01-01","2026-12-31","20000",null,"20");
@@ -165,12 +213,12 @@ class MonthlyOdsPriceSourceIntegrationTest {
     assertThat(elapsed).as("1000 ODS candidates, milliseconds").isLessThan(15000);
   }
 
-  @Test void wrongOrganizationUnitOrSpecificationDoesNotReadAnotherCompanysPrice() {
+  @Test void codedPriceIgnoresSpecificationAndUnitButKeepsTheSelectedOrganization() {
     String code=code();order(code,"S1",null,"10");var base=request(code,null);
     var board=new MonthlyPriceRequest(base.family(),"220",base.conditions(),BigDecimal.ONE);
     assertThat(source.orders(context(null,null),Set.of(board)).problems().get(board).reason()).isEqualTo(Failure.MISSING);
     var other=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(base.family().month(),"COMMERCIAL",code,"OTHER-SPEC","KG","CNY",TaxBasis.EXCLUDED,null),"210",base.conditions(),BigDecimal.ONE);
-    assertThat(source.orders(context(null,null),Set.of(other)).problems().get(other).reason()).isEqualTo(Failure.MISSING);
+    assertThat(source.orders(context(null,null),Set.of(other)).values().get(other).selection().fact().price()).isEqualByComparingTo("10");
   }
   @Test void singleOrderAndTierPricesDoNotRequireSupplierRatios() {
     String code=code(); order(code,"S1","2026-01-01","10"); tier(code,"S1","2026-01-01","2027-12-31","0","100","10");

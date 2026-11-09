@@ -46,7 +46,7 @@ public final class MonthlyOriginalRangePriceSource {
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()))throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Factor-range source scope differs from request");
-      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     var financeCache=new HashMap<String,FactorPriceSnapshot>();var financeErrors=new HashMap<String,RuntimeException>();
     for(var organization:groups.entrySet()){
@@ -71,11 +71,12 @@ public final class MonthlyOriginalRangePriceSource {
             String explicit=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
             var matching=new ArrayList<PriceRangeFactorRule>();
             for(var row:originals){
+              if(!request.matchesSpecification(row.getSpecModel()))continue;
               if(explicit!=null && !explicit.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())))continue;
-              if(!request.family().unit().equals(row.getPriceUnit()) || request.family().specification()!=null && !request.family().specification().equals(row.getSpecModel()))continue;
               matching.add(row);
             }
-            var heads=OriginalRuleGroups.current(matching, row -> {
+            var primaryRows=SupplierRatioPricePolicy.forPrimarySupplier(matching,ratios.getOrDefault(code,List.of()),PriceRangeFactorRule::getSupplierCode,PriceRangeFactorRule::getSupplierName);
+            var heads=OriginalRuleGroups.current(primaryRows, row -> {
               String identity = row.getRuleIdentityKey();
               return identity == null || identity.isBlank()
                   ? new MaterialPriceRuleKey(row.getBusinessUnitType(), row.getOrgCode(), row.getMaterialCode(),
@@ -83,8 +84,9 @@ public final class MonthlyOriginalRangePriceSource {
                   : identity;
             }, OriginalRuleGroups::revision);
             // Historical expression versions do not invalidate the selected latest revision.
-            if(heads.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"原稿没有符合本次规格、单位和指定供应商的价格"));continue;}
-            var applicable=heads.stream().filter(row->request.family().unit().equals(row.getPriceUnit()) && (request.family().specification()==null || request.family().specification().equals(row.getSpecModel()))).toList();
+            if(heads.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"原稿没有符合本次料号和指定供应商的价格"));continue;}
+            var applicable=heads.stream().filter(OriginalRangeRuleSnapshot::isOriginal).toList();
+            if(applicable.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"没有已发布原稿区间价"));continue;}
             if(!"CNY".equals(request.family().currency()) || request.family().taxBasis()!=TaxBasis.EXCLUDED){
               problems.put(request,new Problem(Failure.MISSING,"原稿区间价提供人民币未税价格，本次币种或税价口径不适用"));continue;
             }
@@ -92,12 +94,6 @@ public final class MonthlyOriginalRangePriceSource {
               if(head.getRuleIdentityKey()==null || head.getRuleIdentityKey().isBlank())throw new IllegalArgumentException("Selected original head lacks its stored stable identity");
               if(head.getVersionNo()==null || head.getVersionNo()<1)throw new IllegalArgumentException("Applicable latest original rule lacks its revision");
               if(!OriginalRangeRuleSnapshot.isOriginal(head))throw new IllegalArgumentException("Unrelated identities excluded; this applicable source requires its legacy formula adapter");
-            }
-            var supplierIdentities=new HashMap<String,String>();
-            for(var row:applicable){
-              String supplier=SupplierSupplyRatioNormalizeUtils.supplierIdentity(row.getSupplierCode(),row.getSupplierName());
-              String previous=supplierIdentities.putIfAbsent(supplier,row.getRuleIdentityKey());
-              if(previous!=null && !previous.equals(row.getRuleIdentityKey()))throw new IllegalArgumentException("同一供应商有多个规格或单位，请明确本次取价条件");
             }
             String condition=condition(request).name();
             var publication=publications.computeIfAbsent(condition,ignored->{
@@ -117,7 +113,7 @@ public final class MonthlyOriginalRangePriceSource {
             var candidatePrices=prices.values().stream().map(row->new SupplierPriceCandidate(row.getInputFingerprint(),row.getSupplierCode(),row.getSupplierName(),row.getUnitPrice(),null,null)).toList();
             var scope=scope(context,request.priceOrgCode(),code);var actualRatios=ratios.getOrDefault(code,List.of());var chosen=suppliers.selectPrepared(scope,candidatePrices,actualRatios,decisions.get(SupplierPriceSelectionService.scopeKey(scope)),context.supplierReviews().packagingHighestFallback());
             if(chosen.review()!=null)context.supplierReviews().forOrganization(request.priceOrgCode()).add(chosen.review());
-            if(chosen.candidate()==null){problems.put(request,new Problem(Failure.WAITING,chosen.message()));continue;}
+            if(chosen.candidate()==null){problems.put(request,new Problem(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(chosen.rule())?Failure.MISSING:Failure.WAITING,chosen.message()));continue;}
             var saved=prices.get(chosen.candidate().key());var selected=applicable.stream().filter(row->row.getId().equals(saved.getOriginalId())).findFirst().orElseThrow();var calculation=effective.calculation(saved);
             var usedBatches=new LinkedHashMap<Long,SourceBatch>();for(var candidate:applicable){var original=originalBatches.get(candidate.getSourceUploadBatchId());if(original==null || !context.businessUnitType().equals(original.businessUnit()) || original.priceMonth()==null || original.priceMonth().compareTo(candidate.getPricingMonth())>0)throw new IllegalArgumentException("Original factor workbook batch is missing or belongs to another scope");usedBatches.put(original.id(),original);}
             var run=new com.sanhua.marketingcost.dto.CostRunContext();run.setOaNo(context.oaNo());run.setOaFormItemId(context.oaFormItemId());run.setBusinessUnitType(context.businessUnitType());run.setPriceOrgCode(request.priceOrgCode());run.setPricingMonth(context.month().toString());run.setPriceAsOfTime(context.priceAsOfTime());run.setPriceScenarioType("FINANCE_QUOTE_BASE");

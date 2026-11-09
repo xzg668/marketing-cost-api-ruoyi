@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.sanhua.marketingcost.security.QuoteVisibilityContext;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
@@ -56,7 +57,7 @@ public record TechnicalDataActor(
 
   /** 报价员只在当前业务单元内查看和分派；管理员可跨业务单元查看。 */
   public boolean canCoordinateTask(QuoteTechTask task) {
-    if (task == null || oaSession()) return false;
+    if (task == null || oaSession() || !canAccessTask(task)) return false;
     return admin() || has("ingest:quote:cost-run:execute")
         && task.getBusinessUnitType() != null
         && Objects.equals(task.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType());
@@ -67,7 +68,8 @@ public record TechnicalDataActor(
   }
 
   public boolean canAccessForm(Long formId) {
-    return scopedFormId == null || scopedFormId.equals(formId);
+    return (scopedFormId == null || scopedFormId.equals(formId))
+        && QuoteVisibilityContext.canAccessForm(formId);
   }
 
   public boolean canViewSubmittedTask(QuoteTechTask task) {
@@ -91,7 +93,7 @@ public record TechnicalDataActor(
 
   /** 管理员仅可填写尚未进入任何 OA 分派的产品。 */
   public boolean canFillUnassigned(QuoteTechTask task) {
-    return userId != null && admin() && !oaSession() && task != null
+    return userId != null && admin() && !oaSession() && canAccessTask(task)
         && Integer.valueOf(1).equals(task.getActiveFlag())
         && "UNASSIGNED".equals(task.getTaskStatus()) && task.getAssigneeUserId() == null
         && task.getOaFlowId() == null && task.getOaDispatchMessageId() == null

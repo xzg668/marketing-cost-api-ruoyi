@@ -384,3 +384,5 @@ CREATE TABLE `lp_price_variable` (
   KEY `idx_factor_type` (`factor_type`),
   KEY `idx_resolver_kind` (`resolver_kind`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_bin;
+
+ALTER TABLE lp_supplier_supply_ratio ADD COLUMN selection_rule VARCHAR(255) NULL;

@@ -105,7 +105,8 @@ public record PriceResolveResult(
   public static boolean isBlockingFailure(String code) {
     return code != null && !java.util.Set.of(
         MaterialPriceMonthSelector.MATERIAL_MONTH_PRICE_MISSING,
-        "RANGE_RULE_MISSING", "RANGE_BAND_MISSING").contains(code);
+        "RANGE_RULE_MISSING", "RANGE_BAND_MISSING", "PRIMARY_SUPPLIER_PRICE_MISSING",
+        SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE).contains(code);
   }
 
   public boolean hasBlockingFailure() {

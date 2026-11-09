@@ -67,7 +67,7 @@ public final class MonthlyScrapPriceSource {
           var scope=scope(context,request);var actualRatios=ratios.getOrDefault(code,List.of());
           var chosen=suppliers.selectPrepared(scope,candidates,actualRatios,decisions.get(SupplierPriceSelectionService.scopeKey(scope)));
           if(chosen.review()!=null)context.supplierReviews().forOrganization(request.priceOrgCode()).add(chosen.review());
-          if(chosen.candidate()==null){problems.put(request,new Problem(Failure.WAITING,chosen.message()));continue;}
+          if(chosen.candidate()==null){problems.put(request,new Problem(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(chosen.rule())?Failure.MISSING:Failure.WAITING,chosen.message()));continue;}
           var selected=calculations.get(chosen.candidate().key());
           var snapshot=new Snapshot(1,"SCRAP_PRICE",context.month().toString(),new Source(selected.original(),List.copyOf(calculations.values()),actualRatios,chosen.rule()),new Basis("KG","CNY",TaxBasis.EXCLUDED,"IDENTITY"));
           var fact=PriceFact.normal(selected.price(),SourceEvidence.ofJson(codec.unwrap(codec.encode(snapshot))),Set.of());

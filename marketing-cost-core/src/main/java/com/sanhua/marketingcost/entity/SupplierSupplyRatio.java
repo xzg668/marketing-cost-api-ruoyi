@@ -37,6 +37,8 @@ public class SupplierSupplyRatio {
   private String supplierCode;
   @TableField(updateStrategy = FieldStrategy.ALWAYS)
   private BigDecimal supplyRatio;
+  /** 缺少可判定比率时的取价规则；空白沿用人工确认。 */
+  private String selectionRule;
   private LocalDate effectiveFrom;
   private LocalDate effectiveTo;
   private String sourceType;

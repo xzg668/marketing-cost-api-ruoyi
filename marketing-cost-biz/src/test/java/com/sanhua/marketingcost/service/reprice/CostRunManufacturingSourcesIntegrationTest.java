@@ -68,6 +68,8 @@ class CostRunManufacturingSourcesIntegrationTest {
         .getContentAsString(StandardCharsets.UTF_8);
     int start = migration.indexOf("CREATE TABLE IF NOT EXISTS cms_cost_source_effective (");
     jdbc.execute(migration.substring(start, migration.indexOf(";", start) + 1));
+    jdbc.execute("CREATE TABLE cms_product_subject_cost_raw(id BIGINT PRIMARY KEY,parent_code VARCHAR(100),period VARCHAR(7),path TEXT,material_price_yuan DECIMAL(20,6),business_unit_type VARCHAR(32),second_subject_code VARCHAR(10))");
+    jdbc.execute("CREATE TABLE lp_material_master_raw(material_code VARCHAR(100),organization_code VARCHAR(32),active_flag INT,material_name VARCHAR(100))");
     var config = new MybatisConfiguration();
     config.setMapUnderscoreToCamelCase(true);
     config.addMapper(CmsCostSourceEffectiveMapper.class);
@@ -78,10 +80,29 @@ class CostRunManufacturingSourcesIntegrationTest {
     var session = new SqlSessionTemplate(factory.getObject());
     salary = session.getMapper(CmsCostSourceEffectiveMapper.class);
     auxiliary = session.getMapper(AuxCostItemMapper.class);
-    reader = new CostRunManufacturingSources(session.getMapper(CostRunManufacturingSourceMapper.class));
+    reader = new CostRunManufacturingSources(session.getMapper(CostRunManufacturingSourceMapper.class), auxiliary);
   }
 
   @AfterAll static void stop() { if (!Boolean.getBoolean("mpp.mysql.retain")) MYSQL.stop(); }
+
+  @Test void sinteredSurfacePathsAreRemovedBeforeUpliftWithOtherBranchesAndSourcesPreserved() {
+    String code=code(), base=code();
+    jdbc.update("INSERT INTO lp_material_master_raw VALUES(?,'COMMERCIAL',1,'烧结基座')",base);
+    jdbc.update("INSERT INTO cms_product_subject_cost_raw VALUES(901,?,'2026-02',?,1.593273,'COMMERCIAL','0202')",code,
+        code+"(×1)→"+base+"(×1)→GOLD(×1)(115.9882);"+code+"(×1)→"+base+"(×1)(35.7603);"+code+"(×1)→OTHER(×1)(7.5788)");
+    row(code,2026,"COMMERCIAL","2026-02","AUX_SUBJECT","0202","表面处理","1.593273");
+    row(code,2026,"COMMERCIAL","2026-02","AUX_SUBJECT","0201","辅料","2.5");
+    jdbc.update("UPDATE cms_cost_source_effective SET source_table='cms_product_subject_cost_raw',source_row_ids='[901]' WHERE parent_code=? AND subject_code='0202'",code);
+    var before=jdbc.queryForList("SELECT * FROM cms_cost_source_effective WHERE parent_code=? ORDER BY id",code);
+    var result=reader.readBatch(List.of(demand(code,"2026-11"))).getFirst();
+    var surface=result.auxiliary().stream().filter(r->r.getAuxSubjectCode().equals("0202")).findFirst().orElseThrow();
+    assertThat(surface.getUnitPrice()).isEqualByComparingTo("0.075788");
+    assertThat(surface.getExcludedSurfaceAmount()).isEqualByComparingTo("1.517485");
+    assertThat(surface.getUnitPrice().multiply(new BigDecimal("1.05")).setScale(6,java.math.RoundingMode.HALF_UP)).isEqualByComparingTo("0.079577");
+    assertThat(surface.getExclusionEvidence()).contains(base,"GOLD").doesNotContain("OTHER");
+    assertThat(result.auxiliary().stream().filter(r->r.getAuxSubjectCode().equals("0201")).findFirst().orElseThrow().getUnitPrice()).isEqualByComparingTo("2.5");
+    assertThat(jdbc.queryForList("SELECT * FROM cms_cost_source_effective WHERE parent_code=? ORDER BY id",code)).isEqualTo(before);
+  }
 
   @Test void repeatedConsumersReadOnceWithoutSharingMutableBeansOrChangingDatabase() {
     String code = code();

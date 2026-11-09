@@ -52,3 +52,5 @@ CREATE TABLE `lp_supplier_price_decision` (
   KEY `idx_supplier_decision_scope` (`scope_key`,`id`),
   KEY `idx_supplier_decision_wait` (`business_unit_type`,`period_month`,`decision`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='通用供货比率新增审核确认记录';
+
+ALTER TABLE lp_supplier_supply_ratio ADD COLUMN selection_rule VARCHAR(255) NULL;

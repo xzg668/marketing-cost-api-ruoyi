@@ -812,8 +812,8 @@ public class BomSettlementRowBuildEngine {
       BomSettlementBuildRequest request,
       Map<String, BomRuleMaterialAttributes> materialAttributes,
       boolean hasByproduct) {
-    BomRuleMaterialAttributes attributes =
-        materialAttributes.get(trimToNull(node.materialCode()));
+    String materialCode = trimToNull(node.materialCode());
+    BomRuleMaterialAttributes attributes = materialCode == null ? null : materialAttributes.get(materialCode);
     return new BomRuleNodeContext(
         node.materialCode(),
         node.materialName(),

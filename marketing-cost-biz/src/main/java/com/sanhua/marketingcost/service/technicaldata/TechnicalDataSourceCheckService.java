@@ -78,12 +78,11 @@ public class TechnicalDataSourceCheckService {
               Objects.toString(row.getGapType(), ""), Objects.toString(row.getReasonCode(), ""))).toList());
       evidence.put("PRICE", priceEvidence);
       String reference = "PricePrepareService:" + codec.canonicalHash(priceEvidence);
-      boolean unresolved = gaps.stream().anyMatch(gap -> !"MISSING_PRICE".equals(gap.getGapType())
-          || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT"));
-      if (unresolved) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
-          "PRICE_BASIS_UNCONFIRMED", "仍有取价范围、结构或来源冲突，请先在价格检查页处理", reference);
+      boolean unresolved = gaps.stream().anyMatch(gap -> !TechnicalDataPriceRequirements.confirmedMissingPriceGap(gap));
       var missingCodes = new java.util.HashSet<String>();
-      gaps.forEach(gap -> missingCodes.add(gap.getGapMaterialCode()));
+      // 各物料分别判定：其他材料的结构/选供异常不能吞掉已经确认的技术补价需求。
+      gaps.stream().filter(TechnicalDataPriceRequirements::confirmedMissingPriceGap)
+          .forEach(gap -> missingCodes.add(gap.getGapMaterialCode()));
       if (additional != null) additional.items().stream().filter(row -> "MISSING".equals(row.status()))
           .forEach(row -> missingCodes.add(row.materialNo()));
       if (!missingCodes.isEmpty()) {
@@ -104,6 +103,8 @@ public class TechnicalDataSourceCheckService {
       }
       if (!missingCodes.isEmpty()) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.MISSING,
           "PRICE_SOURCE_MISSING", "统一取价后仍有 " + missingCodes.size() + " 项物料缺少可用价格", reference);
+      if (unresolved) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
+          "PRICE_BASIS_UNCONFIRMED", "仍有取价范围、结构或来源冲突，请先在价格检查页处理", reference);
       if (result.getItems().isEmpty()) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
           "PRICE_ITEMS_NOT_READY", "尚无已确认的计价物料清单", reference);
       return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.AVAILABLE,

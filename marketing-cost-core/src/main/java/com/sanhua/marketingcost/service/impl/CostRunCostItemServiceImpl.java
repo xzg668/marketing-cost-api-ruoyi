@@ -1944,6 +1944,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         ? costSourceContext.prepared.auxiliary() : auxCostItemMapper.selectEffectiveAuxCostItems(
             costSourceContext.costYear, materialCodes, costSourceContext.businessUnitType, costSourceContext.pricingMonth);
     if (cmsItems != null) {
+      if(costSourceContext.prepared==null) com.sanhua.marketingcost.service.costing.SinteredBaseSurfaceCosts.apply(
+          cmsItems,costSourceContext.businessUnitType,auxCostItemMapper);
       for (AuxCostItemDto cmsItem : cmsItems) {
         if (isExcludedAuxSubject(cmsItem)) {
           continue;
@@ -1992,7 +1994,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       } else if (unitPrice != null && floatRate != null) {
         amount = unitPrice.multiply(floatRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
       }
-      items.add(buildItem(AUX_PREFIX + code, name, unitPrice, rateForDisplay, amount));
+      var item=buildItem(AUX_PREFIX + code, name, unitPrice, rateForDisplay, amount);
+      if(subject.getExclusionEvidence()!=null)item.setRemark(subject.getExclusionEvidence());
+      items.add(item);
     }
     return items;
   }
@@ -2190,6 +2194,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
     }
     Set<String> packageCodes = new LinkedHashSet<>(lookupPackageCodes(partCodes));
+    // 有包装组件时仅替换组件自身；组件外的独立包装材料仍按普通部品计入，避免被汇总覆盖。
     Set<String> packageComponentParentKeys = lookupPackageComponentParentKeysForEntities(items);
     BigDecimal pkg = BigDecimal.ZERO;
     BigDecimal nonPkg = BigDecimal.ZERO;
@@ -2199,7 +2204,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
       String code = item.getPartCode() == null ? null : item.getPartCode().trim();
       if ("PACKAGE".equals(item.getTechnicalModuleType()) || code != null
-          && (packageCodes.contains(code)
+          && (packageComponentParentKeys.isEmpty() && packageCodes.contains(code)
               || packageComponentParentKeys.contains(
                   scopedMaterialKey(requiredMaterialOrganizationCode(item), code)))) {
         pkg = pkg.add(item.getAmount());
@@ -2225,7 +2230,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
       String code = item.getPartCode() == null ? null : item.getPartCode().trim();
       if ("PACKAGE".equals(item.getTechnicalModuleType()) || code != null
-          && (packageCodes.contains(code)
+          && (packageComponentParentKeys.isEmpty() && packageCodes.contains(code)
               || packageComponentParentKeys.contains(
                   scopedMaterialKey(requiredMaterialOrganizationCode(item), code)))) {
         pkg = pkg.add(item.getAmount());

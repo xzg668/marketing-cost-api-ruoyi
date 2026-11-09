@@ -73,7 +73,7 @@ class SupplierSupplyRatioSelectionIntegrationTest {
     jdbc.execute(logSchema.substring(logSchema.indexOf("CREATE TABLE `lp_business_change_log`")));
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")) {
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/monthly.sql");
       var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mrp03_selection_test < /tmp/monthly.sql");
       assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();

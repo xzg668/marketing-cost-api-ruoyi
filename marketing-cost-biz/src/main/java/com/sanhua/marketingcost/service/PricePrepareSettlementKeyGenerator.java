@@ -42,7 +42,10 @@ public final class PricePrepareSettlementKeyGenerator {
     append(canonical, "oaFormItemId", quoteItemId == null ? "LEGACY" : quoteItemId.toString());
     append(canonical, "topProductCode", required(top, "topProductCode"));
     append(canonical, "position", stablePosition(row, planItem.getBomRowId()));
-    append(canonical, "materialCode", required(material, "materialCode"));
+    if (material == null) {
+      append(canonical, "materialCode", "");
+      append(canonical, "specification", required(row == null ? null : row.getMaterialSpec(), "无料号BOM规格"));
+    } else append(canonical, "materialCode", material);
     append(canonical, "settlementType", settlementType);
     return SETTLEMENT_PREFIX + sha256(canonical.toString());
   }

@@ -96,7 +96,7 @@ public final class MonthlyLegacyRangePriceSource {
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()))throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Legacy factor source scope differs from request");
-      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     var financeCache=new HashMap<String,Financial>();var bindings=new Bindings(context.businessUnitType());
     for(var organization:groups.entrySet()){
@@ -123,12 +123,12 @@ public final class MonthlyLegacyRangePriceSource {
           SupplierPreferredPriceSelection<PriceRangeItem> selectedSupplier;PriceRangeFactorRule selectedRule;
           if(dated){
             var chosen=suppliers.select(candidates,context.businessUnitType(),code,candidates.getFirst().getMaterialName(),candidates.getFirst().getSpecModel(),context.priceAsOfTime().toLocalDate(),PriceRangeFactorRule::getSupplierName,PriceRangeFactorRule::getSupplierCode,prepared);
-            if(chosen.failed() || chosen.row()==null){problems.put(request,new Problem(Failure.WAITING,chosen.failureMessage()));continue;}
+            if(chosen.failed() || chosen.row()==null){problems.put(request,new Problem(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING.equals(chosen.failureCode())?Failure.MISSING:Failure.WAITING,chosen.failureMessage()));continue;}
             selectedRule=chosen.row();selectedSupplier=new SupplierPreferredPriceSelection<>(null,chosen.traceMessage(),chosen.candidateSupplierCount(),chosen.mainSupplierName(),chosen.mainSupplierCode(),chosen.supplyRatio(),chosen.supplyRatioRecordId(),chosen.matchMode(),chosen.failureCode(),chosen.failureMessage());
           }else{
             selectedRule=candidates.getFirst();var available=applicableBands(context,request,selectedRule,bands.getOrDefault(selectedRule.getId(),List.of()),false);
             selectedSupplier=suppliers.select(available,context.businessUnitType(),code,selectedRule.getMaterialName(),selectedRule.getSpecModel(),context.priceAsOfTime().toLocalDate(),PriceRangeItem::getSupplierName,PriceRangeItem::getSupplierCode,prepared);
-            if(selectedSupplier.failed()){problems.put(request,new Problem(Failure.WAITING,selectedSupplier.failureMessage()));continue;}
+            if(selectedSupplier.failed()){problems.put(request,new Problem(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING.equals(selectedSupplier.failureCode())?Failure.MISSING:Failure.WAITING,selectedSupplier.failureMessage()));continue;}
           }
           var available=applicableBands(context,request,selectedRule,bands.getOrDefault(selectedRule.getId(),List.of()),dated);
           if(available.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"选定旧行情规则没有适用档位"));continue;}
@@ -159,7 +159,7 @@ public final class MonthlyLegacyRangePriceSource {
     String explicit=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
     var heads=new LinkedHashMap<String,PriceRangeFactorRule>();
     for(var row:eligible){
-      if(!request.family().unit().equals(row.getPriceUnit()) || request.family().specification()!=null && !request.family().specification().equals(row.getSpecModel()))continue;
+      if(!request.matchesSpecification(row.getSpecModel()))continue;
       if(dated && explicit!=null && !explicit.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())))continue;
       String identity=row.getRuleIdentityKey();
       if(identity==null || identity.isBlank())identity=dated?new MaterialPriceRuleKey(row.getBusinessUnitType(),row.getOrgCode(),row.getMaterialCode(),row.getSupplierCode(),row.getSupplierName(),row.getSpecModel(),row.getPriceUnit()).identityKey():Long.toString(row.getId());
@@ -171,7 +171,6 @@ public final class MonthlyLegacyRangePriceSource {
   private List<PriceRangeItem> applicableBands(Context context,MonthlyPriceRequest request,PriceRangeFactorRule rule,List<PriceRangeItem> original,boolean dated){
     String explicit=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
     return original.stream().filter(row->dated || row.getEffectiveFrom()==null || !row.getEffectiveFrom().isAfter(context.priceAsOfTime().toLocalDate()))
-        .filter(row->request.family().unit().equals(row.getUnit()) && (request.family().specification()==null || request.family().specification().equals(row.getSpecModel())))
         .filter(row->explicit==null || explicit.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()))).toList();
   }
   private static String supplierKey(String name,String code){String normalized=SupplierSupplyRatioNormalizeUtils.normalizeToNull(code);return normalized==null?"NAME:"+SupplierSupplyRatioNormalizeUtils.normalizeToNull(name):"CODE:"+normalized;}

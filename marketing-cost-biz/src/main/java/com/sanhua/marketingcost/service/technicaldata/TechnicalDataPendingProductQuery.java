@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.sanhua.marketingcost.security.QuoteVisibilityContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataModuleResponse;
@@ -102,8 +103,10 @@ public class TechnicalDataPendingProductQuery {
           AND w.last_checked_at IS NOT NULL AND w.technical_check_json IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.modules[*]' COLUMNS (
-              module_type VARCHAR(40) PATH '$.moduleType', required_flag INT PATH '$.required')) m
-            WHERE m.required_flag=1 AND (m.module_type<>'DRAWING_BOM' OR (%s) IS NULL)
+              module_type VARCHAR(40) PATH '$.moduleType', required_flag INT PATH '$.required',
+              reason_code VARCHAR(80) PATH '$.reasonCode')) m
+            WHERE (m.required_flag=1 OR (m.module_type='PRICE' AND m.reason_code='PRICE_BASIS_UNCONFIRMED'))
+              AND (m.module_type<>'DRAWING_BOM' OR (%s) IS NULL)
               AND NOT EXISTS (
               SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.sharedModules[*]' COLUMNS (
                 module_type VARCHAR(40) PATH '$.moduleType', source_status VARCHAR(40) PATH '$.status')) s
@@ -111,6 +114,7 @@ public class TechnicalDataPendingProductQuery {
           AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_task t
             WHERE t.oa_form_item_id=i.id AND BINARY t.accounting_month=BINARY w.period_month AND t.active_flag=1)
         """.formatted(CURRENT_DRAWING_SOURCE));
+    sql.append(" AND ").append(QuoteVisibilityContext.formCondition("f"));
     List<Object> args = new ArrayList<>();
     if (!"ALL".equals(accessMode)) { sql.append(" AND f.business_unit_type=?"); args.add(businessUnit); }
     if (oaNo != null) { sql.append(" AND f.oa_no=?"); args.add(oaNo); }
@@ -205,14 +209,23 @@ public class TechnicalDataPendingProductQuery {
   }
 
   private TechnicalDataSourceCheckResponse current(TechnicalDataSourceCheckResponse saved) {
-    if (saved.modules().stream().noneMatch(row -> row.required() && !"DRAWING_BOM".equals(row.moduleType()))) return saved;
+    boolean mixedPriceCheck = saved.modules().stream().anyMatch(row -> "PRICE".equals(row.moduleType())
+        && "PRICE_BASIS_UNCONFIRMED".equals(row.reasonCode()));
+    if (!mixedPriceCheck && saved.modules().stream().noneMatch(row -> row.required() && !"DRAWING_BOM".equals(row.moduleType()))) return saved;
     try {
       var current = sources.preview(saved.oaFormItemId(), saved.accountingMonth());
+      // 修正已核算的旧混合缺口投影；新结论必须来自当前权威来源，查询不写回历史。
+      // 返回同次检查的完整指纹，使后续实际分派能验证同一组资料。
+      if (mixedPriceCheck && current.modules().stream().anyMatch(row -> "PRICE".equals(row.moduleType())
+          && (row.availability() == TechnicalDataAvailability.MISSING || row.availability() == TechnicalDataAvailability.AVAILABLE)))
+        return current;
       // 只复核核算已经发现的缺口。查询失败或尚未核实不能当作已补齐，图库沿用精确来源绑定。
       var modules = saved.modules().stream().map(previous -> {
         if (!previous.required() || "DRAWING_BOM".equals(previous.moduleType())) return previous;
         return current.modules().stream().filter(next -> next.moduleType().equals(previous.moduleType())
-            && next.availability() == TechnicalDataAvailability.AVAILABLE && !next.required())
+            && !next.required() && (next.availability() == TechnicalDataAvailability.AVAILABLE
+                || "PRICE".equals(next.moduleType()) && next.availability() == TechnicalDataAvailability.UNCONFIRMED
+                    && "PRICE_BASIS_UNCONFIRMED".equals(next.reasonCode())))
             .findFirst().orElse(previous);
       }).toList();
       return new TechnicalDataSourceCheckResponse(saved.oaFormItemId(), saved.accountingMonth(),

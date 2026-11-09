@@ -56,7 +56,7 @@ public class TechnicalDataPriceRequirements {
     boolean composed = tasks.findModules(product.getId()).stream().anyMatch(module ->
         "PRICE".equals(module.getModuleType()) && isComposedCheck(module));
     if (!composed) addModules(product, demands, manufacturingPrices ? Set.of("MANUFACTURING") : Set.of("MANUFACTURING", "SOLDER", "PACKAGE"));
-    if (!manufacturingPrices) addBom(task, product, demands, issues);
+    if (!manufacturingPrices) addBom(task, product, demands, issues, composed);
     var revisions = ownedRevisions(task, product);
     revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
     return resolve(task, product, demands, issues, revisions.keySet());
@@ -69,7 +69,7 @@ public class TechnicalDataPriceRequirements {
   public TechnicalDataPriceRequirementsResponse checkComposedBom(QuoteTechTask task, QuoteTechProduct product) {
     var demands = new TreeMap<String, Set<String>>();
     var issues = new ArrayList<String>();
-    addBom(task, product, demands, issues);
+    addBom(task, product, demands, issues, true);
     var revisions = ownedRevisions(task, product);
     revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
     return resolve(task, product, demands, issues, revisions.keySet());
@@ -96,7 +96,7 @@ public class TechnicalDataPriceRequirements {
     var evidence = json.read(snapshots.getFirst()).path("evidence");
     var demands = new TreeMap<String, Set<String>>();
     for (var gap : evidence.path("PRICE").path("gaps")) {
-      if (gap.size() < 3 || !"MISSING_PRICE".equals(gap.path(1).asText()) || gap.path(2).asText().contains("CONFLICT")) return null;
+      if (gap.size() < 3 || !"MISSING_PRICE".equals(gap.path(1).asText()) || gap.path(2).asText().contains("CONFLICT")) continue;
       add(demands, gap.path(0).asText(), "BOM");
     }
     var product = versions.findActiveProduct(itemId, month).orElse(null);
@@ -292,7 +292,8 @@ public class TechnicalDataPriceRequirements {
     return new TechnicalDataPriceRequirementsResponse(List.copyOf(result), List.copyOf(issues), json.canonicalHash(List.of(result, issues, sharedEvidence)));
   }
 
-  private void addBom(QuoteTechTask task, QuoteTechProduct product, Map<String, Set<String>> demands, List<String> issues) {
+  private void addBom(QuoteTechTask task, QuoteTechProduct product, Map<String, Set<String>> demands,
+      List<String> issues, boolean requireCompleteBasis) {
     var batches =
         jdbc.queryForList(
             "SELECT current_bom_build_batch_id FROM lp_quote_costing_workspace WHERE"
@@ -316,19 +317,22 @@ public class TechnicalDataPriceRequirements {
       if (prepared.getItems().isEmpty() && prepared.getGaps().isEmpty()) {
         issues.add("尚未生成实际计价物料，不能判定价格已齐全"); return;
       }
+      var otherIssues = new ArrayList<String>();
       for (var gap : technicalGaps(prepared)) {
         // 制造件汇总把基础料件的待审批价格包装为来源异常；按该基础料件重新核对已填资料。
         // resolve 仍区分 WAITING、真实来源错误和冲突，不把草稿用于正式成本计算。
-        boolean manufacturingPrice = "PRICE_SOURCE_ERROR".equals(gap.getGapType())
+        boolean manufacturingPrice = requireCompleteBasis && "PRICE_SOURCE_ERROR".equals(gap.getGapType())
             && Set.of("RAW_PRICE_ERROR", "SCRAP_PRICE_ERROR").contains(Objects.toString(gap.getReasonCode(), ""));
-        if ((!"MISSING_PRICE".equals(gap.getGapType()) && !manufacturingPrice)
-            || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT")) {
-          issues.add(Objects.toString(gap.getMessage(), "尚有结构或价格来源问题"));
+        if (!missingPriceGap(gap) && !manufacturingPrice) {
+          otherIssues.add(Objects.toString(gap.getMessage(), "尚有结构或价格来源问题"));
         } else {
           add(demands, gap.getGapMaterialCode(),
               Set.of("MISSING_SCRAP_PRICE", "SCRAP_PRICE_ERROR").contains(Objects.toString(gap.getReasonCode(), "")) ? "SCRAP" : "BOM");
         }
       }
+      // 普通补价只办理确定的缺价物料；其他来源问题继续在核算检查中阻断。
+      // 组树后的完整检查仍要求全部依据可用，不能将未核实来源当作已补齐。
+      if (requireCompleteBasis || demands.isEmpty()) issues.addAll(otherIssues);
     } catch (RuntimeException exception) {
       log.warn("technical BOM price requirements failed: product={}", product.getId(), exception);
       issues.add("BOM 价格检查失败，请重试");
@@ -340,10 +344,23 @@ public class TechnicalDataPriceRequirements {
     // Supplier review remains in the finance pricing workflow; it is not a missing price
     // for the technician to enter and must not prevent dispatching other missing materials.
     var reviews = prepared.getSupplierPriceReviews();
-    return prepared.getGaps().stream().filter(gap -> !("MISSING_PRICE".equals(gap.getGapType())
-        && "WAITING".equals(gap.getReasonCode()) && reviews != null && reviews.stream().anyMatch(review ->
+    return prepared.getGaps().stream().filter(gap -> !(("MISSING_PRICE".equals(gap.getGapType())
+        && "WAITING".equals(gap.getReasonCode()) || "PRICE_SOURCE_ERROR".equals(gap.getGapType())
+        && Set.of("RAW_PRICE_ERROR", "SCRAP_PRICE_ERROR").contains(Objects.toString(gap.getReasonCode(), "")))
+        && reviews != null && reviews.stream().anyMatch(review ->
             Set.of("PENDING", "WAIT_IMPORT").contains(review.status())
                 && Objects.equals(gap.getGapMaterialCode(), review.scope().materialCode())))).toList();
+  }
+
+  static boolean missingPriceGap(PricePrepareGap gap) {
+    return "MISSING_PRICE".equals(gap.getGapType())
+        && !Objects.toString(gap.getReasonCode(), "").contains("CONFLICT")
+        && gap.getGapMaterialCode() != null && !gap.getGapMaterialCode().isBlank();
+  }
+
+  static boolean confirmedMissingPriceGap(PricePrepareGap gap) {
+    return missingPriceGap(gap) && Set.of("", "MISSING", "MISSING_PRICE", "MISSING_RAW_PRICE", "MISSING_SCRAP_PRICE")
+        .contains(Objects.toString(gap.getReasonCode(), ""));
   }
 
   private static void add(Map<String, Set<String>> demands, String code, String role) {

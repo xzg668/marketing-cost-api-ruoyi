@@ -41,7 +41,7 @@ public final class MonthlyOriginalLinkedPriceSource {
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()))throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Linked source scope differs from request");
-      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     var financeCache=new HashMap<String,FactorPriceSnapshot>();var financeErrors=new HashMap<String,RuntimeException>();
     for(var organization:groups.entrySet()){
@@ -62,8 +62,8 @@ public final class MonthlyOriginalLinkedPriceSource {
             String explicit=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
             var matching=new ArrayList<PriceLinkedItem>();
             for(var row:originals){
+              if(!request.matchesSpecification(row.getSpecModel()))continue;
               if(explicit!=null && !explicit.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())))continue;
-              if(!request.family().unit().equals(row.getUnit()) || request.family().specification()!=null && !request.family().specification().equals(row.getSpecModel()))continue;
               matching.add(row);
             }
             var heads=OriginalRuleGroups.current(matching, row -> {
@@ -74,8 +74,10 @@ public final class MonthlyOriginalLinkedPriceSource {
                   : identity;
             }, OriginalRuleGroups::revision);
             // Historical expression versions do not invalidate the selected latest revision.
-            if(heads.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"原稿没有符合本次规格、单位和指定供应商的价格"));continue;}
-            var applicable=heads.stream().filter(row->request.family().unit().equals(row.getUnit()) && (request.family().specification()==null || request.family().specification().equals(row.getSpecModel()))).toList();
+            if(heads.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"原稿没有符合本次料号和指定供应商的价格"));continue;}
+            var sourceHeads=heads.stream().filter(row->OriginalLinkedRuleSnapshot.VERSION.equals(row.getExpressionVersion())).toList();
+            var applicable=SupplierRatioPricePolicy.forPrimarySupplier(sourceHeads,ratios.getOrDefault(code,List.of()),PriceLinkedItem::getSupplierCode,PriceLinkedItem::getSupplierName);
+            if(applicable.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"没有已发布原稿联动价"));continue;}
             // This source publishes an excluded-tax CNY result. Other requested bases are
             // inapplicable alternatives, rather than malformed original data.
             if(!"CNY".equals(request.family().currency()) || request.family().taxBasis()!=TaxBasis.EXCLUDED){
@@ -85,12 +87,6 @@ public final class MonthlyOriginalLinkedPriceSource {
               if(head.getRuleIdentityKey()==null || head.getRuleIdentityKey().isBlank())throw new IllegalArgumentException("Selected original head lacks its stored stable identity");
               if(head.getRuleRevision()==null || head.getRuleRevision()<1)throw new IllegalArgumentException("Applicable latest original rule lacks its revision");
               if(!OriginalLinkedRuleSnapshot.VERSION.equals(head.getExpressionVersion()))throw new IllegalArgumentException("Unrelated identities excluded; this applicable source requires its legacy formula adapter");
-            }
-            var supplierIdentities=new HashMap<String,String>();
-            for(var row:applicable){
-              String supplier=SupplierSupplyRatioNormalizeUtils.supplierIdentity(row.getSupplierCode(),row.getSupplierName());
-              String previous=supplierIdentities.putIfAbsent(supplier,row.getRuleIdentityKey());
-              if(previous!=null && !previous.equals(row.getRuleIdentityKey()))throw new IllegalArgumentException("同一供应商有多个规格或单位，请明确本次取价条件");
             }
             String condition=condition(request).name();
             var publication=publications.computeIfAbsent(condition,ignored->{
@@ -110,11 +106,12 @@ public final class MonthlyOriginalLinkedPriceSource {
             var candidatePrices=prices.values().stream().map(row->new SupplierPriceCandidate(row.getInputFingerprint(),row.getSupplierCode(),row.getSupplierName(),row.getUnitPrice(),null,null)).toList();
             var scope=scope(context,request.priceOrgCode(),code);var actualRatios=ratios.getOrDefault(code,List.of());var chosen=suppliers.selectPrepared(scope,candidatePrices,actualRatios,decisions.get(SupplierPriceSelectionService.scopeKey(scope)),context.supplierReviews().packagingHighestFallback());
             if(chosen.review()!=null)context.supplierReviews().forOrganization(request.priceOrgCode()).add(chosen.review());
-            if(chosen.candidate()==null){problems.put(request,new Problem(Failure.WAITING,chosen.message()));continue;}
+            if(chosen.candidate()==null){problems.put(request,new Problem(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(chosen.rule())?Failure.MISSING:Failure.WAITING,chosen.message()));continue;}
             var saved=prices.get(chosen.candidate().key());var selected=applicable.stream().filter(row->row.getId().equals(saved.getOriginalId())).findFirst().orElseThrow();var calculation=effective.calculation(saved);
             OaForm inputs=null;var board=request.conditions().boardTerms();if("220".equals(request.priceOrgCode())){inputs=new OaForm();inputs.setBoardTender(board!=null && board.finalTender());inputs.setSus304Price(board==null?null:board.sus304PricePerTon());inputs.setSus316lPrice(board==null?null:board.sus316lPricePerTon());}
             var preview=runtime.previewSaved(selected,context.month().toString(),null,inputs,saved,calculation);if(preview.getResult()==null || preview.getError()!=null || preview.getInputSnapshotJson()==null)throw new IllegalArgumentException("联动计算依据无效："+preview.getError());
-            var snapshot=new Snapshot(1,"LINKED",new Source(selected.getPricingMonth(),selected,applicable,saved,List.copyOf(prices.values()),actualRatios,chosen.rule(),preview.getInputSnapshotJson()),new Basis(request.family().unit(),"CNY",TaxBasis.EXCLUDED,"ORIGINAL_V1_EXCLUDED_TAX_RESULT","FINANCE_PUBLICATION_DECIMAL_38_18_HALF_UP"));
+            // Retain all code-matched source rows as evidence, including suppliers excluded by the ratio.
+            var snapshot=new Snapshot(1,"LINKED",new Source(selected.getPricingMonth(),selected,sourceHeads,saved,List.copyOf(prices.values()),actualRatios,chosen.rule(),preview.getInputSnapshotJson()),new Basis(request.family().unit(),"CNY",TaxBasis.EXCLUDED,"ORIGINAL_V1_EXCLUDED_TAX_RESULT","FINANCE_PUBLICATION_DECIMAL_38_18_HALF_UP"));
             var fact=PriceFact.normal(preview.getResult().setScale(18,RoundingMode.HALF_UP),SourceEvidence.ofJson(codec.unwrap(codec.encode(snapshot))),Set.of());
             var coverage=MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of(request.priceOrgCode()),QuantityInterval.all(),"220".equals(request.priceOrgCode())?ConditionDomain.exact(request.conditions()):ConditionDomain.any()));
             if(chosen.review()!=null)context.supplierReviews().forOrganization(request.priceOrgCode()).add(chosen.review(),fact.evidence().sha256());

@@ -23,7 +23,7 @@ class InvoiceMonthlyPriceIntegrationTest {
     MonthlyFixedPriceSourceIntegrationTest.database();var ds=MonthlyFixedPriceSourceIntegrationTest.jdbc.getDataSource();
     codec=new MonthlyPriceDocumentCodec(new ObjectMapper());
     imports=new InvoicePriceService(MonthlyFixedPriceSourceIntegrationTest.jdbc,new InvoiceWorkbookParser(),new ObjectMapper(),new DataSourceTransactionManager(ds));
-    source=new MonthlyInvoicePriceSource(MonthlyFixedPriceSourceIntegrationTest.jdbc,codec);
+    source=new MonthlyInvoicePriceSource(MonthlyFixedPriceSourceIntegrationTest.jdbc,codec,org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.monthly.MonthlySupplierInputMapper.class));
     var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
     config.addMapper(MonthlyPriceStorageMapper.class);config.addMapper(MonthlyPriceLinkMapper.class);
     var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
@@ -78,13 +78,13 @@ class InvoiceMonthlyPriceIntegrationTest {
     assertThatThrownBy(()->operation.adopt(context(),plan(r,stale),Duration.ofSeconds(2))).isInstanceOf(MonthlyPriceProblem.class).hasMessageContaining("发票来源");
     assertThat(adopt(r).fact().price()).isEqualByComparingTo("85");
   }
-  @Test void unitCurrencySupplierAndOrganizationAreAppliedBeforeHighestPrice() throws Exception {
+  @Test void codeMatchIgnoresUnitWhileCurrencySupplierAndOrganizationKeepTheirExistingRules() throws Exception {
     String code="INV-"+UUID.randomUUID();var dollars=row(code,"D3","S1","999");dollars[8]="USD";
     var pieces=row(code,"D4","S1","888");pieces[6]="件";
     publish(new String[][]{row(code,"D1","S1","80"),row(code,"D2","S2","85"),dollars,pieces});
-    var r=request(code);assertThat(source.read(context(),Set.of(r)).values().get(r).selection().fact().price()).isEqualByComparingTo("85");
+    var r=request(code);assertThat(source.read(context(),Set.of(r)).values().get(r).selection().fact().price()).isEqualByComparingTo("888");
     var requested=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(r.family().month(),"COMMERCIAL",code,null,"千克","CNY",TaxBasis.EXCLUDED,"S1"),"210",NonCuConditions.empty(),BigDecimal.ONE);
-    assertThat(source.read(context(),Set.of(requested)).values().get(requested).selection().fact().price()).isEqualByComparingTo("80");
+    assertThat(source.read(context(),Set.of(requested)).values().get(requested).selection().fact().price()).isEqualByComparingTo("888");
     var otherOrg=new MonthlyPriceRequest(r.family(),"220",NonCuConditions.empty(),BigDecimal.ONE);
     assertThat(source.read(context(),Set.of(otherOrg)).problems().get(otherOrg).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }

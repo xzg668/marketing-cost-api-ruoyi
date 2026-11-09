@@ -120,4 +120,63 @@ class JjbProjectionTest {
     var sheet=projection.project(new Stored(v,null,List.of(),List.of()),form,new OaFormItem(),List.of());
     assertThat(sheet.header().quotation()).containsEntry("quoterName","罗思雅").containsEntry("applicantName","需求申请人");
   }
+
+  @Test void packagingHasOneAmountWhilePreservingComponentEvidenceAndOriginalTotals() throws Exception {
+    var part=new CostRunPartItem();part.setId(652L);part.setPartCode("9830000025711");part.setPartName("包装组件");
+    part.setPricePrepareItemId(3154L);part.setQty(BigDecimal.ONE);part.setUnitPrice(new BigDecimal("0.308900"));
+    part.setAmount(new BigDecimal("0.308900"));
+    var prepared=new PricePrepareItem();prepared.setId(3154L);prepared.setMaterialCode(part.getPartCode());
+    prepared.setInputSnapshotJson("{\"calculatorVersion\":\"PACKAGE_PRICE_V1\"}");
+    var v=version();v.setTotalCost(new BigDecimal("35.369639"));v.setCuMaterialAdjustment(new BigDecimal("0.797707"));
+    v.setFinalQuoteAmount(new BigDecimal("36.167346"));
+    var costs=List.of(cost(1,"OTHER_EXP_PACKAGE","包装费","0.324345"),
+        cost(2,"BOM_BUCKET_PACKAGE","包装","0.324345"),cost(3,"MATERIAL","材料费","20.420454"),
+        cost(4,"INDIRECT_LABOR","辅助人工工资","0.091700"));
+    var model=projection.project(new Stored(v,null,List.of(part),costs),new OaForm(),new OaFormItem(),List.of(),List.of(prepared));
+    var packaging=model.rows().stream().filter(r->r.code()!=null && Set.of("9830000025711","OTHER_EXP_PACKAGE","BOM_BUCKET_PACKAGE").contains(r.code())).toList();
+    assertThat(packaging).filteredOn(r->r.amount()!=null).singleElement().satisfies(r->{
+      assertThat(r.amount()).isEqualTo("0.324345");assertThat(r.costItemIds()).containsExactly(1L,2L);
+    });
+    assertThat(packaging).singleElement().satisfies(r->{
+      assertThat(r.name()).isEqualTo("包装费用");
+      assertThat(r.partItemIds()).containsExactly(652L);
+      assertThat(r.sources()).anyMatch(ref->"lp_price_prepare_item".equals(ref.table()) && ref.id()==3154L);
+    });
+    assertThat(model.rows()).noneMatch(r->"9830000025711".equals(r.code()));
+    assertThat(model.rows()).filteredOn(r->"MATERIAL".equals(r.code())).singleElement()
+        .satisfies(r->assertThat(r.remark()).contains("辅助人工另计"));
+    assertThat(model.totals().totalCost()).isEqualTo("35.369639");
+    assertThat(model.totals().finalQuoteAmount()).isEqualTo("36.167346");
+    var output=new java.io.ByteArrayOutputStream();new JjbExcelRenderer().write(model,output);
+    try(var workbook=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(output.toByteArray()))) {
+      var sheet=workbook.getSheetAt(0);int amounts=0;
+      for(var row:sheet) {
+        var cell=row.getCell(6);
+        if(cell!=null && cell.getCellType()==org.apache.poi.ss.usermodel.CellType.NUMERIC
+            && Math.abs(cell.getNumericCellValue()-0.324345)<0.0000001) amounts++;
+      }
+      assertThat(amounts).isEqualTo(1);
+    }
+    assertThat(part.getAmount()).isEqualByComparingTo("0.308900");
+  }
+  @Test void oldPackagingOmissionIsIdentifiedWithoutRewritingHistoricalAmounts() {
+    var parent=new CostRunPartItem();parent.setId(1L);parent.setPartCode("PACK");
+    parent.setPricePrepareItemId(7L);parent.setAmount(new BigDecimal("0.308900"));
+    var label=new CostRunPartItem();label.setId(2L);label.setPartCode("LABEL");label.setAmount(new BigDecimal("0.005154"));
+    var prepared=new PricePrepareItem();prepared.setId(7L);
+    prepared.setInputSnapshotJson("{\"calculatorVersion\":\"PACKAGE_PRICE_V1\"}");
+    var fee=cost(3,"OTHER_EXP_PACKAGE","包装费","0.324345");fee.setBaseAmount(new BigDecimal("0.314054"));
+    var bucket=cost(4,"BOM_BUCKET_PACKAGE","包装","0.324345");
+    var material=cost(5,"MATERIAL","材料费","21.118831");
+    var v=version();v.setTotalCost(new BigDecimal("36.379367"));v.setCuMaterialAdjustment(new BigDecimal("0.602968"));
+    v.setFinalQuoteAmount(new BigDecimal("36.982335"));
+    var old=projection.project(new Stored(v,null,List.of(parent,label),List.of(fee,bucket,material)),new OaForm(),new OaFormItem(),List.of(),List.of(prepared));
+    assertThat(old.warnings()).anyMatch(message->message.contains("独立包装材料") && message.contains("重新整单核算"));
+    assertThat(old.totals().totalCost()).isEqualTo("36.379367");
+    assertThat(old.rows().stream().filter(row->"MATERIAL".equals(row.code())).findFirst().orElseThrow().amount()).isEqualTo("21.118831");
+    fee.setBaseAmount(new BigDecimal("0.308900"));
+    var corrected=projection.project(new Stored(v,null,List.of(parent,label),List.of(fee,bucket,material)),new OaForm(),new OaFormItem(),List.of(),List.of(prepared));
+    assertThat(corrected.warnings()).noneMatch(message->message.contains("独立包装材料"));
+  }
+
 }

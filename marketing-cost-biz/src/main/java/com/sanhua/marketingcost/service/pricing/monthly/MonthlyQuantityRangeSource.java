@@ -34,7 +34,7 @@ public final class MonthlyQuantityRangeSource {
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()))throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Quantity source scope differs from request");
-      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     for(var organization:groups.entrySet()){
       var codes=new ArrayList<>(organization.getValue().keySet());
@@ -48,7 +48,7 @@ public final class MonthlyQuantityRangeSource {
         var primary=suppliers.prepareSuppliers(context.businessUnitType(),ratioCodes,context.priceAsOfTime().toLocalDate(),ratios);
         var calculations=new HashMap<MonthlyPriceFamilyKey,FamilyDecisions>();
         for(String code:batch)for(var request:organization.getValue().get(code))try{
-          var source=byCode.getOrDefault(code,List.of());if(source.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"没有适用数量区间来源"));continue;}
+          var source=byCode.getOrDefault(code,List.of()).stream().filter(row->request.matchesSpecification(row.getSpecModel())).toList();if(source.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"没有适用数量区间来源"));continue;}
           if(!"CNY".equals(request.family().currency()))throw new IllegalArgumentException("数量区间现有CNY成本口径不能猜测币种转换");
           var calculation=calculations.computeIfAbsent(request.family(),family->decisions(context,request,source,primary.getOrDefault(SupplierSupplyRatioNormalizeUtils.normalizeToNull(code),SupplierSupplyRatioResolveResult.miss("没有有效主供应商"))));
           var decision=calculation.decisions().stream().filter(value->value.cell().interval().contains(request.priceBasisQuantity())).findFirst().orElseThrow();
@@ -64,16 +64,16 @@ public final class MonthlyQuantityRangeSource {
   private FamilyDecisions decisions(Context context,MonthlyPriceRequest request,List<PriceRangeItem> original,SupplierSupplyRatioResolveResult primary){
     String explicit=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
     var allowed=original.stream().filter(row->explicit==null || explicit.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())))
-        .filter(row->request.family().unit().equals(row.getUnit()) && (request.family().specification()==null || request.family().specification().equals(row.getSpecModel()))).toList();
-    if(allowed.isEmpty())throw new IllegalArgumentException("数量区间的规格、计价单位或指定供应商不适用");
+        .toList();
+    if(allowed.isEmpty())throw new IllegalArgumentException("数量区间的指定供应商不适用");
     var intervals=new LinkedHashMap<Long,QuantityInterval>();var bounds=new TreeSet<BigDecimal>();
     for(var row:allowed){var interval=new QuantityInterval(row.getRangeLow(),!Integer.valueOf(0).equals(row.getLowerInclusive()),row.getRangeHigh(),!Integer.valueOf(0).equals(row.getUpperInclusive()));intervals.put(row.getId(),interval);if(interval.lower()!=null)bounds.add(interval.lower());if(interval.upper()!=null)bounds.add(interval.upper());}
     var decisions=new ArrayList<Decision>();
     for(var cell:cells(bounds)){
       var matched=allowed.stream().filter(row->intervals.get(row.getId()).contains(cell.probe())).toList();
       if(matched.isEmpty()){decisions.add(new Decision(cell,null,new Problem(Failure.MISSING,"数量未命中任何区间")));continue;}
-      var selected=suppliers.select(matched,context.businessUnitType(),request.family().materialCode(),matched.getFirst().getMaterialName(),matched.getFirst().getSpecModel(),context.priceAsOfTime().toLocalDate(),PriceRangeItem::getSupplierName,PriceRangeItem::getSupplierCode,primary);
-      if(selected.failed() || selected.row()==null){decisions.add(new Decision(cell,selected,new Problem(Failure.WAITING,selected.failureMessage())));continue;}
+      var selected=suppliers.select(matched,context.businessUnitType(),request.materialCode(),matched.getFirst().getMaterialName(),matched.getFirst().getSpecModel(),context.priceAsOfTime().toLocalDate(),PriceRangeItem::getSupplierName,PriceRangeItem::getSupplierCode,primary);
+      if(selected.failed() || selected.row()==null){decisions.add(new Decision(cell,selected,new Problem(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING.equals(selected.failureCode())?Failure.MISSING:Failure.WAITING,selected.failureMessage())));continue;}
       var tax=selected.row().getPriceInclTax()!=null?TaxBasis.INCLUDED:TaxBasis.EXCLUDED;
       var problem=tax==request.family().taxBasis()?null:new Problem(Failure.INVALID_INPUT,"现有区间优先金额列的税口径不适用，不能猜测转换");
       decisions.add(new Decision(cell,selected,problem));
@@ -87,7 +87,7 @@ public final class MonthlyQuantityRangeSource {
     }
     var coverage=new MonthlyPriceApplicability(merge(regions).stream().map(region->new MonthlyPriceCoverage(Set.of(request.priceOrgCode()),region,ConditionDomain.any())).toList());
     String column=row.getPriceInclTax()!=null?"price_incl_tax":"price_excl_tax";BigDecimal price=row.getPriceInclTax()!=null?row.getPriceInclTax():row.getPriceExclTax();
-    var snapshot=new Snapshot(1,"RANGE_QTY",new Source(row,calculation.rows(),SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().materialCode()),ratios,List.copyOf(proofs)),new Basis(request.family().unit(),"CNY",request.family().taxBasis(),column,"IDENTITY"));
+    var snapshot=new Snapshot(1,"RANGE_QTY",new Source(row,calculation.rows(),SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.materialCode()),ratios,List.copyOf(proofs)),new Basis(request.family().unit(),"CNY",request.family().taxBasis(),column,"IDENTITY"));
     return new Selection(null,coverage,PriceFact.normal(price,SourceEvidence.ofJson(codec.unwrap(codec.encode(snapshot))),Set.of()));
   }
   private List<Cell> cells(SortedSet<BigDecimal> bounds){

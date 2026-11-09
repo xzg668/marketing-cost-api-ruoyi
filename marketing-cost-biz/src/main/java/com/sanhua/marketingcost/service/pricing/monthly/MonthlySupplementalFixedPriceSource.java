@@ -54,7 +54,7 @@ public final class MonthlySupplementalFixedPriceSource {
       throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Technical source scope differs from request");
     Long currentForm=rows.currentForm(context.oaFormItemId(),context.oaNo(),context.businessUnitType());
     if(currentForm==null)throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Monthly technical source requires its actual quote item/form scope");
-    var byCode=new TreeMap<String,List<MonthlyPriceRequest>>();requests.forEach(request->byCode.computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request));
+    var byCode=new TreeMap<String,List<MonthlyPriceRequest>>();requests.forEach(request->byCode.computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request));
     var capturedProducts=new HashMap<Long,ProductCapture>();var capturedFlows=new HashMap<Long,Flow>();
     var capturedBasis=new HashMap<Long,String>();var approvalCache=new HashMap<ApprovalKey,Approved>();
     for(var batch:batches(byCode.keySet())) {
@@ -91,7 +91,7 @@ public final class MonthlySupplementalFixedPriceSource {
         }
         if(!"PRICE".equals(owner.moduleType()))throw new IllegalArgumentException("技术价格声明必须由PRICE模块办理");
         if(!owner.claimOrganization().equals(request.priceOrgCode()) || !owner.claimBusinessUnit().equals(context.businessUnitType())
-            || !owner.unit().equals(request.family().unit()) || !owner.currency().equals(request.family().currency())
+            || !owner.currency().equals(request.family().currency())
             || !"CNY".equals(owner.currency()))
           throw new IllegalArgumentException("技术价格声明的组织、业务单元、单位或币税口径不适用");
         // A reserved but never assigned/edited module is not a supplemental price source.
@@ -111,7 +111,7 @@ public final class MonthlySupplementalFixedPriceSource {
             throw new IllegalArgumentException("待编辑补录版本不能已有发布固定价");
           problems.put(request,approved.error());continue;
         }
-        var fixedRows=fixed.getOrDefault(code,List.of()).stream().filter(row->Objects.equals(row.getTechnicalVersionId(),owner.sourceVersionId()) && "AVAILABLE".equals(row.getTechnicalPublicationStatus())).toList();
+        var fixedRows=fixed.getOrDefault(code,List.of()).stream().filter(row->request.matchesSpecification(row.getSpecModel())).filter(row->Objects.equals(row.getTechnicalVersionId(),owner.sourceVersionId()) && "AVAILABLE".equals(row.getTechnicalPublicationStatus())).toList();
         if(fixedRows.size()>1)throw new IllegalArgumentException("同一最终补录料号存在多个已可用固定价");
         if(fixedRows.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"没有最终有效补录固定价；联动价从财务导入的联动价格表读取"));continue;}
         var row=fixedRows.getFirst();String itemKey=row.getTechnicalItemKey();
@@ -122,15 +122,15 @@ public final class MonthlySupplementalFixedPriceSource {
             || !code.equals(declaration.materialNo()) || !owner.claimOrganization().equals(declaration.organizationCode())
             || !owner.unit().equals(declaration.unit()) || !owner.currency().equals(declaration.currency()))
           throw new IllegalArgumentException("补录声明内容、身份或固定价类型无效");
-        if(!request.priceOrgCode().equals(row.getOrgCode()) || !request.family().unit().equals(row.getUnit())
+        if(!request.priceOrgCode().equals(row.getOrgCode()) || !owner.unit().equals(row.getUnit())
             || !context.businessUnitType().equals(row.getBusinessUnitType()) || !Integer.valueOf(0).equals(row.getTaxIncluded())
             || row.getFixedPrice()==null || row.getFixedPrice().signum()<0 || row.getFixedPrice().compareTo(declaration.unitPrice())!=0)
           throw new IllegalArgumentException("实际固定价金额、组织、单位或税口径与最终声明不一致");
         if(request.family().requestedSupplierCode()!=null && !request.family().requestedSupplierCode().equals(row.getSupplierCode()))
           throw new IllegalArgumentException("补录来源没有声明本次指定供应商");
         var masterRows=masterByOrganization.get(request.priceOrgCode()).getOrDefault(code,List.of());
-        if(masterRows.size()!=1 || !row.getUnit().equals(masterRows.getFirst().getUnit()))
-          throw new IllegalArgumentException("补录料品采购单位已变化或不唯一");
+        if(masterRows.size()!=1)
+          throw new IllegalArgumentException("补录料品来源资料不唯一");
         var snapshot=new Snapshot(1,"TECH_FIXED",new FixedSource(row,declaration,approved.approval(owner),masterRows.getFirst()),row.getUnit(),"CNY",TaxBasis.EXCLUDED);
         var fact=PriceFact.normal(row.getFixedPrice(),SourceEvidence.ofJson(documents.unwrap(documents.encode(snapshot))),Set.of());
         var coverage=MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of(request.priceOrgCode()),QuantityInterval.all(),ConditionDomain.any()));

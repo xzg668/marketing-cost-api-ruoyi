@@ -24,7 +24,6 @@ import org.springframework.util.StringUtils;
 
 @Component
 public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRatioWorkbookParser {
-  private static final List<String> SHEET_KEYWORDS = List.of("供货比例", "供货比率", "供货比利");
   private static final String HEADER_MATERIAL_CODE = "物料代码";
   private static final String HEADER_MATERIAL_NAME = "物料名称";
   private static final String HEADER_SPEC_MODEL = "型号";
@@ -62,12 +61,12 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
       return result;
     }
     try (Workbook workbook = WorkbookFactory.create(input)) {
+      DataFormatter formatter = new DataFormatter(Locale.CHINA);
       List<Sheet> candidates = new ArrayList<>();
       for (Sheet candidate : workbook) {
-        String name = SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(candidate.getSheetName());
-        if (SHEET_KEYWORDS.stream().anyMatch(name::contains)) candidates.add(candidate);
+        if (findHeader(candidate, formatter) != null) candidates.add(candidate);
       }
-      if (candidates.isEmpty()) throw new IllegalArgumentException("未找到名称包含供货比例、供货比率或供货比利的工作表");
+      if (candidates.isEmpty()) throw new IllegalArgumentException("未找到供货比例数据表，前21行需包含：物料代码、物料名称、供应商名称、供货比例");
       Sheet sheet;
       if (StringUtils.hasText(sheetName)) {
         sheet = candidates.stream().filter(s -> s.getSheetName().equals(sheetName)).findFirst()
@@ -76,7 +75,6 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
         if (candidates.size() != 1) throw new IllegalArgumentException("存在多个供货比例工作表，请选择要导入的工作表");
         sheet = candidates.getFirst();
       }
-      DataFormatter formatter = new DataFormatter(Locale.CHINA);
       parseSheet(sheet, formatter, result);
     } catch (Exception e) {
       result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(null, null,
@@ -142,7 +140,14 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     for (int col = 0; col < last; col++) {
       String text = canonicalHeader(cellText(row.getCell(col), formatter));
       if (ORDERED_HEADERS.contains(text) || HEADER_SUPPLIER_CODE.equals(text)) {
-        columns.putIfAbsent(text, col);
+        // 新补齐表同时包含规格和型号；型号列即使留空也不能被规格列抢占。
+        String original = SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(cellText(row.getCell(col), formatter))
+            .replaceFirst("\\*$", "");
+        if (HEADER_SPEC_MODEL.equals(text) && ("型号".equals(original) || "物料型号".equals(original))) {
+          columns.put(text, col);
+        } else {
+          columns.putIfAbsent(text, col);
+        }
       }
     }
     return columns;
@@ -182,6 +187,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     parsed.setSupplierName(supplierName);
     parsed.setSupplierCode(supplierCode);
     parsed.setSupplyRatio(supplyRatio);
+    parsed.setSelectionRule(text(row, columns.get(HEADER_RULE), formatter));
     return parsed;
   }
 
@@ -275,6 +281,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
       case "U9物料形态属性", "形态属性" -> HEADER_MATERIAL_SHAPE;
       case "供应商名称" -> HEADER_SUPPLIER_NAME;
       case "比例", "供货比率", "供货比利" -> HEADER_SUPPLY_RATIO;
+      case "规则", "取价规则", "价格选择规则", "规则:取供货比例大的", "规则：取供货比率大的" -> HEADER_RULE;
       case "供应商编码", "供方代码" -> HEADER_SUPPLIER_CODE;
       default -> normalized;
     };

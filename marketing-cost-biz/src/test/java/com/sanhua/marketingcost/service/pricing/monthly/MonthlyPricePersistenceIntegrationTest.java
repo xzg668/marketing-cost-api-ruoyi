@@ -70,6 +70,7 @@ class MonthlyPricePersistenceIntegrationTest {
   static void storage() throws Exception {
     if (storage != null) return;
     var configuration = new org.apache.ibatis.session.Configuration();
+    configuration.setLocalCacheScope(org.apache.ibatis.session.LocalCacheScope.STATEMENT);
     configuration.setMapUnderscoreToCamelCase(true);
     configuration.addMapper(MonthlyPriceStorageMapper.class);
     configuration.addMapper(HouseholdInquiryStorageMapper.class);
@@ -90,7 +91,7 @@ class MonthlyPricePersistenceIntegrationTest {
   static boolean migrated;
   static synchronized void migrate() throws Exception {
     if(migrated)return;
-    for(String file:List.of(MIGRATION,"db/V344__monthly_material_price_single_table.sql","db/V354__invoice_price_import.sql","db/V360__finance_correction_monthly_price.sql","db/V364__household_inquiry_header_schema.sql","db/V365__household_monthly_source_revision.sql","db/V366__household_model_specification_match.sql")) {
+    for(String file:List.of(MIGRATION,"db/V344__monthly_material_price_single_table.sql","db/V354__invoice_price_import.sql","db/V360__finance_correction_monthly_price.sql","db/V364__household_inquiry_header_schema.sql","db/V365__household_monthly_source_revision.sql","db/V372__monthly_price_disable.sql","db/V366__household_model_specification_match.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource(file),"/tmp/mpp-storage.sql");
       var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_storage_test < /tmp/mpp-storage.sql");
       assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
@@ -642,9 +643,39 @@ class MonthlyPricePersistenceIntegrationTest {
     assertThat(codec.unwrap(codec.wrap("{\"precise\":1.9}"))).isEqualTo("{\"precise\":1.9}");
   }
 
+  @Test void disabledPriceIsHistoricalOnlyAndAllowsReplacementWithoutChangingOldEvidence() throws Exception {
+    migrate(); storage();
+    transaction.executeWithoutResult(status -> {
+      var original=price();
+      var before=jdbc.queryForMap("SELECT * FROM lp_material_monthly_price WHERE id=?",original.id());
+      assertThat(storage.readFamilies(List.of(original.family()))).hasSize(1);
+      assertThat(jdbc.update("UPDATE lp_material_monthly_price SET disabled=1 WHERE id=?",original.id())).isOne();
+      assertThat(storage.readFamilies(List.of(original.family()))).isEmpty();
+      assertThat(storage.readByIds("COMMERCIAL",Set.of(original.id()))).containsExactly(original);
+      var after=jdbc.queryForMap("SELECT * FROM lp_material_monthly_price WHERE id=?",original.id());
+      before.forEach((key,value)->{if(!key.equals("disabled"))assertThat(after.get(key)).as(key).isEqualTo(value);});
+      var corrected=MonthlyAdoptionPlan.PriceFact.normal(new BigDecimal("12"),original.evidence(),Set.of());
+      var replacement=storage.insertPrice(original.family(),original.applicability(),corrected,null,"{\"request\":\"replacement\"}","test");
+      assertThat(storage.readFamilies(List.of(original.family()))).containsExactly(replacement);
+      assertThatThrownBy(()->storage.insertPrice(original.family(),original.applicability(),corrected,null,"{\"request\":\"duplicate\"}","test"))
+          .hasMessageContaining("already adopted");
+      assertThatThrownBy(()->jdbc.update("UPDATE lp_material_monthly_price SET disabled=0 WHERE id=?",original.id()))
+          .hasMessageContaining("MPP_MONTHLY_PRICE_IMMUTABLE");
+      assertThatThrownBy(()->jdbc.update("UPDATE lp_material_monthly_price SET disabled=1,unit_price=99 WHERE id=?",replacement.id()))
+          .hasMessageContaining("MPP_MONTHLY_PRICE_IMMUTABLE");
+      jdbc.update("UPDATE lp_material_monthly_price SET disabled=1 WHERE id=?",replacement.id());
+      var next=storage.insertPrice(original.family(),original.applicability(),corrected,null,"{\"request\":\"next\"}","test");
+      assertThat(storage.readFamilies(List.of(original.family()))).containsExactly(next);
+      assertThat(storage.readByIds("COMMERCIAL",Set.of(original.id(),replacement.id(),next.id()))).hasSize(3);
+      status.setRollbackOnly();
+    });
+  }
+
   @Test void storageQueriesHavePhysicalIndexesAndNoCascadingHistoryDeletes() throws Exception {
     migrate();
-    assertIndex("lp_material_monthly_price","uk_monthly_price_identity",List.of("family_hash","applicability_hash","invoice_revision","finance_revision","household_revision"));
+    assertIndex("lp_material_monthly_price","uk_monthly_price_identity",java.util.Arrays.asList("family_hash",null,"invoice_revision","finance_revision","household_revision"));
+    assertThat(jdbc.queryForObject("SELECT EXPRESSION FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='lp_material_monthly_price' AND index_name='uk_monthly_price_identity' AND SEQ_IN_INDEX=2",String.class))
+        .contains("disabled", "applicability_hash");
     assertIndex("lp_material_monthly_price","idx_monthly_price_query",List.of("business_unit_type","pricing_month","material_code","id"));
     assertIndex("lp_material_monthly_price","idx_monthly_price_source",List.of("household_source_id","id"));
     assertIndex("lp_household_inquiry_price","uk_household_current",List.of("business_unit_type","current_material"));

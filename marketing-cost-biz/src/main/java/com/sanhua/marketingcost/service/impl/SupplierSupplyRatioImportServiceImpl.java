@@ -14,7 +14,6 @@ import com.sanhua.marketingcost.service.SupplierSupplyRatioImportService;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioWorkbookParser;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.io.InputStream;
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -172,6 +171,7 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     entity.setSupplierName(row.getSupplierName().trim());
     entity.setSupplierCode(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()));
     entity.setSupplyRatio(row.getSupplyRatio());
+    entity.setSelectionRule(trimToNull(row.getSelectionRule()));
     entity.setSourceType("EXCEL");
     entity.setSourceBatchNo(batch);
     entity.setIsActive(1);
@@ -195,13 +195,10 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     bounded(row.getSpecModel(), "型号",255,false);
     bounded(row.getUnit(), "单位",32,false);
     bounded(row.getMaterialShape(), "形态属性",64,false);
-    BigDecimal ratio = row.getSupplyRatio();
-    if (ratio != null) {
-      try { ratio.setScale(6, java.math.RoundingMode.UNNECESSARY); }
-      catch (ArithmeticException ex) { throw new IllegalArgumentException("第"+row.getRowNo()+"行比例小数最多6位（百分数最多4位），原数据未变更"); }
-    }
-    if (ratio != null && (ratio.signum() < 0 || ratio.compareTo(BigDecimal.ONE) > 0)) {
-      throw new IllegalArgumentException("第" + row.getRowNo() + "行比例必须是0到100%之间的数字");
+    bounded(row.getSelectionRule(), "取价规则",255,false);
+    try { SupplierSupplyRatioNormalizeUtils.validateRatio(row.getSupplyRatio()); }
+    catch (IllegalArgumentException ex) {
+      throw new IllegalArgumentException("第" + row.getRowNo() + "行" + ex.getMessage(), ex);
     }
   }
 
@@ -210,6 +207,7 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
         ? a.getSupplyRatio() == b.getSupplyRatio()
         : a.getSupplyRatio().compareTo(b.getSupplyRatio()) == 0;
     return sameRatio
+        && Objects.equals(trimToNull(a.getSelectionRule()), trimToNull(b.getSelectionRule()))
         && Objects.equals(trim(a.getMaterialName()), trim(b.getMaterialName()))
         && Objects.equals(trim(a.getSupplierName()), trim(b.getSupplierName()))
         && Objects.equals(trim(a.getSpecModel()), trim(b.getSpecModel()))
@@ -219,6 +217,7 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
 
   private boolean sameBusinessValues(SupplierSupplyRatio previous, SupplierSupplyRatioExcelRow row) {
     var before = new SupplierSupplyRatioExcelRow();
+    before.setSelectionRule(previous.getSelectionRule());
     before.setSupplyRatio(previous.getSupplyRatio()); before.setMaterialName(previous.getMaterialName());
     before.setSupplierName(previous.getSupplierName()); before.setSpecModel(previous.getSpecModel());
     before.setUnit(previous.getUnit()); before.setMaterialShape(previous.getMaterialShape());
@@ -226,21 +225,9 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
   }
 
   private BusinessChangeLog change(SupplierSupplyRatio previous,SupplierSupplyRatio next,String actor,LocalDateTime now) {
-    var entry=new BusinessChangeLog();
-    entry.setBizDomain("SUPPLIER_SUPPLY_RATIO"); entry.setBizType("SUPPLIER_RELATION");
-    entry.setBizId(next.getId()); entry.setBizDetailId(previous==null?null:previous.getId());
-    entry.setFieldName("SUPPLIER_RELATION"); entry.setFieldLabel("供货关系");
-    try {
-      entry.setBeforeValue(previous==null?null:json.writeValueAsString(previous));
-      entry.setAfterValue(json.writeValueAsString(next));
-    } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
-      throw new IllegalStateException("供货关系变更依据保存失败",ex);
-    }
-    entry.setChangeReason(previous==null?"导入新增供货关系":"导入变更供货关系");
-    entry.setChangedByName(actor); entry.setChangedAt(now); entry.setCreatedAt(now);
-    entry.setChangeSource("FINANCE_IMPORT"); entry.setSubmitBatchNo(next.getSourceBatchNo());
-    entry.setIdempotencyKey("SUPPLIER_RATIO_VERSION:"+next.getId());
-    return entry;
+    return com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioChanges.version(
+        previous, next, actor, now, "FINANCE_IMPORT",
+        previous == null ? "导入新增供货关系" : "导入变更供货关系", json);
   }
 
   private BusinessChangeLog replacement(SupplierSupplyRatio previous, String file, String batch,

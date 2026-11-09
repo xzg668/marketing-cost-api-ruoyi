@@ -130,9 +130,11 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
 
   private Map<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>> orders(Context context,Set<MonthlyPriceRequest> requests) {
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
-    requests.forEach(request->groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>())
-        .computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request));
+    requests.stream().filter(request->!request.materialCode().isBlank()).forEach(request->groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>())
+        .computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request));
     var result=new HashMap<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>>();
+    requests.stream().filter(request->request.materialCode().isBlank()).forEach(request->result.put(request,
+        MaterialPriceSourceType.DEFAULT_ORDER.stream().map(type->new MaterialPricePriorityService.Entry(type,type.getDefaultPriority())).toList()));
     groups.forEach((org,codes)->{
       var all=new ArrayList<>(codes.keySet());
       for(int start=0;start<all.size();start+=256) {
@@ -149,10 +151,10 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     var factorRequests=new LinkedHashSet<MonthlyPriceRequest>();
     var groups=new TreeMap<String,List<MonthlyPriceRequest>>();requests.forEach(request->groups.computeIfAbsent(request.priceOrgCode(),ignored->new ArrayList<>()).add(request));
     groups.forEach((org,items)->{
-      var codes=new ArrayList<>(items.stream().map(request->request.family().materialCode()).distinct().toList());
+      var codes=new ArrayList<>(items.stream().map(request->request.materialCode()).distinct().toList());
       var found=new HashSet<String>();
       for(int start=0;start<codes.size();start+=256)found.addAll(rangeRows.factorMaterials(context.businessUnitType(),org,codes.subList(start,Math.min(start+256,codes.size()))));
-      items.stream().filter(request->found.contains(request.family().materialCode())).forEach(factorRequests::add);
+      items.stream().filter(request->found.contains(request.materialCode())).forEach(factorRequests::add);
     });
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     if(!factorRequests.isEmpty()) {

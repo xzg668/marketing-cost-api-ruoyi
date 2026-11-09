@@ -90,7 +90,7 @@ public final class MonthlyPreparationValidation {
       Map<Long, MonthlyPriceScenarios.Pair> scenarios, Map<MonthlyPriceRequest, BigDecimal> uses) {
     if (physicalQuantity.signum() == 0) return;
     var request = value.request();
-    if (!Objects.equals(code, request.family().materialCode())
+    if (!request.matchesBomMaterialCode(code)
         || !Objects.equals(parent.getBusinessUnitType(), request.family().businessUnitType())
         || !Objects.equals(parent.getPriceOrgCode(), request.priceOrgCode())
         || !Objects.equals(parent.getPeriodMonth(), request.family().month().toString())

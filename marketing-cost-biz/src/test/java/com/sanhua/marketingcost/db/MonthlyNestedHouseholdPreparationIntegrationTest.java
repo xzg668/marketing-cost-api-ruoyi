@@ -76,7 +76,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
         raw(key, fee, key, "/" + key + "/" + fee + "/", 1, "2.5", "2.5", "委外加工件", false, date),
         raw(key, material, fee, "/" + key + "/" + fee + "/" + material + "/", 2, "3", "7.5", "采购件", true, date));
     for (var row : rows) {
-      rawHierarchy.insert(row);
+      insertStandardFixture(row);
       jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,shape_attr) VALUES(?,?,'件','COMMERCIAL',?,1,?)",
           row.getMaterialCode(), row.getMaterialName(), key, row.getShapeAttr());
     }
@@ -145,7 +145,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
     var deep = raw(key, household, direct, child.getPath() + household + "/", 3, "3", "3", "采购件", true, date);
     var rows = List.of(root, parent, child, deep);
     for (var row : rows) {
-      rawHierarchy.insert(row);
+      insertStandardFixture(row);
       jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,shape_attr,main_category_code) VALUES(?,?,'件','COMMERCIAL',?,1,?,?)",
           row.getMaterialCode(), row.getMaterialName(), key, row.getShapeAttr(), row.getMaterialCategory1());
     }
@@ -193,7 +193,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
         raw(key, household, parent, "/" + key + "/" + parent + "/" + household + "/", 2, "0.3", "0.75", "采购件", true, date));
     for (var row : rows) {
       if (row.getLevel() == 2) row.setMaterialName(key + "-ROLLUP-CHILD");
-      rawHierarchy.insert(row);
+      insertStandardFixture(row);
       jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,shape_attr,main_category_code,global_seg_3_theoretical_net_weight) VALUES(?,?,?,'COMMERCIAL',?,1,?,?,?)",
           row.getMaterialCode(), row.getMaterialName(), row.getMaterialCode().equals(rawCode) ? "KG" : "件", key,
           row.getShapeAttr(), row.getLevel() == 0 ? "10" : "15", row.getMaterialCode().equals(parent) ? "300" : null);
@@ -278,7 +278,7 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
       }
     }
     for (var row : rows) {
-      row.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1)); rawHierarchy.insert(row);
+      row.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1)); insertStandardFixture(row);
       if (sameParent && row.getLevel() > 0 && row.getLevel() < 3) {
         var source = new BomU9Source(); source.setImportBatchId(key); source.setSourceType("U9");
         source.setPriceOrgCode("210"); source.setImportedAt(date); source.setImportedBy("MPP12");
@@ -468,5 +468,18 @@ class MonthlyNestedHouseholdPreparationIntegrationTest extends OriginalPricingIn
       householdInquiries.publish("COMMERCIAL", "MPP12", new com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryModels.PublishRequest(
           preview.previewId(), preview.publishRequestId(), preview.previewFingerprint()));
     }
+  }
+  /** These owned fixtures have no alternatives; freeze the explicit U9 normal-line fact. */
+  private void insertStandardFixture(com.sanhua.marketingcost.entity.BomRawHierarchy row) {
+    row.setChildType("NORMAL");
+    rawHierarchy.insert(row);
+  }
+  @org.springframework.beans.factory.annotation.Autowired
+  com.sanhua.marketingcost.config.MonthlyRepriceProperties matchingFixturePeriods;
+
+  @org.junit.jupiter.api.BeforeEach
+  void configureOwnedFixturePeriod() {
+    String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    matchingFixturePeriods.setGoLiveMonths(java.util.Map.of("COMMERCIAL", month, "HOUSEHOLD", month));
   }
 }

@@ -107,7 +107,20 @@ class QuoteSavedResultBrowserSession extends OriginalPricingIntegrationTestBase 
     node.setShapeAttr("采购件");node.setBomPurpose("主制造");node.setBomVersion("MPP12");node.setIsLeaf(1);node.setU9IsCostFlag(1);
     node.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1));node.setEffectiveTo(LocalDate.of(2099,1,1));node.setBomStatus("已核准");
     node.setSourceType("U9");node.setSourceImportBatchId(product);node.setBuildBatchId(product);node.setBuiltAt(date);node.setPriceOrgCode("210");node.setBusinessUnitType("COMMERCIAL");rawHierarchy.insert(node);
-    jdbc.update("INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,parent_material_no,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to) VALUES(?,'U9',NOW(),'210',?,?,?,'KG','主制造','MPP12',1,0.12,1,?,'2099-01-01')",product,parent,raw,raw,date.toLocalDate().withDayOfMonth(1));
+    jdbc.update("INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,parent_material_no,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to,child_type) VALUES(?,'U9',NOW(),'210',?,?,?,'KG','主制造','MPP12',2,0.12,1,?,'2099-01-01','NORMAL')",product,parent,raw,raw,date.toLocalDate().withDayOfMonth(1));
+    // Once raw-material U9 rows exist, alternative selection requires every same-version relation.
+    jdbc.update("""
+        INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,
+          parent_material_no,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,
+          child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to,child_type)
+        SELECT r.source_import_batch_id,'U9',NOW(),r.price_org_code,r.parent_code,r.material_code,
+          r.material_name,'件',r.bom_purpose,r.bom_version,r.sort_seq,r.qty_per_parent,1,
+          r.effective_from,r.effective_to,'NORMAL' FROM lp_bom_raw_hierarchy r
+        WHERE r.top_product_code=? AND r.level>0 AND NOT EXISTS (
+          SELECT 1 FROM lp_bom_u9_source s WHERE s.price_org_code=r.price_org_code
+            AND s.parent_material_no=r.parent_code AND s.child_material_no=r.material_code
+            AND s.bom_version=r.bom_version)
+        """,product);
     sources.comparisonFixedPrice(raw,"10",date);jdbc.update("UPDATE lp_price_fixed_item SET unit='KG' WHERE material_code=?",raw);
     jdbc.update("INSERT INTO lp_scrap_price(business_unit_type,price_month,material_code,material_name,price_type,fixed_price,factor_bindings_json,origin_type,rule_source_month,content_hash,created_by,created_at,updated_by,updated_at) VALUES('COMMERCIAL',?,?,'铜废料','FIXED',2,'{}','IMPORT',?,?,'JJB_TEST',NOW(),'JJB_TEST',NOW())",month,scrap,month,"a".repeat(64));
     jdbc.update("INSERT INTO lp_material_scrap_ref(material_code,scrap_code,scrap_unit,ratio,business_unit_type) VALUES(?,?,'KG',1,'COMMERCIAL')",raw,scrap);

@@ -11,15 +11,22 @@ public final class MonthlyBomPricingScope {
 
   /** Quantities are supplied by the existing BOM/unit conversion path, before any display rounding. */
   public record Node(String path, String materialCode, String parentMaterialCode,
-      MonthlyPriceRequest request, BigDecimal quantityPerTop) {
+      MonthlyPriceRequest request, BigDecimal quantityPerTop, String specification) {
+    public Node(String path, String materialCode, String parentMaterialCode,
+        MonthlyPriceRequest request, BigDecimal quantityPerTop) {
+      this(path, materialCode, parentMaterialCode, request, quantityPerTop, null);
+    }
     public Node {
-      if (materialCode == null || materialCode.isBlank()) throw invalid("BOM material identity is required");
+      materialCode = materialCode == null ? "" : materialCode.trim();
+      if (materialCode.isEmpty() && (specification == null || specification.isBlank()))
+        throw invalid("BOM material code or specification is required");
       // A quotation-only structural root has no material price identity or unit.
       // Priced children always retain their complete request.
-      if (request == null && (parent(pathKey(path)) != null || parentMaterialCode != null)) {
+      if (request == null && !materialCode.isEmpty()
+          && (parent(pathKey(path)) != null || parentMaterialCode != null)) {
         throw invalid("Only a structural BOM root can omit its price request");
       }
-      if (request != null && !request.family().materialCode().equals(materialCode)) {
+      if (request != null && !materialCode.isEmpty() && !request.family().materialCode().equals(materialCode)) {
         throw invalid("BOM material and price identity differ at " + path);
       }
       pathKey(path);

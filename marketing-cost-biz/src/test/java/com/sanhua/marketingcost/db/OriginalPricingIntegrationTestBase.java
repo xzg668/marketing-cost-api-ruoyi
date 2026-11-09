@@ -36,6 +36,7 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V240__replace_product_property_with_business_import_rules.sql",
             "V304__supplier_supply_ratio_active_batches.sql",
             "V305__supplier_supply_ratio_nullable_value.sql",
+            "V368__supplier_supply_ratio_selection_rule.sql",
             "V306__supplier_price_decision.sql",
             "V308__original_price_version_contract.sql",
             "V309__finance_factor_publication_note.sql",

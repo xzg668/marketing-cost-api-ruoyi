@@ -50,12 +50,12 @@ class FixedPriceResolverTest {
     verify(prices).selectList(query.capture());
     assertThat(query.getValue().getCustomSqlSegment()).contains("org_code", "material_code", "business_unit_type", "effective_from DESC", "effective_to DESC")
         .doesNotContain("effective_from <=", "effective_to >");
-    verifyNoInteractions(ratios, decisions);
+    verify(ratios).selectList(any(Wrapper.class)); verifyNoInteractions(decisions);
   }
   @Test void currentlyValidVersionWinsOverTheFutureVersion() {
     var result=resolve(List.of(row("A","12","2026-10-08","2027-01-01"),row("A","9","2026-11-01","2027-11-01")));
     assertThat(result.unitPrice()).isEqualByComparingTo("12");
-    verifyNoInteractions(ratios);
+    verify(ratios).selectList(any(Wrapper.class));
   }
   @Test void latestExpiredPriceIsStillEligible() {
     var result=resolve(List.of(row("A","12","2026-01-01","2026-10-08")));
@@ -84,7 +84,7 @@ class FixedPriceResolverTest {
     assertThat(result.evidence().supplierCode()).isEqualTo("S001296");
     assertThat(result.evidence().effectiveTo()).isEqualTo(LocalDate.parse("2026-10-31"));
     assertThat(context.getSupplierPriceReviewContext().reviews()).isEmpty();
-    verifyNoInteractions(ratios,decisions);
+    verify(ratios).selectList(any(Wrapper.class)); verifyNoInteractions(decisions);
   }
   @Test void oneSupplierUsesLatestStartNotHighestPrice() {
     var result=resolve(List.of(row("A","64.7","2026-04-01","2027-03-31"),row("A","62.9","2026-10-01","2027-09-30")));
@@ -108,7 +108,7 @@ class FixedPriceResolverTest {
   }
   @Test void supplierWithoutValidPriceCannotBeChosen() {
     when(ratios.selectList(any(Wrapper.class))).thenReturn(List.of(ratio("A","0.1"),ratio("B","0.2"),ratio("C","0.7")));
-    assertThat(resolve(twoPrices()).unitPrice()).isEqualByComparingTo("18");
+    assertThat(resolve(twoPrices()).unitPrice()).isNull();
   }
   @Test void missingRatiosRequireReviewAndNoWrites() {
     assertThat(resolve(twoPrices()).failureCode()).isEqualTo(SupplierPriceSelectionService.REVIEW_REQUIRED);

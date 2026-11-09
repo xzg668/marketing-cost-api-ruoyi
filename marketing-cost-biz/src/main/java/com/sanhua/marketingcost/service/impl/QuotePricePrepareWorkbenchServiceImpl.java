@@ -71,6 +71,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   private final QuoteFinanceFactorReader financeFactors;
   private final PricePrepareQueryService pricePrepareQueryService;
   private final PricePrepareReadinessService pricePrepareReadinessService;
+  private final com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials reviewMaterials;
 
   public QuotePricePrepareWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -85,7 +86,9 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService
           technicalCorrections,
       PricePrepareInputRevisionService inputRevisions,
-      QuotePricingPeriod pricingPeriods) {
+      QuotePricingPeriod pricingPeriods,
+      com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials reviewMaterials) {
+    this.reviewMaterials = reviewMaterials;
     this.pricingPeriods = pricingPeriods;
     this.inputRevisions = inputRevisions;
     this.technicalCorrections = technicalCorrections;
@@ -231,6 +234,8 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     populateScenarioComparison(response, scope, new PricePrepareBatchPageResponse(0, List.of()));
     response.setSupplierPriceReviews(
         calculation == null ? List.of() : calculation.getSupplierPriceReviews());
+    reviewMaterials.restoreHighest(response, items);
+    response.setSupplierPriceReviewMaterials(reviewMaterials.describe(response.getSupplierPriceReviews()));
     com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.enrich(response);
     return response;
   }
@@ -401,6 +406,8 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.enrich(response);
     response.setOaScenario(oaScenario);
     response.setFinanceScenario(financeScenario);
+    reviewMaterials.restoreHighest(response);
+    response.setSupplierPriceReviewMaterials(reviewMaterials.describe(response.getSupplierPriceReviews()));
     if (isCompletedScenarioPair(pair)) {
       FinancePricePrepareGenerateResult prepared =
           financePricePrepareService.loadPreparedFromOa(oaBatch.getPrepareNo());

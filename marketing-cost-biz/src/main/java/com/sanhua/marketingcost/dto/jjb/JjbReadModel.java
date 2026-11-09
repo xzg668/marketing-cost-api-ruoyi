@@ -33,13 +33,15 @@ public record JjbReadModel(Identity identity, Header header, List<Row> rows,
   /** One row's identity/evidence survives layout changes and is shared with the trace drawer. */
   @Builder(toBuilder = true)
   public record Row(String key, String section, String kind, String code, String name,
-      String drawingNo, String unitPrice, String quantity, String amount, String grossWeight,
+      String drawingNo, String unitPrice, String quantity, String unit, String amount, String grossWeight,
       String netWeight, String rawUnitPrice, String scrapUnitPrice, String material,
       String shape, String priceSource, String remark, String rate, String baseAmount,
       String feeState, List<Source> sources, List<Long> partItemIds, List<Long> costItemIds,
       List<Long> monthlyPriceIds, List<String> paths, String householdRate,
-      String salesRate, String coefficient, Map<String,String> householdCalculation) {
+      String salesRate, String coefficient, Map<String,String> householdCalculation,
+      List<Map<String,String>> manufacturing) {
     public Row {
+      manufacturing=manufacturing==null?List.of():manufacturing.stream().map(Map::copyOf).toList();
       householdCalculation=householdCalculation==null?Map.of():Map.copyOf(householdCalculation);
       sources = sources == null ? List.of() : List.copyOf(sources);
       partItemIds = partItemIds == null ? List.of() : List.copyOf(partItemIds);
@@ -53,5 +55,7 @@ public record JjbReadModel(Identity identity, Header header, List<Row> rows,
       String currency, String taxBasis, String price, String householdRate, String evidenceHash,
       List<String> applicableOrganizations, List<String> consumerOrganizations,
       String applicability, String sourceType, String sourceId, String sourceVersion,
-      String sourceBatch, String supplier) {}
+      String sourceBatch, String supplier, Map<String,String> sourceDetails) {
+    public MonthlyPrice {sourceDetails=sourceDetails==null?Map.of():Map.copyOf(sourceDetails);}
+  }
 }

@@ -83,6 +83,7 @@ abstract class MonthlyRepriceCostingFixture extends OriginalPricingIntegrationTe
       node.setParentNodeKey(raw.getLevel() == 0 ? null : keys.get(raw.getPath().substring(0, slash + 1)));
       node.setNodeLevel(raw.getLevel()); node.setSortSeq(raw.getSortSeq()); node.setNodePath(raw.getPath());
       node.setMaterialCode(raw.getMaterialCode()); node.setMaterialName(raw.getMaterialName());
+      node.setMaterialSpec(raw.getMaterialSpec());
       node.setMaterialUnit(units.getOrDefault(raw.getMaterialCode(), "件"));
       node.setQtyPerParent(raw.getQtyPerParent()); node.setQtyPerTop(raw.getQtyPerTop());
       node.setEffectiveMaterialShape(com.sanhua.marketingcost.enums.QuoteMaterialShape.fromU9(raw.getShapeAttr()).name());

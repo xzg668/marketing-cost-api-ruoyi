@@ -40,7 +40,7 @@ class MonthlyInquiryPriceIntegrationTest {
         List.of(
             "V342__monthly_material_price_storage.sql",
             "V344__monthly_material_price_single_table.sql",
-            "V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")) {
+            "V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")) {
       db.mysql.copyFileToContainer(
           MountableFile.forClasspathResource("db/" + script), "/tmp/inquiry-monthly.sql");
       var result =
@@ -109,6 +109,12 @@ class MonthlyInquiryPriceIntegrationTest {
         BigDecimal.ONE);
   }
 
+  static MonthlyPriceRequest specification(String sourceCode, String spec, String org, String unit) {
+    return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(context().month(), "COMMERCIAL",
+        sourceCode, spec, unit, "CNY", TaxBasis.EXCLUDED, null, true), org,
+        NonCuConditions.empty(), BigDecimal.ONE);
+  }
+
   static String code() {
     return "INQ-" + UUID.randomUUID().toString().substring(0, 12);
   }
@@ -162,7 +168,7 @@ class MonthlyInquiryPriceIntegrationTest {
   }
 
   @Test
-  void exactMaterialCodeWinsThenModelFallbackCanMatchRowsWithAnotherMaterialCode()
+  void codeMatchesWithoutDisplayRestrictionsAndOnlyAnAbsentBomCodeUsesSpecification()
       throws Exception {
     String material = code();
     material(material, "COMMERCIAL", "MODEL-X", "SPEC-Y");
@@ -172,18 +178,22 @@ class MonthlyInquiryPriceIntegrationTest {
     assertThat(selected(request(material, "210", "只")).fact().price()).isEqualByComparingTo("10");
     String other = code();
     material(other, "COMMERCIAL", "MODEL-X", "");
-    var fallback = selected(request(other, "210", "KG"));
+    var noSource = request(other, "210", "KG");
+    assertThat(source.read(context(), Set.of(noSource)).problems().get(noSource).reason())
+        .as("有料号不能回退到主数据型号或规格")
+        .isEqualTo(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+    var fallback = selected(specification("OTHER", "MODEL-X", "210", "KG"));
     assertThat(fallback.fact().price()).isEqualByComparingTo("20");
-    assertThat(fallback.fact().evidence().json()).contains("MODEL_OR_SPECIFICATION");
+    assertThat(fallback.fact().evidence().json()).contains("SPECIFICATION");
   }
 
   @Test
-  void multipleActualMaterialsShareAnInquiryPoolButChooseTheirOwnSupplierRatios() throws Exception {
+  void eachCodedMaterialUsesItsOwnSourcesAndSupplierRatios() throws Exception {
     String first = code(), second = code();
     material(first, "COMMERCIAL", "型号（X）", "");
     material(second, "PLATE", "型号(X)", "");
     db.importFile(
-        "2026-10", fixedRows(fixed("", "型号(X)", "浙江东信", "10"), fixed("", "型号(X)", "另一供方", "20")));
+        "2026-10", fixedRows(fixed(first, "来源规格一", "浙江东信", "10"), fixed(first, "来源规格二", "另一供方", "20"), fixed(second, "来源规格三", "浙江东信", "10"), fixed(second, "来源规格四", "另一供方", "20")));
     ratio(first, "S001069", "浙江东信机械有限公司", "0.8");
     ratio(first, "S2", "另一供方有限公司", "0.2");
     ratio(second, "S001069", "浙江东信机械有限公司", "0.1");
@@ -216,7 +226,7 @@ class MonthlyInquiryPriceIntegrationTest {
     String code = code();
     material(code, "COMMERCIAL", "", "SPEC-ONLY");
     db.importFile("2026-10", fixedRows(fixed("", "SPEC-ONLY", "", "0")));
-    var result = selected(request(code, "210", "千克"));
+    var result = selected(specification("", "SPEC-ONLY", "210", "千克"));
     assertThat(result.fact().price()).isZero();
     assertThat(result.fact().evidence().json()).contains("EMPTY", "SINGLE");
   }
@@ -240,13 +250,13 @@ class MonthlyInquiryPriceIntegrationTest {
   }
 
   @Test
-  void sameModelIsReadFromTheActualBomOrganization() throws Exception {
+  void noCodeUsesTheActualBomSpecificationWithoutReadingOrganizationMasterModels() throws Exception {
     String code = code();
     material(code, "COMMERCIAL", "商用型号", "");
     material(code, "PLATE", "板换型号", "");
     db.importFile("2026-10", fixedRows(fixed("", "商用型号", "", "10"), fixed("", "板换型号", "", "20")));
-    assertThat(selected(request(code, "210", "只")).fact().price()).isEqualByComparingTo("10");
-    assertThat(selected(request(code, "220", "只")).fact().price()).isEqualByComparingTo("20");
+    assertThat(selected(specification("", "商用型号", "210", "只")).fact().price()).isEqualByComparingTo("10");
+    assertThat(selected(specification("", "板换型号", "220", "只")).fact().price()).isEqualByComparingTo("20");
   }
 
   @Test
@@ -285,7 +295,7 @@ class MonthlyInquiryPriceIntegrationTest {
     String code = code();
     material(code, "PLATE", "SBV-B10-001300(Q259A)", "");
     db.importFile("2026-10", InquiryWorkbookParserTest.original());
-    var request = request(code, "220", "件");
+    var request = specification("", "SBV-B10-001300(Q259A)", "220", "件");
     var selected = selected(request);
     assertThat(selected.fact().evidence().json()).contains("CU_90000", "financeMonth");
     var stored = new Selection(999L, selected.applicability(), selected.fact());

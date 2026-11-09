@@ -175,7 +175,7 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
     dto.setBomRowId(item.getBomRowId());
     dto.setOaNo(firstText(item.getOaNo(), context.getOaNo()));
     dto.setProductCode(firstText(item.getTopProductCode(), context.getProductCode()));
-    dto.setPartCode(materialCode);
+    dto.setPartCode(materialCode == null ? "" : materialCode);
     dto.setPartName(firstText(
         item.getMaterialName(),
         bomRow == null ? null : bomRow.getMaterialName(),

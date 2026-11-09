@@ -75,14 +75,21 @@ public class SupplierPreferredPriceSelector {
       return selection(
           first, "价格源无供应商维度，按价格版本规则取价", 0, null, null, null, "NO_SUPPLIER_DIMENSION", "", "");
     }
-    if (candidateSupplierCount == 1) {
-      return selection(first, "单一供应商价格，直接取该供应商最新已生效价格", 1,
-          supplierNameGetter.apply(first), supplierCodeGetter.apply(first), null, "SINGLE_SUPPLIER", "", "");
-    }
     SupplierSupplyRatioResolveResult mainSupplier = preparedSupplier != null ? preparedSupplier
         : resolveService.resolve(businessUnitType, materialCode, materialName, specModel, pricingDate);
     var relations = mainSupplier == null ? List.<com.sanhua.marketingcost.entity.SupplierSupplyRatio>of()
         : mainSupplier.getCurrentRelations();
+    boolean primarySelected = !SupplierRatioPricePolicy.primarySuppliers(relations).isEmpty();
+    if (primarySelected) {
+      candidates=SupplierRatioPricePolicy.forPrimarySupplier(candidates,relations,supplierCodeGetter,supplierNameGetter);
+      if(candidates.isEmpty()) return selection(null,"主供方在当前来源无价格，继续查找后续来源",0,null,null,null,
+          "NONE",PRIMARY_SUPPLIER_PRICE_MISSING,"主供方在当前来源无价格，继续查找后续来源");
+    }
+    // Preserve the existing unique-supplier policy when ratios do not establish another main supplier.
+    if (!primarySelected && candidateSupplierCount == 1) {
+      return selection(first,"单一供应商价格，直接取该供应商最新已生效价格",1,
+          supplierNameGetter.apply(first),supplierCodeGetter.apply(first),null,"SINGLE_SUPPLIER","","");
+    }
     candidates = candidates.stream().filter(candidate -> !SupplierRatioPricePolicy.withdrawn(
         supplierCodeGetter.apply(candidate), supplierNameGetter.apply(candidate), relations)).toList();
     if (candidates.isEmpty()) {
@@ -91,6 +98,13 @@ public class SupplierPreferredPriceSelector {
     }
     first = candidates.get(0);
     candidateSupplierCount = distinctSupplierCount(candidates, supplierNameGetter, supplierCodeGetter);
+    if (primarySelected && mainSupplier.isMatched()) {
+      for (T candidate : candidates) {
+        String matchMode=supplierMatchMode(candidate,mainSupplier,supplierNameGetter,supplierCodeGetter);
+        if (matchMode!=null) return selection(candidate,"按主供应商供货比例匹配价格",candidateSupplierCount,
+            mainSupplier.getSupplierName(),mainSupplier.getSupplierCode(),mainSupplier.getId(),matchMode,"","",mainSupplier.getSupplyRatio());
+      }
+    }
     if (candidateSupplierCount == 1) {
       T onlySupplierRow =
           candidates.stream()

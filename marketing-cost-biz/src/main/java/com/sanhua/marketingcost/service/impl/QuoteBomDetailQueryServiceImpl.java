@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.security.QuoteVisibilityContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -105,6 +106,8 @@ public class QuoteBomDetailQueryServiceImpl implements QuoteBomDetailQueryServic
       Integer pageSize) {
     QueryWrapper<BomCostingRow> query =
         new QueryWrapper<BomCostingRow>().eq("calculation_scope", "")
+            .apply(QuoteVisibilityContext.restricted(), "EXISTS (SELECT 1 FROM oa_form qvf WHERE CAST(qvf.oa_no AS BINARY)=CAST(lp_bom_costing_row.oa_no AS BINARY) AND qvf.deleted=0 AND "
+                + QuoteVisibilityContext.formCondition("qvf") + ")")
             .select(costingRowSelectColumns().toArray(String[]::new))
             .eq(StringUtils.hasText(oaNo), "oa_no", trimToNull(oaNo))
             .eq(StringUtils.hasText(topProductCode), "top_product_code", trimToNull(topProductCode))
@@ -144,6 +147,8 @@ public class QuoteBomDetailQueryServiceImpl implements QuoteBomDetailQueryServic
             : "0 AS ruleHitCount";
     QueryWrapper<BomCostingRow> query =
         new QueryWrapper<BomCostingRow>().eq("calculation_scope", "")
+            .apply(QuoteVisibilityContext.restricted(), "EXISTS (SELECT 1 FROM oa_form qvf WHERE CAST(qvf.oa_no AS BINARY)=CAST(lp_bom_costing_row.oa_no AS BINARY) AND qvf.deleted=0 AND "
+                + QuoteVisibilityContext.formCondition("qvf") + ")")
             .select(
                 "oa_no AS oaNo",
                 "top_product_code AS topProductCode",

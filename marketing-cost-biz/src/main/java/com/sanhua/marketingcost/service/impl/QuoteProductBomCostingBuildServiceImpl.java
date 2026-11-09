@@ -289,7 +289,7 @@ public class QuoteProductBomCostingBuildServiceImpl
               node.getSortSeq(),
               node.getNodeLevel(),
               parent == null ? null : parent.getMaterialCode(),
-              node.getMaterialCode(),
+              java.util.Objects.toString(node.getMaterialCode(), ""),
               node.getMaterialName(),
               node.getMaterialSpec(),
               settlementShapeLabel(node),
@@ -376,8 +376,8 @@ public class QuoteProductBomCostingBuildServiceImpl
       }
       if (trimToNull(node.getNodeKey()) == null
           || trimToNull(node.getNodePath()) == null
-          || trimToNull(node.getMaterialCode()) == null) {
-        throw new QuoteIngestException("最终有效BOM存在缺少节点键、路径或料号的记录");
+          || (trimToNull(node.getMaterialCode()) == null && trimToNull(node.getMaterialSpec()) == null)) {
+        throw new QuoteIngestException("最终有效BOM存在缺少节点键、路径或料号/规格的记录");
       }
     }
   }
@@ -410,7 +410,7 @@ public class QuoteProductBomCostingBuildServiceImpl
       Map<String, String> frozenUnits, LocalDateTime priceAsOfTime) {
     List<PreparedLine> lines =
         inputLines.stream()
-            .filter(line -> trimToNull(line.materialCode()) != null)
+            .filter(line -> trimToNull(line.materialCode()) != null || trimToNull(line.materialSpec()) != null)
             .sorted(Comparator.comparing(PreparedLine::path))
             .toList();
     Map<String, List<PreparedLine>> childrenByParentPath = new HashMap<>();

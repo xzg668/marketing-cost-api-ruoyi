@@ -163,7 +163,7 @@ public class MonthlyCostVersionService {
           continue;
         }
         for (var row : List.of(finance, customer)) {
-          if (!use.request().family().materialCode().equals(row.getMaterialCode())
+          if (!use.request().matchesBomMaterialCode(row.getMaterialCode())
               || !use.request().priceOrgCode().equals(row.getPriceOrgCode())
               || row.getQuantity() == null || row.getQuantity().abs().compareTo(use.cumulativeQuantity()) != 0)
             throw new IllegalArgumentException("Preparation identity/quantity differs from adopted use");
@@ -313,7 +313,7 @@ public class MonthlyCostVersionService {
       var part = part(version, preparation, line.materialCode(), line.quantity(), line.financeAmount());
       part.setUnitPrice(preparation.getUnitPrice());
       var selected = line.monthlyPriceIds().stream().map(adoptedById::get)
-          .filter(Objects::nonNull).filter(value -> value.request().family().materialCode().equals(line.materialCode())).findFirst();
+          .filter(Objects::nonNull).filter(value -> value.request().matchesBomMaterialCode(line.materialCode())).findFirst();
       rows.add(new MonthlyCostVersionMapper.Part(part,selected.map(value->value.selection().monthlyPriceId()).orElse(null),
           selected.isPresent()?PricingType.NORMAL.name():null));
     }

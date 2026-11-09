@@ -452,7 +452,7 @@ class FinanceFactorPublicationIntegrationTest {
     var jdbc = new org.springframework.jdbc.core.JdbcTemplate(transactions.getDataSource());
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");
     for (String resource : List.of("monthly-pricing/pre-v342-schema.sql", "db/V342__monthly_material_price_storage.sql",
-        "db/V344__monthly_material_price_single_table.sql", "db/V354__invoice_price_import.sql", "db/V360__finance_correction_monthly_price.sql","db/V364__household_inquiry_header_schema.sql","db/V365__household_monthly_source_revision.sql","db/V366__household_model_specification_match.sql")) {
+        "db/V344__monthly_material_price_single_table.sql", "db/V354__invoice_price_import.sql", "db/V360__finance_correction_monthly_price.sql","db/V364__household_inquiry_header_schema.sql","db/V365__household_monthly_source_revision.sql","db/V372__monthly_price_disable.sql","db/V366__household_model_specification_match.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource(resource), "/tmp/monthly-correction.sql");
       script("/tmp/monthly-correction.sql");
     }

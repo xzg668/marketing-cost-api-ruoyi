@@ -152,7 +152,7 @@ public final class MonthlyBomPricePreparation {
       String path = MonthlyBomPricingScope.pathKey(row.getPath());
       if (expected.containsKey(path) || !directRows.contains(path)) continue;
       var input = inputs.get(path);
-      if (input != null && input.request().family().materialCode().equals(row.getMaterialCode())
+      if (input != null && input.request().matchesBomMaterialCode(row.getMaterialCode())
           && input.request().priceOrgCode().equals(row.getPriceOrgCode())
           && row.getQtyPerTop() != null && row.getQtyPerTop().signum() != 0) {
         // Byproduct rows carry a cost sign; adoption records the positive physical price usage.

@@ -19,7 +19,9 @@ import org.springframework.stereotype.Component;
 @Component
 public final class MonthlyOdsPriceSource {
   public record Source(OdsMaterialPriceRow selected,List<OdsMaterialPriceRow> candidates,
-      List<SupplierSupplyRatio> ratios,String selectionRule,List<QuantityInterval> annualDecisionRegions) {}
+      List<SupplierSupplyRatio> ratios,String selectionRule,List<QuantityInterval> annualDecisionRegions,
+      OrderSelection orderSelection) {}
+  public record OrderSelection(String rule,String documentNumber,LocalDate documentDate) {}
   public record Basis(String unit,String currency,TaxBasis taxBasis,String priceColumn,String conversion) {}
   public record Snapshot(int snapshotSchema,String sourceKind,Source source,Basis financialBasis) {}
   private record Cell(QuantityInterval annual,BigDecimal probe) {}
@@ -44,7 +46,7 @@ public final class MonthlyOdsPriceSource {
         throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"ODS取价范围与报价不一致");
       if(!"COMMERCIAL".equals(context.businessUnitType())) continue;
       groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>())
-          .computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+          .computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     for(var group:groups.entrySet()) {
       String company=switch(group.getKey()) { case "210" -> "浙江三花商用制冷有限公司";
@@ -84,27 +86,29 @@ public final class MonthlyOdsPriceSource {
 
   private List<OdsMaterialPriceRow> applicable(MonthlyPriceRequest request,List<OdsMaterialPriceRow> raw) {
     String specified=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
-    return raw.stream().filter(row->request.family().unit().equals(row.getUnit()==null?null:row.getUnit().strip()))
-        .filter(row->request.family().specification()==null || request.family().specification().equals(row.getSpec()==null?null:row.getSpec().strip()))
+    return raw.stream()
+        .filter(row->request.matchesSpecification(row.getSpec()))
         .filter(row->specified==null || specified.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())))
         .sorted(Comparator.comparing(OdsMaterialPriceRow::getId)).toList();
   }
 
   private Candidate order(Context context,MonthlyPriceRequest request,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,SupplierPriceDecision decision,Map<MonthlyPriceRequest,Problem> problems) {
+    raw=SupplierRatioPricePolicy.forPrimarySupplier(raw,ratios,OdsMaterialPriceRow::getSupplierCode,OdsMaterialPriceRow::getSupplierName);
     raw=SupplyPriceDatePolicy.preferCurrent(raw,context.priceAsOfTime().toLocalDate(),
         row->date(row.getEffDate()),row->date(row.getExpDate()));
     var versions=OdsOrderPriceVersions.latestPerSupplier(raw.stream().map(row->
-        new OdsOrderPriceVersions.Price(row.getSupplierCode(),date(row.getEffDate()),date(row.getExpDate()),row.getPrice())).toList());
+        new OdsOrderPriceVersions.Price(row.getSupplierCode(),date(row.getEffDate()),date(row.getExpDate()),row.getPrice(),row.getSource())).toList());
     var active=new TreeMap<String,OdsMaterialPriceRow>();
     for(var row:raw) {
       var winner=versions.get(row.getSupplierCode().strip());
       if(Objects.equals(winner.effectiveDate(),date(row.getEffDate()))
-          && Objects.equals(winner.expiryDate(),date(row.getExpDate())) && winner.price().compareTo(row.getPrice())==0)
+          && Objects.equals(winner.expiryDate(),date(row.getExpDate())) && winner.price().compareTo(row.getPrice())==0
+          && Objects.equals(winner.source(),row.getSource()==null?null:row.getSource().strip()))
         active.putIfAbsent(winner.supplierCode(),row);
     }
     var chosen=choose(context,request,active,ratios,decision,false);
-    if(chosen.candidate()==null){review(context,request,chosen,null);problems.put(request,new Problem(Failure.WAITING,chosen.message()));return null;}
+    if(chosen.candidate()==null){review(context,request,chosen,null);problems.put(request,new Problem(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(chosen.rule())?Failure.MISSING:Failure.WAITING,chosen.message()));return null;}
     var selected=active.get(chosen.candidate().supplierCode());
     var coverage=MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of(request.priceOrgCode()),QuantityInterval.all(),ConditionDomain.any()));
     var candidate=candidate(request,"ODS_ORDER",selected,raw,ratios,chosen.rule(),List.of(),coverage);
@@ -113,6 +117,7 @@ public final class MonthlyOdsPriceSource {
 
   private Candidate tier(Context context,MonthlyPriceRequest request,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,SupplierPriceDecision approval,Map<MonthlyPriceRequest,Problem> problems) {
+    raw=SupplierRatioPricePolicy.forPrimarySupplier(raw,ratios,OdsMaterialPriceRow::getSupplierCode,OdsMaterialPriceRow::getSupplierName);
     var versions=OdsTierPriceVersions.latestPerSupplier(raw,context.priceAsOfTime().toLocalDate());
     if(versions.isEmpty())return null; // No applicable tier rows: annual usage cannot block a later source.
     var usage=context.annualUsage();
@@ -140,7 +145,7 @@ public final class MonthlyOdsPriceSource {
       if(active.isEmpty()){decisions.add(new Decision(cell,null,null,new Problem(Failure.MISSING,"数量未命中阶梯")));continue;}
       var chosen=choose(context,request,active,ratios,approval,true);
       decisions.add(new Decision(cell,chosen.candidate()==null?null:active.get(chosen.candidate().supplierCode()),chosen,
-          chosen.candidate()==null?new Problem(Failure.WAITING,chosen.message()):null));
+          chosen.candidate()==null?new Problem(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(chosen.rule())?Failure.MISSING:Failure.WAITING,chosen.message()):null));
     }
     var current=decisions.stream().filter(d->d.cell().annual().contains(demand.annualPieces())).findFirst().orElseThrow();
     if(current.problem()!=null) {
@@ -161,11 +166,13 @@ public final class MonthlyOdsPriceSource {
       String key=tier?entry.getKey()+":"+row.getJietiDown()+":"+row.getJietiUp():entry.getKey();
       return new SupplierPriceCandidate(key,entry.getKey(),row.getSupplierName(),row.getPrice(),date(row.getEffDate()),date(row.getExpDate()));
     }).toList();
-    return suppliers.selectPrepared(scope(context,request.priceOrgCode(),request.family().materialCode(),tier),candidates,ratios,decision,context.supplierReviews().packagingHighestFallback());
+    return suppliers.selectPrepared(scope(context,request.priceOrgCode(),request.materialCode(),tier),candidates,ratios,decision,context.supplierReviews().packagingHighestFallback());
   }
   private Candidate candidate(MonthlyPriceRequest request,String kind,OdsMaterialPriceRow chosen,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,String rule,List<QuantityInterval> regions,MonthlyPriceApplicability coverage) {
-    var snapshot=new Snapshot(1,kind,new Source(chosen,raw,ratios,rule,regions),
+    var approval="ODS_ORDER".equals(kind)?OdsOrderPriceVersions.approval(chosen.getSource()):null;
+    var orderSelection=approval==null?null:new OrderSelection("LATEST_SOURCE_APPROVAL",approval.documentNumber(),approval.documentDate());
+    var snapshot=new Snapshot(1,kind,new Source(chosen,raw,ratios,rule,regions,orderSelection),
         new Basis(request.family().unit(),"CNY",TaxBasis.EXCLUDED,"price","IDENTITY"));
     var fact=PriceFact.normal(chosen.getPrice(),SourceEvidence.ofJson(codec.unwrap(codec.encode(snapshot))),Set.of());
     return new Candidate(new Selection(null,coverage,fact),null);

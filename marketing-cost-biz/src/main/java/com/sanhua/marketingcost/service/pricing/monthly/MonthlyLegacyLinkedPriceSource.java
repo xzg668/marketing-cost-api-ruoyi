@@ -109,7 +109,7 @@ public final class MonthlyLegacyLinkedPriceSource {
         String key=request.priceOrgCode()+":"+condition(request);
         var financial=financialCache.computeIfAbsent(key,ignored->captureFinancial(context,request));
         if(financial.failure()!=null)throw financial.failure();
-        factors=new PriceFactorContext(request.family().materialCode(),
+        factors=new PriceFactorContext(request.materialCode(),
             new PriceMonthSelection(context.month().toString(),financial.snapshot().scope().priceMonth()),financial.snapshot(),null);
         var board=request.conditions().boardTerms();
         if("220".equals(request.priceOrgCode()) && board!=null)
@@ -128,12 +128,12 @@ public final class MonthlyLegacyLinkedPriceSource {
 
     var mappings=new LinkedHashMap<MonthlyPriceRequest,List<MaterialScrapRef>>();
     var scrapCodes=new TreeSet<String>();
-    requirements.forEach((request,needs)->{if(needs.scrapRequired() && captured.containsKey(request))scrapCodes.add(request.family().materialCode());});
+    requirements.forEach((request,needs)->{if(needs.scrapRequired() && captured.containsKey(request))scrapCodes.add(request.materialCode());});
     var references=new HashMap<String,List<MaterialScrapRef>>();
     for(var batch:batches(scrapCodes))inputs.scrapReferences(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),batch)
         .forEach(row->references.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row.reference()));
     requirements.forEach((request,needs)->{if(needs.scrapRequired() && captured.containsKey(request))
-      mappings.put(request,references.getOrDefault(request.family().materialCode(),List.of()));});
+      mappings.put(request,references.getOrDefault(request.materialCode(),List.of()));});
     var scraps=scrapDependencies.resolve(context,mappings,dependencies);
     problems.putAll(scraps.problems());
     var calculated=new LinkedHashMap<MonthlyPriceRequest,Calculated>();
@@ -196,7 +196,7 @@ public final class MonthlyLegacyLinkedPriceSource {
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()))
         throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Linked formula source scope differs from request");
       organizations.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>())
-          .computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+          .computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     var result=new LinkedHashMap<MonthlyPriceRequest,Selected>();
     for(var organization:organizations.entrySet()) {
@@ -216,8 +216,8 @@ public final class MonthlyLegacyLinkedPriceSource {
           var candidates=heads(request,byCode.getOrDefault(code,List.of()));
           if(candidates.isEmpty()){problems.put(request,new Problem(Failure.MISSING,MaterialPriceMonthSelector.missingMessage(code,request.priceOrgCode(),month)));continue;}
           long original=candidates.stream().filter(row->OriginalLinkedRuleSnapshot.VERSION.equals(row.getExpressionVersion())).count();
-          if(original==candidates.size()){problems.put(request,new Problem(Failure.MISSING,"原稿联动由原稿适配器处理"));continue;}
-          if(original>0 || candidates.stream().anyMatch(row->!"LEGACY".equals(row.getExpressionVersion())))
+          if(original>0){problems.put(request,new Problem(Failure.MISSING,"原稿联动由原稿适配器处理"));continue;}
+          if(candidates.stream().anyMatch(row->!"LEGACY".equals(row.getExpressionVersion())))
             throw new IllegalArgumentException("同一有效物料范围混有不同表达式契约");
           if(!"CNY".equals(request.family().currency()) || request.family().taxBasis()!=TaxBasis.EXCLUDED)
             throw new IllegalArgumentException("旧联动核算价要求CNY及既有不含税成本口径");
@@ -225,7 +225,7 @@ public final class MonthlyLegacyLinkedPriceSource {
           var chosen=suppliers.select(candidates,context.businessUnitType(),code,candidates.getFirst().getMaterialName(),
               candidates.getFirst().getSpecModel(),context.priceAsOfTime().toLocalDate(),PriceLinkedItem::getSupplierName,
               PriceLinkedItem::getSupplierCode,primary.getOrDefault(ratioCode,SupplierSupplyRatioResolveResult.miss("没有有效主供应商")));
-          if(chosen.failed() || chosen.row()==null){problems.put(request,new Problem(Failure.WAITING,chosen.failureMessage()));continue;}
+          if(chosen.failed() || chosen.row()==null){problems.put(request,new Problem(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING.equals(chosen.failureCode())?Failure.MISSING:Failure.WAITING,chosen.failureMessage()));continue;}
           if(candidates.stream().filter(row->chosen.matchesSupplier(row.getSupplierName(),row.getSupplierCode())).count()>1)
             throw new IllegalArgumentException("同供应商存在多个适用联动规则身份，须明确规格和单位");
           var proof=new SupplierProof(chosen.matchMode(),chosen.candidateSupplierCount(),chosen.mainSupplierCode(),chosen.mainSupplierName(),chosen.supplyRatioRecordId(),chosen.supplyRatio(),chosen.traceMessage());
@@ -239,12 +239,12 @@ public final class MonthlyLegacyLinkedPriceSource {
   private List<PriceLinkedItem> heads(MonthlyPriceRequest request,List<PriceLinkedItem> rows) {
     String explicit=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
     return LinkedPriceRuleVersions.current(rows.stream()
-        .filter(row->request.family().unit().equals(row.getUnit()) && (request.family().specification()==null || request.family().specification().equals(row.getSpecModel())))
+        .filter(row->request.matchesSpecification(row.getSpecModel()))
         .filter(row->explicit==null || explicit.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()))).toList());
   }
 
   private Financial captureFinancial(Context context,MonthlyPriceRequest request) {
-    try{return new Financial(finance.readEffective(new FinanceFactorImportContext(context.businessUnitType(),request.priceOrgCode(),context.month().toString(),null,null),condition(request),request.family().materialCode()).financial(),null);}
+    try{return new Financial(finance.readEffective(new FinanceFactorImportContext(context.businessUnitType(),request.priceOrgCode(),context.month().toString(),null,null),condition(request),request.materialCode()).financial(),null);}
     catch(IllegalArgumentException | IllegalStateException invalid){return new Financial(null,invalid);}
   }
   private static FactorPriceScope.Condition condition(MonthlyPriceRequest request) {

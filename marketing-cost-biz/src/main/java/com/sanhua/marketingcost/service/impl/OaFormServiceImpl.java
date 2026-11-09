@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.security.QuoteVisibilityContext;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.OaFormDetailDto;
 import com.sanhua.marketingcost.dto.OaFormDetailItemDto;
@@ -70,6 +71,7 @@ public class OaFormServiceImpl implements OaFormService {
     if (endDate != null) {
       query.le(OaForm::getApplyDate, endDate);
     }
+    query.apply(QuoteVisibilityContext.formCondition("oa_form"));
     query.orderByDesc(OaForm::getApplyDate).orderByDesc(OaForm::getId);
 
     return oaFormMapper.selectList(query).stream()

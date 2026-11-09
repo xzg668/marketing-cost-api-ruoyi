@@ -21,6 +21,21 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class CostInputRevisionServiceImplTest {
 
   @Test
+  void settlementRuleChangePreventsWholeQuoteFromReusingPreRuleCost() {
+    var jdbc = mock(JdbcTemplate.class);
+    var sourceRows = new java.util.ArrayList<>(checksums(100L).stream()
+        .filter(row -> !"test.lp_bom_settlement_rule".equals(row.get("Table"))).toList());
+    sourceRows.add(Map.of("Table", "test.lp_bom_settlement_rule", "Checksum", 1L));
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(sourceRows);
+    var service = new CostInputRevisionServiceImpl(jdbc, (form, item, month) ->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved-price-17", java.util.Set.of(), java.util.Set.of(), true));
+    var form = form(); var item = item(11L, "P-1");
+    var before = service.currentRevision(form, item, "2026-11");
+    sourceRows.set(sourceRows.size() - 1, Map.of("Table", "test.lp_bom_settlement_rule", "Checksum", 2L));
+    assertThat(service.currentRevision(form, item, "2026-11")).isNotEqualTo(before);
+  }
+
+  @Test
   void adoptedPriceRevisionIgnoresMutablePriceSourcesButStillTracksProductInputs() {
     var jdbc = mock(JdbcTemplate.class);
     when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));

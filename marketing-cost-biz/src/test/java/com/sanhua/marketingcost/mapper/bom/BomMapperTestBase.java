@@ -295,7 +295,10 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V360__finance_correction_monthly_price.sql", "V360");
       runScriptViaMysqlCli("/db/V364__household_inquiry_header_schema.sql", "V364");
       runScriptViaMysqlCli("/db/V365__household_monthly_source_revision.sql", "V365");
+      runScriptViaMysqlCli("/db/V372__monthly_price_disable.sql", "V372");
       runScriptViaMysqlCli("/db/V366__household_model_specification_match.sql", "V366");
+      runScriptViaMysqlCli("/db/V369__bom_specification_price_matching.sql", "V369");
+      runScriptViaMysqlCli("/db/V370__quote_visibility_account.sql", "V370");
       runScriptViaMysqlCli("/db/V356__inquiry_price_sources.sql", "V356");
       runScriptViaMysqlCli("/db/V359__monthly_price_folder_import.sql", "V359");
       // One-time initialization of this fresh disposable database, including monthly reverse reads.

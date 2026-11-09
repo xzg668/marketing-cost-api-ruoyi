@@ -5,6 +5,9 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioImportResponse;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioPageResponse;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioChangePage;
+import com.sanhua.marketingcost.dto.SupplierSupplyRatioUpdateRequest;
+import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioEditService;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioImportService;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioService;
@@ -14,6 +17,9 @@ import org.springframework.security.core.Authentication;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -26,12 +32,26 @@ public class SupplierSupplyRatioController {
 
   private final SupplierSupplyRatioService service;
   private final SupplierSupplyRatioImportService importService;
+  private final SupplierSupplyRatioEditService editService;
 
   public SupplierSupplyRatioController(
       SupplierSupplyRatioService service,
-      SupplierSupplyRatioImportService importService) {
+      SupplierSupplyRatioImportService importService, SupplierSupplyRatioEditService editService) {
     this.service = service;
     this.importService = importService;
+    this.editService = editService;
+  }
+
+  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:import')")
+  @PutMapping("/{id}")
+  public CommonResult<SupplierSupplyRatio> update(@PathVariable long id,
+      @RequestBody SupplierSupplyRatioUpdateRequest request, Authentication authentication) {
+    try {
+      return CommonResult.success(editService.update(id, request,
+          BusinessUnitContext.getCurrentBusinessUnitType(), currentUsername(authentication)));
+    } catch (IllegalArgumentException ex) {
+      return badRequest(ex);
+    }
   }
 
   @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:list')")

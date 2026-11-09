@@ -17,11 +17,13 @@ public class JjbReadService {
   private final JjbVersionAccess access;
   private final MonthlyCostVersionService versions;
   private final JjbProjection projection;
+  private final JjbMeasurementUnits units;
   private final com.sanhua.marketingcost.mapper.CostRunTraceSnapshotMapper traces;
   private final com.sanhua.marketingcost.mapper.PricePrepareItemMapper preparations;
   public JjbReadService(JjbVersionAccess access, MonthlyCostVersionService versions, JjbProjection projection,
       com.sanhua.marketingcost.mapper.CostRunTraceSnapshotMapper traces,
-      com.sanhua.marketingcost.mapper.PricePrepareItemMapper preparations) {
+      com.sanhua.marketingcost.mapper.PricePrepareItemMapper preparations, JjbMeasurementUnits units) {
+    this.units=units;
     this.preparations=preparations;
     this.traces=traces;
     this.access=access;this.versions=versions;this.projection=projection;
@@ -55,7 +57,7 @@ public class JjbReadService {
         frozenPreparations.add(row);
       }
     }
-    return new View(projection.project(saved,owned.form(),owned.item(),frozenDetails,frozenPreparations),
+    return new View(units.complete(projection.project(saved,owned.form(),owned.item(),frozenDetails,frozenPreparations),saved.parts()),
         saved.parts().stream().map(row->{var dto=new CostRunPartItemDto();BeanUtils.copyProperties(row,dto);dto.setPartQty(row.getQty());return dto;}).toList(),
         saved.costs().stream().map(row->{var dto=new CostRunCostItemDto();BeanUtils.copyProperties(row,dto);return dto;}).toList());
   }

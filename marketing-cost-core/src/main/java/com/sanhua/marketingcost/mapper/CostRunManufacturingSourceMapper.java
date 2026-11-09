@@ -43,7 +43,8 @@ public interface CostRunManufacturingSourceMapper {
       <foreach collection="reads" item="r" separator=" UNION ALL ">
         SELECT #{r.slot} AS read_slot,e.parent_code AS materialCode,NULL AS refMaterialCode,
           e.subject_code AS auxSubjectCode,e.subject_name AS auxSubjectName,NULL AS floatRate,
-          e.amount_yuan AS unitPrice,'DIRECT' AS amountCalcMode,NULL AS displayOrder,'CMS_EFFECTIVE' AS source
+          e.amount_yuan AS unitPrice,e.source_row_ids AS sourceRowIds,e.period AS sourcePeriod,e.source_table AS sourceTable,
+          'DIRECT' AS amountCalcMode,NULL AS displayOrder,'CMS_EFFECTIVE' AS source
         FROM cms_cost_source_effective e
         WHERE e.cost_year=#{r.scope.costYear} AND e.period &lt;= #{r.scope.pricingMonth}
           AND e.business_unit_type=#{r.scope.businessUnitType} AND e.source_type='AUX_SUBJECT'

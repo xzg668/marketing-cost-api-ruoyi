@@ -72,23 +72,17 @@ public final class MonthlyInquiryPriceSource {
     }
     List<InquirySupplierNames.Supplier> supplierCatalog = null;
     for (var group : organizations.entrySet()) {
-      var codes = group.getValue().stream().map(r -> r.family().materialCode()).distinct().toList();
+      var codes = group.getValue().stream().map(r -> r.materialCode()).distinct().toList();
       for (int start = 0; start < codes.size(); start += 256) {
         var chunk = new LinkedHashSet<>(codes.subList(start, Math.min(start + 256, codes.size())));
         var scoped =
             group.getValue().stream()
-                .filter(r -> chunk.contains(r.family().materialCode()))
+                .filter(r -> chunk.contains(r.materialCode()))
                 .toList();
-        var archive = archive(group.getKey(), chunk);
-        for (var request : scoped) {
-          String spec = InquiryNames.normalize(request.family().specification());
-          if (!spec.isBlank())
-            archive
-                .computeIfAbsent(request.family().materialCode(), ignored -> new LinkedHashSet<>())
-                .add(spec);
-        }
         var specifications = new TreeSet<String>();
-        archive.values().forEach(specifications::addAll);
+        scoped.stream().filter(request -> request.family().specificationOnly())
+            .map(request -> InquiryNames.normalize(request.family().specification()))
+            .filter(spec -> !spec.isBlank()).forEach(specifications::add);
         var keys = new TreeSet<String>();
         chunk.forEach(code -> keys.add(InquiryNames.normalize(code)));
         var found =
@@ -128,21 +122,20 @@ public final class MonthlyInquiryPriceSource {
         supplierInputs.decisions(scopeKeys).forEach(row -> decisions.put(row.getScopeKey(), row));
         for (var request : scoped) {
           try {
-            String material = InquiryNames.normalize(request.family().materialCode());
+            String material = InquiryNames.normalize(request.materialCode());
             var candidates =
                 found.stream()
                     .filter(
                         row -> material.equals(InquiryNames.normalize(row.rule().materialCode())))
                     .toList();
             String match = "MATERIAL_CODE";
-            var models = archive.getOrDefault(request.family().materialCode(), Set.of());
-            if (candidates.isEmpty()) {
-              match = "MODEL_OR_SPECIFICATION";
+            if (request.family().specificationOnly()) {
+              match = "SPECIFICATION";
               candidates =
                   found.stream()
                       .filter(
                           row ->
-                              models.contains(InquiryNames.normalize(row.rule().specification())))
+                              request.matchesSpecification(row.rule().specification()))
                       .toList();
             }
             if (candidates.isEmpty()
@@ -151,7 +144,7 @@ public final class MonthlyInquiryPriceSource {
               problems.put(request, new Problem(Failure.MISSING, "没有匹配的人民币不含税询价"));
               continue;
             }
-            var actualRatios = ratios.getOrDefault(request.family().materialCode(), List.of());
+            var actualRatios = ratios.getOrDefault(request.materialCode(), List.of());
             var materialSuppliers =
                 actualRatios.stream()
                     .map(
@@ -230,7 +223,7 @@ public final class MonthlyInquiryPriceSource {
                   .forOrganization(request.priceOrgCode())
                   .add(chosen.review());
             if (chosen.candidate() == null) {
-              problems.put(request, new Problem(Failure.WAITING, chosen.message()));
+              problems.put(request, new Problem(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(chosen.rule()) ? Failure.MISSING : Failure.WAITING, chosen.message()));
               continue;
             }
             var selected = prices.get(chosen.candidate().key());
@@ -244,7 +237,7 @@ public final class MonthlyInquiryPriceSource {
                         actualRatios,
                         chosen.rule(),
                         match,
-                        Set.copyOf(models)));
+                        request.family().specificationOnly() ? Set.of(request.family().specification()) : Set.of()));
             var fact =
                 PriceFact.normal(
                     selected.price(),
@@ -305,30 +298,6 @@ public final class MonthlyInquiryPriceSource {
     return result;
   }
 
-  private Map<String, Set<String>> archive(String org, Set<String> codes) {
-    var args = new ArrayList<Object>();
-    args.add(MaterialOrganization.fromPriceOrgCode(org).getCode());
-    args.addAll(codes);
-    var rows =
-        jdbc.queryForList(
-            "SELECT material_code,material_model,material_spec FROM lp_material_master_raw WHERE"
-                + " active_flag=1 AND organization_code=? AND material_code IN ("
-                + String.join(",", Collections.nCopies(codes.size(), "?"))
-                + ")",
-            args.toArray());
-    var result = new HashMap<String, Set<String>>();
-    for (var row : rows)
-      for (String field : List.of("material_model", "material_spec")) {
-        String value = InquiryNames.normalize(Objects.toString(row.get(field), ""));
-        if (!value.isBlank())
-          result
-              .computeIfAbsent(
-                  row.get("material_code").toString(), ignored -> new LinkedHashSet<>())
-              .add(value);
-      }
-    return result;
-  }
-
   private static SupplierPriceScope scope(Context context, MonthlyPriceRequest request) {
     return new SupplierPriceScope(
         context.businessUnitType(),
@@ -337,7 +306,7 @@ public final class MonthlyInquiryPriceSource {
         context.month().toString(),
         context.priceAsOfTime().toLocalDate(),
         request.priceOrgCode(),
-        request.family().materialCode(),
+        request.materialCode(),
         "INQUIRY");
   }
 }

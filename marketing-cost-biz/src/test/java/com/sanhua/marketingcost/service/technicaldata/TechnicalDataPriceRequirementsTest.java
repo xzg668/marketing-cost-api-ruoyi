@@ -242,6 +242,35 @@ class TechnicalDataPriceRequirementsTest {
     assertThat(service.check(task, product).issues()).contains("GLASS：来源状态异常");
   }
 
+  @Test void ordinaryPriceEntryOnlyRequestsMissingPricesWhenOtherMaterialsNeedSourceMaintenance() {
+    var prepared = bomGaps();
+    var missing = prepared.getGaps().getFirst();
+    var weight = new PricePrepareGap(); weight.setGapMaterialCode("WEIGHT");
+    weight.setGapType("MISSING_STRUCTURE"); weight.setMessage("缺净重");
+    var exited = new PricePrepareGap(); exited.setGapMaterialCode("EXITED");
+    exited.setGapType("PRICE_SOURCE_ERROR"); exited.setReasonCode("RAW_PRICE_ERROR");
+    exited.setMessage("供应商已明确退出供货");
+    prepared.setGaps(List.of(missing,weight,exited));
+    var result = service.check(task,product);
+    assertThat(result.issues()).isEmpty();
+    assertThat(result.items()).extracting(TechnicalDataPriceRequirement::materialNo).containsExactly("MISSING");
+    verify(prices,never()).calculateMaterialUnitPrice(eq("EXITED"),any(),any(),any(),any(),any(),any(),any());
+    assertThat(service.checkComposedBom(task,product).issues()).contains("缺净重");
+  }
+
+  @Test void manufacturingWrappedSupplierReviewIsAlsoExcludedFromTechnicalPriceEntry() {
+    var prepared = bomGaps();
+    var waiting = prepared.getGaps().get(1);
+    waiting.setGapType("PRICE_SOURCE_ERROR"); waiting.setReasonCode("RAW_PRICE_ERROR");
+    var scope = new com.sanhua.marketingcost.service.pricing.SupplierPriceScope(
+        "COMMERCIAL","OA",null,"2026-09",java.time.LocalDate.of(2026,9,1),"210","GLASS","FIXED");
+    prepared.setSupplierPriceReviews(List.of(new com.sanhua.marketingcost.service.pricing.SupplierPriceReview(
+        "scope","fingerprint",scope,List.of(),"PENDING",null,null,"财务确认")));
+    assertThat(TechnicalDataPriceRequirements.technicalGaps(prepared)).containsExactly(prepared.getGaps().getFirst());
+    assertThat(service.checkComposedBom(task,product).issues()).isEmpty();
+    verify(prices,never()).calculateMaterialUnitPrice(eq("GLASS"),any(),any(),any(),any(),any(),any(),any());
+  }
+
   @Test void composedBomUsesActualPricingGapsInsteadOfUnfilteredModuleMaterials() {
     var price = module("PRICE"); price.setRequirementReasonCode("TECHNICAL_BOM_PRICE_CHECKED");
     when(tasks.findModules(2L)).thenReturn(List.of(price, module("SOLDER")));

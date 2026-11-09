@@ -42,7 +42,7 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/original-linked-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_original_linked_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyOriginalLinkedSourceMapper.class);for(var mapper:List.of(PriceLinkedItemMapper.class,PriceRangeFactorRuleMapper.class,FinanceEffectivePriceMapper.class,MaterialPriceMonthMapper.class))configuration.addMapper(mapper);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -64,9 +64,12 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     return rule(code,bu,month,org,supplier,supplier,expression,board);
   }
   static PriceLinkedItem rule(String code,String bu,String month,String org,String supplier,String supplierName,String expression,boolean board){
-    var key=new MaterialPriceRuleKey(bu,org,code,supplier,supplierName,"SPEC","件");var factors=new LinkedHashMap<String,OriginalLinkedWorkbookParser.FactorInput>();factors.put("cu",new OriginalLinkedWorkbookParser.FactorInput(PriceFactorContext.COPPER,new Address("财务基价","D3"),FactorPriceUnit.CNY_KG,"CNY/KG",PriceFactorContext.COPPER,"SAME_CANONICAL_FACTOR"));if(board)factors.put("sus",new OriginalLinkedWorkbookParser.FactorInput("AVG|304/2B/1219",new Address("财务基价","D4"),FactorPriceUnit.CNY_KG,"CNY/KG","AVG|304/2B/1219","SAME_CANONICAL_FACTOR"));
+    return rule(code,bu,month,org,supplier,supplierName,expression,board,"SPEC","件");
+  }
+  static PriceLinkedItem rule(String code,String bu,String month,String org,String supplier,String supplierName,String expression,boolean board,String spec,String unit){
+    var key=new MaterialPriceRuleKey(bu,org,code,supplier,supplierName,spec,unit);var factors=new LinkedHashMap<String,OriginalLinkedWorkbookParser.FactorInput>();factors.put("cu",new OriginalLinkedWorkbookParser.FactorInput(PriceFactorContext.COPPER,new Address("财务基价","D3"),FactorPriceUnit.CNY_KG,"CNY/KG",PriceFactorContext.COPPER,"SAME_CANONICAL_FACTOR"));if(board)factors.put("sus",new OriginalLinkedWorkbookParser.FactorInput("AVG|304/2B/1219",new Address("财务基价","D4"),FactorPriceUnit.CNY_KG,"CNY/KG","AVG|304/2B/1219","SAME_CANONICAL_FACTOR"));
     var original=new OriginalLinkedWorkbookParser.Rule(key,"fixture linked material","原稿",8,"H8",expression,expression,"0.000000",false,new CompiledFormula(expression,List.of(),Map.of()),factors,BigDecimal.ZERO);
-    var row=new PriceLinkedItem();row.setRuleIdentityKey(key.identityKey());row.setRuleRevision(1);row.setRuleStatus("PUBLISHED");row.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);row.setSourceKind("PUBLIC");row.setBusinessUnitType(bu);row.setOrgCode(org);row.setPricingMonth(month);row.setMaterialCode(code);row.setMaterialName("fixture linked material");row.setSpecModel("SPEC");row.setUnit("件");row.setSupplierCode(supplier);row.setSupplierName(supplierName);row.setTaxIncluded(0);row.setFormulaExpr(expression);row.setSourceInputSnapshotJson(snapshots.write(List.of(original),"controlled-original-version"));row.setSourceSheetName("原稿");row.setSourceRowNumber(8);row.setSourceFormulaCellRef("H8");row.setSourceFormulaExpr("original H8 formula");row.setEffectiveFrom(YearMonth.parse(month).atDay(1));row.setEffectiveTo(LocalDate.of(2099,1,1));row.setCreatedAt(LocalDateTime.now());row.setUpdatedAt(LocalDateTime.now());row.setDeleted(0);row.setTechnicalRevision(0);rules.insert(row);return row;
+    var row=new PriceLinkedItem();row.setRuleIdentityKey(key.identityKey());row.setRuleRevision(1);row.setRuleStatus("PUBLISHED");row.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);row.setSourceKind("PUBLIC");row.setBusinessUnitType(bu);row.setOrgCode(org);row.setPricingMonth(month);row.setMaterialCode(code);row.setMaterialName("fixture linked material");row.setSpecModel(spec);row.setUnit(unit);row.setSupplierCode(supplier);row.setSupplierName(supplierName);row.setTaxIncluded(0);row.setFormulaExpr(expression);row.setSourceInputSnapshotJson(snapshots.write(List.of(original),"controlled-original-version"));row.setSourceSheetName("原稿");row.setSourceRowNumber(8);row.setSourceFormulaCellRef("H8");row.setSourceFormulaExpr("original H8 formula");row.setEffectiveFrom(YearMonth.parse(month).atDay(1));row.setEffectiveTo(LocalDate.of(2099,1,1));row.setCreatedAt(LocalDateTime.now());row.setUpdatedAt(LocalDateTime.now());row.setDeleted(0);row.setTechnicalRevision(0);rules.insert(row);return row;
   }
   static long publication(String bu,String month,String org){return publication(bu,month,org,1);}
   static long publication(String bu,String month,String org,int revision){
@@ -82,6 +85,104 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
   }
   static void publish(String bu,String org){transaction.executeWithoutResult(status->effective.generateScope(bu,org));}
   static MonthlyAdoptionPlan plan(MonthlyPriceRequest request,MonthlyAdoptionPlan.Selection selection){return new MonthlyAdoptionPlan(Map.of(request,selection),List.of(new MonthlyAdoptionPlan.Use("root/linked",request,BigDecimal.ONE)),Set.of());}
+  @Test void bomMaterialCodeAloneSelectsPublishedLinkedPriceDespiteDisplayFields() {
+    String month="2058-01", material=code();
+    publication("COMMERCIAL",month,"210");
+    var original=rule(material,"COMMERCIAL",month,"210","S1","[cu]+5",false);
+    publish("COMMERCIAL","210");
+    var req=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.parse(month),"COMMERCIAL",
+        material,"BOM规格 Φ2（型号）","支","CNY",TaxBasis.EXCLUDED,null),
+        "210",NonCuConditions.empty(),BigDecimal.ONE);
+    var ctx=context("COMMERCIAL",month,"210");
+    var resolved=operation.resolveCandidates(ctx,Set.of(req));
+    assertThat(resolved.problems()).as("BOM已有料号，来源规格和单位不能再次限制取价").isEmpty();
+    var selected=resolved.values().get(req).selection();
+    assertThat(selected.fact().price()).isEqualByComparingTo("105");
+    var captured=codec.decode(codec.wrap(selected.fact().evidence().json()),MonthlyOriginalLinkedPriceSource.Snapshot.class);
+    assertThat(captured.source().selected().getId()).isEqualTo(original.getId());
+    assertThat(captured.source().selected().getSpecModel()).isEqualTo("SPEC");
+    assertThat(captured.source().selected().getUnit()).isEqualTo("件");
+    long id=operation.adopt(ctx,plan(req,selected)).plan().selections().get(req).monthlyPriceId();
+    assertThat(operation.resolveCandidates(ctx,Set.of(req)).values().get(req).selection().monthlyPriceId()).isEqualTo(id);
+    var pair=MonthlyScenarioTestSupport.create(null).calculate(
+        Map.of(req,operation.readByIds("COMMERCIAL",Set.of(id)).get(id)),new BigDecimal("120000")).get(id);
+    assertThat(pair.financialPrice()).isEqualByComparingTo("105");
+    assertThat(pair.customerPrice()).isEqualByComparingTo("125");
+    var absent=request(code(),"COMMERCIAL",month,"210",NonCuConditions.empty());
+    assertThat(source.read(ctx,Set.of(absent)).problems().get(absent).reason())
+        .as("BOM有料号但无对应来源，不能借用同规格的其他料号")
+        .isEqualTo(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+  }
+
+  @Test void bomWithoutMaterialCodeMatchesPriceSpecificationAndKeepsTheBomUnchanged() {
+    String month="2058-02", material=code();
+    publication("COMMERCIAL",month,"210");
+    rule(material,"COMMERCIAL",month,"210","S1","[cu]+5",false);
+    rule(material,"COMMERCIAL",month,"210","S2","S2","[cu]+999",false,"OTHER-SPEC","KG");
+    publish("COMMERCIAL","210");
+    var reader=new MonthlyQuotationPrices(operation,new HouseholdMonthlyPriceSource(null,codec,null,null),
+        new BomSpecificationPriceIdentity(jdbc));
+    var bom=new MonthlyQuotationPrices.Item(null,"210","支","SPEC",TaxBasis.EXCLUDED,null,
+        NonCuConditions.empty(),BigDecimal.ONE,MonthlyQuotationPrices.Purpose.MATERIAL);
+    var ctx=context("COMMERCIAL",month,"210");
+    var read=reader.read(ctx,List.of(bom));
+    assertThat(read.problems()).isEmpty();
+    var bound=read.values().get(bom);
+    assertThat(bound.request().family().specificationOnly()).isTrue();
+    assertThat(bound.request().materialCode()).isEqualTo(material);
+    assertThat(bound.candidate().selection().fact().price()).isEqualByComparingTo("105");
+    assertThat(bom.materialCode()).as("原BOM无料号事实保持").isNull();
+    var node=new MonthlyBomPricingScope.Node("TOP/anonymous-row","","TOP",bound.request(),BigDecimal.ONE,"SPEC");
+    assertThat(node.materialCode()).isEmpty();
+    var saved=operation.adopt(ctx,plan(bound.request(),bound.candidate().selection()));
+    long id=saved.plan().selections().get(bound.request()).monthlyPriceId();
+    assertThat(reader.read(ctx,List.of(bom)).values().get(bom).candidate().selection().monthlyPriceId()).isEqualTo(id);
+    var pair=MonthlyScenarioTestSupport.create(null).calculate(
+        Map.of(bound.request(),operation.readByIds("COMMERCIAL",Set.of(id)).get(id)),new BigDecimal("120000")).get(id);
+    assertThat(pair.customerPrice()).isEqualByComparingTo("125");
+    assertThat(jdbc.queryForObject("SELECT material_code FROM lp_material_monthly_price WHERE id=?",String.class,id))
+        .as("原BOM保持无料号，月价保留真实来源料号及按规格匹配依据").isEqualTo(material);
+  }
+
+  @Test void reportedUnitSpacesAndDrawingSuffixDifferencesKeepAllCodeMatchedSuppliers() {
+    String month="2058-03";publication("COMMERCIAL",month,"210");
+    var cases=List.of(
+        List.of("SHF-H35-020002","SHF-H35-020002","支","只"),
+        List.of("BAg1.2CuPIn Φ23×1.8","BAg1.2CuPIn\u00a0Φ23×1.8","千克","千克"),
+        List.of("BCu91PAg Φ40.8×1.2(SHF-H35672-001-FZ03)","BCu91PAg Ф40.8×1.2","千克","千克"));
+    var requests=new ArrayList<MonthlyPriceRequest>();
+    for(var fields:cases) {
+      String material=code();
+      rule(material,"COMMERCIAL",month,"210","S1","S1","[cu]+5",false,fields.get(0),fields.get(2));
+      rule(material,"COMMERCIAL",month,"210","S2","S2","[cu]+6",false,fields.get(1),fields.get(3));
+      for(String supplier:List.of("S1","S2"))
+        jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_code,supplier_name,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC',?,?,?,1,0)",material,supplier,supplier,new BigDecimal(supplier.equals("S2")?"0.65":"0.35"));
+      requests.add(new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.parse(month),"COMMERCIAL",material,fields.get(0),fields.get(2),"CNY",TaxBasis.EXCLUDED,null),"210",NonCuConditions.empty(),BigDecimal.ONE));
+    }
+    publish("COMMERCIAL","210");var ctx=context("COMMERCIAL",month,"210");
+    var result=operation.resolveCandidates(ctx,Set.copyOf(requests));assertThat(result.problems()).isEmpty();
+    for(var request:requests) {
+      var selected=result.values().get(request).selection();
+      assertThat(selected.fact().price()).isEqualByComparingTo("106");
+      var evidence=codec.decode(codec.wrap(selected.fact().evidence().json()),MonthlyOriginalLinkedPriceSource.Snapshot.class);
+      assertThat(evidence.source().candidates()).hasSize(2);
+      assertThat(evidence.source().selected().getSupplierCode()).isEqualTo("S2");
+    }
+  }
+
+  @Test void explicitRatioConfigurationUsesHighestCalculatedLinkedPriceWithoutReview() {
+    String month="2057-02",material=code();publication("COMMERCIAL",month,"210");
+    rule(material,"COMMERCIAL",month,"210","S1","[cu]+5",false);
+    rule(material,"COMMERCIAL",month,"210","S2","[cu]+15",false);publish("COMMERCIAL","210");
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted,selection_rule) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',NULL,1,0,'无供货比率，取最高价')",material);
+    var request=request(material,"COMMERCIAL",month,"210",NonCuConditions.empty());var c=context("COMMERCIAL",month,"210");
+    var resolved=operation.resolveCandidates(c,Set.of(request));assertThat(resolved.problems()).isEmpty();
+    var selected=resolved.values().get(request).selection();assertThat(selected.fact().price()).isEqualByComparingTo("115");
+    assertThat(selected.fact().evidence().json()).contains("CONFIGURED_HIGH","无供货比率");
+    assertThat(c.supplierReviews().reviews()).isEmpty();
+    assertThat(operation.adopt(c,plan(request,selected)).plan().selections().get(request).monthlyPriceId()).isNotNull();
+  }
+
   @Test void financeCorrectionRefreshesAdoptedMonthlyPriceWithoutRewritingHistory() {
     String month="2056-01", material=code();
     publication("COMMERCIAL",month,"210");

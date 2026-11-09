@@ -39,7 +39,7 @@ class MonthlyOriginalRangePriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/original-range-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_original_range_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyOriginalRangeSourceMapper.class);for(var mapper:List.of(PriceLinkedItemMapper.class,PriceRangeFactorRuleMapper.class,FinanceEffectivePriceMapper.class,MaterialPriceMonthMapper.class,PriceRangeItemMapper.class,OaFormMapper.class))configuration.addMapper(mapper);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -88,6 +88,18 @@ class MonthlyOriginalRangePriceSourceIntegrationTest {
   }
   static void publish(String bu){transaction.executeWithoutResult(status->effective.generateScope(bu,"210"));}
   static MonthlyAdoptionPlan plan(MonthlyPriceRequest request,MonthlyAdoptionPlan.Selection selection){return new MonthlyAdoptionPlan(Map.of(request,selection),List.of(new MonthlyAdoptionPlan.Use("root/factor-range",request,BigDecimal.ONE)),Set.of());}
+  @Test void explicitRatioConfigurationUsesHighestApplicableFactorBandWithoutReview() {
+    String month="2057-02",material=code();publication("COMMERCIAL",month,"210");
+    rule(material,"COMMERCIAL",month,"S1","10","90");rule(material,"COMMERCIAL",month,"S2","20","80");publish("COMMERCIAL");
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted,selection_rule) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',NULL,1,0,'无供货比例取最高价')",material);
+    var request=request(material,"COMMERCIAL",month,"210","1");var c=context("COMMERCIAL",month,"210");
+    var resolved=operation.resolveCandidates(c,Set.of(request));assertThat(resolved.problems()).isEmpty();
+    var selected=resolved.values().get(request).selection();assertThat(selected.fact().price()).isEqualByComparingTo("20");
+    assertThat(selected.fact().evidence().json()).contains("CONFIGURED_HIGH","无供货比例");
+    assertThat(c.supplierReviews().reviews()).isEmpty();
+    assertThat(operation.adopt(c,plan(request,selected)).plan().selections().get(request).monthlyPriceId()).isNotNull();
+  }
+
   @Test void publishedNameOnlySupplierProvidesRangePriceWithoutRepeatedSupplement() {
     String code=code(), month="2055-01";
     publication("COMMERCIAL",month,"210");

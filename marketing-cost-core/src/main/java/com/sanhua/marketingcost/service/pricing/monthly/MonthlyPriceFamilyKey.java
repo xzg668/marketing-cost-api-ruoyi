@@ -13,7 +13,14 @@ public record MonthlyPriceFamilyKey(
     String unit,
     String currency,
     TaxBasis taxBasis,
-    String requestedSupplierCode) implements Comparable<MonthlyPriceFamilyKey> {
+    String requestedSupplierCode,
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT)
+    boolean specificationOnly) implements Comparable<MonthlyPriceFamilyKey> {
+
+  public MonthlyPriceFamilyKey(YearMonth month,String businessUnitType,String materialCode,
+      String specification,String unit,String currency,TaxBasis taxBasis,String requestedSupplierCode) {
+    this(month,businessUnitType,materialCode,specification,unit,currency,taxBasis,requestedSupplierCode,false);
+  }
 
   public MonthlyPriceFamilyKey {
     Objects.requireNonNull(month, "Accounting month is required");
@@ -24,8 +31,10 @@ public record MonthlyPriceFamilyKey(
     if (!businessUnitType.equals("COMMERCIAL") && !businessUnitType.equals("HOUSEHOLD")) {
       throw new IllegalArgumentException("Business unit must be COMMERCIAL or HOUSEHOLD");
     }
-    materialCode = bounded(required(materialCode, "Material code"), "Material code", 64);
+    materialCode = bounded(specificationOnly ? (materialCode == null ? "" : materialCode.trim()) : required(materialCode, "Material code"), "Material code", 64);
     specification = bounded(optional(specification), "Specification", 512);
+    if (specificationOnly && specification == null)
+      throw new IllegalArgumentException("Specification is required for a BOM without material code");
     // Unit conversion belongs to the existing adapter; do not guess aliases here.
     unit = bounded(required(unit, "Pricing unit"), "Pricing unit", 255);
     currency = required(currency, "Currency").toUpperCase(Locale.ROOT);
@@ -37,7 +46,7 @@ public record MonthlyPriceFamilyKey(
   }
 
   public String canonical() {
-    return MonthlyPriceCanonical.fields("MONTHLY_PRICE_FAMILY_V1", month.toString(),
+    return MonthlyPriceCanonical.fields(specificationOnly ? "MONTHLY_PRICE_SPECIFICATION_FAMILY_V1" : "MONTHLY_PRICE_FAMILY_V1", month.toString(),
         businessUnitType, materialCode, specification, unit, currency, taxBasis.name(),
         requestedSupplierCode);
   }

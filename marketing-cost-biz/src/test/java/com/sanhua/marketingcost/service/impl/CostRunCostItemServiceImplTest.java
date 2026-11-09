@@ -1378,6 +1378,38 @@ class CostRunCostItemServiceImplTest {
         .isEqualByComparingTo(BigDecimal.ZERO);
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void componentPackagingKeepsIndependentLabelInMaterialCost(boolean currentInputs) {
+    var form = mock(OaFormMapper.class);
+    var formItem = mock(OaFormItemMapper.class);
+    var salary = mock(CmsCostSourceEffectiveMapper.class);
+    var auxiliary = mock(AuxCostItemMapper.class);
+    var parts = mock(CostRunPartItemMapper.class);
+    var master = mock(MaterialMasterMapper.class);
+    var raw = mock(MaterialMasterRawMapper.class);
+    var bom = mock(BomRawHierarchyMapper.class);
+    stubBasicCalculationInputs(form, formItem, salary, auxiliary, parts, master, raw, bom, "P-1");
+    var rows = List.of(newPart("NORMAL", new BigDecimal("17.33169545")),
+        newPart("9830000025711", new BigDecimal("0.3089")),
+        newPart("251010070", new BigDecimal("0.00515398")));
+    when(parts.selectList(any())).thenReturn(rows);
+    when(master.selectList(any())).thenReturn(List.of(newMaster("251010070")));
+    when(raw.selectPackageComponentParentsByCodes(eq("包装组件"), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of(newRawMaster("9830000025711", "包装组件")));
+    var svc = buildForCalculation(form, formItem, salary, auxiliary, parts, master, raw, bom);
+    var context = commercialContext("OA-LOSS", "P-1");
+    java.util.List<com.sanhua.marketingcost.dto.CostRunPartItemDto> inputs = currentInputs ? rows.stream().map(row -> {
+      var dto = new com.sanhua.marketingcost.dto.CostRunPartItemDto();
+      org.springframework.beans.BeanUtils.copyProperties(row, dto); return dto;
+    }).toList() : null;
+    var calculated = svc.listByMaterialCodes("OA-LOSS", "P-1", Set.of("P-1"), context, inputs, true, ignored -> {});
+    // 实际 006 的独立标签不是包装组件的子件，不能被包装组件汇总替换掉。
+    assertThat(findItem(calculated, "MATERIAL").getAmount()).isEqualByComparingTo("17.661194");
+    assertThat(findItem(calculated, "OTHER_EXP_PACKAGE").getAmount()).isEqualByComparingTo("0.324345");
+    assertThat(findItem(calculated, "BOM_BUCKET_PACKAGE").getAmount()).isEqualByComparingTo("0.324345");
+  }
+
   @Test
   @DisplayName("T24 包装聚合：包装组件父件金额 × 1.05")
   void bucketPackage_happyPath() {

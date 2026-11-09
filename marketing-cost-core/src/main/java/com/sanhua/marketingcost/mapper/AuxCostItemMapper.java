@@ -19,6 +19,7 @@ public interface AuxCostItemMapper {
             e.subject_name AS auxSubjectName,
             NULL AS floatRate,
             e.amount_yuan AS unitPrice,
+            e.source_row_ids AS sourceRowIds,e.period AS sourcePeriod,e.source_table AS sourceTable,
             'DIRECT' AS amountCalcMode,
             NULL AS displayOrder,
             'CMS_EFFECTIVE' AS source
@@ -40,4 +41,20 @@ public interface AuxCostItemMapper {
       @Param("materialCodes") Collection<String> materialCodes,
       @Param("businessUnitType") String businessUnitType,
       @Param("pricingMonth") String pricingMonth);
+
+  record SurfacePath(long id,String parentCode,String period,String path,java.math.BigDecimal amount) {}
+  @Select("""
+      <script>SELECT id,parent_code,period,path,material_price_yuan AS amount
+      FROM cms_product_subject_cost_raw WHERE business_unit_type=#{unit} AND second_subject_code='0202'
+      AND id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach></script>
+      """)
+  List<SurfacePath> surfacePaths(@Param("unit") String unit,@Param("ids") Collection<Long> ids);
+
+  @Select("""
+      <script>SELECT DISTINCT material_code FROM lp_material_master_raw
+      WHERE organization_code=#{unit} AND active_flag=1 AND material_name LIKE '%烧结基座%'
+      AND material_name NOT LIKE '%毛坯%' AND material_code IN
+      <foreach collection="codes" item="code" open="(" separator="," close=")">#{code}</foreach></script>
+      """)
+  List<String> sinteredBaseCodes(@Param("unit") String unit,@Param("codes") Collection<String> codes);
 }

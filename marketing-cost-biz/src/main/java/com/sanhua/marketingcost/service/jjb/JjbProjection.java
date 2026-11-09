@@ -71,6 +71,7 @@ public class JjbProjection {
       if ("OTHER_INDEPENDENT".equals(cost.getCostCode()) && cost.getAmount() != null && BigDecimal.ZERO.compareTo(cost.getAmount()) == 0) continue;
       rows.add(cost(cost, "MATERIAL_DETAIL").build());
     }
+    rows = packagingDetails(rows, preparations, traces, warnings);
     for (String code : ORDINARY) addCost(rows, costMap, code, "ORDINARY", calc, warnings);
     for (String code : THREE) addCost(rows, costMap, code, "THREE_EXPENSES", calc, warnings);
     rows.add(subtotal("THREE_SUBTOTAL", "THREE_EXPENSES", "三项费用小计", THREE.stream()
@@ -83,7 +84,7 @@ public class JjbProjection {
         verifyPart(part, line.materialCode(), line.quantity(), line.amount()); equal(part.getUnitPrice(), line.price(), "家用 P");
         consumed.add(part.getId());
         rows.add(part(part).section("HOUSEHOLD").kind("HOUSEHOLD").key("HOUSEHOLD:"+line.monthlyPriceId())
-            .unitPrice(money(line.price())).quantity(decimal(line.quantity())).amount(money(line.amount()))
+            .unitPrice(money(line.price())).quantity(decimal(line.quantity())).unit(line.pricingUnit()).amount(money(line.amount()))
             .monthlyPriceIds(List.of(line.monthlyPriceId())).paths(line.paths())
             .householdRate(decimal(line.householdRate())).salesRate(decimal(line.salesRate()))
             .coefficient(decimal(calc.ordinaryInputs().coefficient()))
@@ -171,6 +172,7 @@ public class JjbProjection {
     if (form.getCopperPrice() != null) quotation.put("customerCuPrice",money(form.getCopperPrice().movePointLeft(3)));
     var header = new Header(item.getProductName(),item.getSunlModel(),form.getCustomer(),item.getCustomerCode(),item.getCustomerDrawing(),
         "表头取报价需求单；核算金额、费率及财务Cu取所选保存版本",money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation);
+    rows = new JjbPricePresentation(json).apply(rows, calc, preparations);
     return new JjbReadModel(identity,header,rows,calc==null?List.of():monthly(calc),
         new Totals(money(t1),money(v.getCuMaterialAdjustment()),money(v.getFinalQuoteAmount())),warnings);
   }
@@ -195,6 +197,9 @@ public class JjbProjection {
           || !Objects.equals(prepared.getMaterialCode(),snapshot.path("materialCode").asText())
           || !snapshot.path("rows").isArray()) {result.add(row);continue;}
       var children=snapshot.path("rows");
+      var manufacturing=new ArrayList<Map<String,String>>();
+      children.forEach(child->manufacturing.add(JjbManufacturingEvidence.describe(child)));
+      row=row.toBuilder().manufacturing(manufacturing).build();
       if(children.size()==1) {
         result.add(weights(row.toBuilder(),children.get(0)).build());
       } else {
@@ -202,6 +207,7 @@ public class JjbProjection {
         for(var child:children) {
           String code=text(child,"childMaterialNo");if(code==null)continue;
           result.add(weights(Row.builder(),child).key(row.key()+":MAKE:"+(++index))
+              .manufacturing(List.of(JjbManufacturingEvidence.describe(child)))
               .section("ORDINARY_PARTS").kind("EXPLANATION").code(row.code()+"\n【"+code+"】")
               .name(first(text(child,"childMaterialName"),code)).drawingNo(text(child,"childMaterialSpec"))
               .unitPrice(number(child,"costPrice")).partItemIds(row.partItemIds()).sources(row.sources())
@@ -215,6 +221,65 @@ public class JjbProjection {
   private Row.RowBuilder weights(Row.RowBuilder row,JsonNode saved) {
     return row.grossWeight(decimalNumber(saved,"grossWeightG")).netWeight(decimalNumber(saved,"netWeightG"))
         .rawUnitPrice(number(saved,"rawUnitPrice")).scrapUnitPrice(number(saved,"scrapUnitPrice"));
+  }
+
+  /** 包装母件是取价依据，包装费才是含系数后的材料贡献；读取保存依据，不重算历史。 */
+  private ArrayList<Row> packagingDetails(List<Row> rows, List<PricePrepareItem> preparations,
+      List<CostRunTraceSnapshot> traces, List<String> warnings) {
+    var fees = rows.stream().filter(row -> "OTHER_EXP_PACKAGE".equals(row.code())).toList();
+    var buckets = rows.stream().filter(row -> "BOM_BUCKET_PACKAGE".equals(row.code())).toList();
+    Row fee = fees.size() == 1 ? fees.getFirst() : fees.isEmpty() && buckets.size() == 1 ? buckets.getFirst() : null;
+    if (fee == null || fee.amount() == null) return new ArrayList<>(rows);
+    Row duplicate = fees.size() == 1 && buckets.size() == 1
+        && Objects.equals(fee.amount(), buckets.getFirst().amount()) ? buckets.getFirst() : null;
+    var packagePreparations = new HashSet<Long>();
+    for (var prepared : preparations) {
+      var snapshot = tree(prepared.getInputSnapshotJson());
+      if (snapshot.has("document")) snapshot = tree(new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(json)
+          .unwrap(prepared.getInputSnapshotJson()));
+      if ("PACKAGE_PRICE_V1".equals(snapshot.path("calculatorVersion").asText())) packagePreparations.add(prepared.getId());
+    }
+    var packageParts = traces.stream().filter(trace -> "PACKAGE_COMPONENT".equals(trace.getSourceType()))
+        .map(CostRunTraceSnapshot::getPartItemId).filter(Objects::nonNull).collect(Collectors.toSet());
+    var componentRows = rows.stream().filter(row -> "PART".equals(row.kind())
+        && (row.partItemIds().stream().anyMatch(packageParts::contains)
+            || row.sources().stream().anyMatch(source -> "lp_price_prepare_item".equals(source.table())
+                && packagePreparations.contains(source.id())))).toList();
+    // 旧保存结果的包装基数混入了独立材料，但最终包装金额只保留组件；提示重算，不能篡改历史金额。
+    if (duplicate != null && fee.baseAmount() != null && !componentRows.isEmpty()
+        && componentRows.stream().allMatch(row -> row.amount() != null)
+        && fee.sources().stream().noneMatch(source -> "lp_quote_tech_data_version".equals(source.table()))) {
+      BigDecimal componentBase = componentRows.stream().map(row -> new BigDecimal(row.amount()))
+          .reduce(BigDecimal.ZERO, BigDecimal::add);
+      BigDecimal roundingTolerance = new BigDecimal("0.000001").multiply(BigDecimal.valueOf(componentRows.size() + 1));
+      if (new BigDecimal(fee.baseAmount()).subtract(componentBase).compareTo(roundingTolerance) > 0)
+        warnings.add("该历史版本的包装归集遗漏了组件外的独立包装材料；当前保留原保存金额，请重新整单核算生成修正版本。");
+    }
+    var componentIds = componentRows.stream().flatMap(row -> row.partItemIds().stream()).collect(Collectors.toSet());
+    var componentPaths = componentRows.stream().flatMap(row -> row.paths().stream()).toList();
+    var hidden = rows.stream().filter(row -> row == duplicate || componentRows.contains(row)
+        || "EXPLANATION".equals(row.kind()) && (row.partItemIds().stream().anyMatch(componentIds::contains)
+            || row.paths().stream().anyMatch(path -> componentPaths.stream().anyMatch(parent -> path.startsWith(parent + "/")))))
+        .toList();
+    var evidence = new ArrayList<Row>(hidden); evidence.add(fee);
+    var result = new ArrayList<Row>();
+    for (var row : rows) {
+      if (hidden.contains(row)) continue;
+      if (row == fee) {
+        result.add(row.toBuilder().name("包装费用")
+            .costItemIds(evidence.stream().flatMap(value -> value.costItemIds().stream()).distinct().sorted().toList())
+            .partItemIds(evidence.stream().flatMap(value -> value.partItemIds().stream()).distinct().toList())
+            .monthlyPriceIds(evidence.stream().flatMap(value -> value.monthlyPriceIds().stream()).distinct().toList())
+            .paths(evidence.stream().flatMap(value -> value.paths().stream()).distinct().toList())
+            .sources(evidence.stream().flatMap(value -> value.sources().stream()).distinct().toList())
+            .remark(joinRemark(row.remark(), "已计入材料费；包装组件依据见核算底稿")).build());
+      } else result.add(row);
+    }
+    return result;
+  }
+
+  private static String joinRemark(String previous, String explanation) {
+    return previous == null || previous.isBlank() ? explanation : previous + "；" + explanation;
   }
 
   /** Old rollup/raw details are explanations from immutable trace JSON, never today's BOM. */
@@ -293,7 +358,8 @@ public class JjbProjection {
           group.stream().map(a -> a.request().priceOrgCode()).distinct().sorted().toList(),p.selection().applicability().canonical(),
           text(evidence,"sourceKind"),first(text(evidence,"householdSourceId"),text(selected,"id"),text(src,"versionId")),
           first(text(src,"revisionNo"),text(selected,"ruleRevision"),text(selected,"technicalVersionId")),
-          first(text(src,"importBatchId"),text(selected,"sourceBatchNo")),first(text(selected,"supplierName"),text(selected,"supplierCode"))));
+          first(text(src,"importBatchId"),text(selected,"sourceBatchNo")),first(text(selected,"supplierName"),text(selected,"supplierCode")),
+          JjbSourceEvidence.describe(evidence)));
     });return result;
   }
   private void addCost(List<Row> rows,Map<String,List<CostRunCostItem>> map,String code,String section,MonthlyProductCost.Result calc,List<String> warnings) {
@@ -302,6 +368,8 @@ public class JjbProjection {
     if(values.size()>1) warnings.add("历史科目 "+code+" 存在多行，逐行保留");
     for(var c:values) {
       var row=cost(c,section);
+      if ("MATERIAL".equals(code)) row.remark(joinRemark(c.getRemark(),
+          "含部品、辅料、包装和部门经费；直接、辅助人工另计"));
       if(calc!=null) {
         BigDecimal rate=switch(code) {
           case "LOSS" -> calc.ordinaryInputs().lossRate();case "MANUFACTURE" -> calc.ordinaryInputs().manufactureRate();

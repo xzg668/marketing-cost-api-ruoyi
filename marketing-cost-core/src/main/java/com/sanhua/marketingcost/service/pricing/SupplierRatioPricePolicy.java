@@ -12,6 +12,26 @@ import java.util.stream.Collectors;
 public final class SupplierRatioPricePolicy {
   private SupplierRatioPricePolicy() {}
 
+  /** Determine the main suppliers from the complete ratio set, before looking at a price table. */
+  public static List<SupplierSupplyRatio> primarySuppliers(List<SupplierSupplyRatio> ratios) {
+    index(ratios);
+    var known=ratios.stream().filter(r->r.getSupplyRatio()!=null).toList();
+    var total=known.stream().map(SupplierSupplyRatio::getSupplyRatio).reduce(BigDecimal.ZERO,BigDecimal::add);
+    var max=known.stream().map(SupplierSupplyRatio::getSupplyRatio).max(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
+    if (total.compareTo(BigDecimal.ONE)>0 || max.signum()<=0
+        || max.compareTo(BigDecimal.ONE.subtract(total))<=0) return List.of();
+    return known.stream().filter(r->r.getSupplyRatio().compareTo(max)==0).toList();
+  }
+
+  public static <T> List<T> forPrimarySupplier(List<T> rows,List<SupplierSupplyRatio> ratios,
+      Function<T,String> code,Function<T,String> name) {
+    var primary=primarySuppliers(ratios);
+    if(primary.isEmpty())return rows;
+    var bySupplier=index(primary);
+    return rows.stream().filter(row->match(bySupplier,new SupplierPriceCandidate("",code.apply(row),
+        name.apply(row),BigDecimal.ZERO,null,null))!=null).toList();
+  }
+
   public static SupplierPriceCandidate choose(
       List<SupplierPriceCandidate> candidates, List<SupplierSupplyRatio> ratios) {
     candidates = eligible(candidates, ratios);

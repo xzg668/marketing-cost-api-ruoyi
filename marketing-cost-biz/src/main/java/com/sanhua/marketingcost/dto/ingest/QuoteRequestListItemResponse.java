@@ -14,6 +14,7 @@ public class QuoteRequestListItemResponse {
   private String sourceSystem;
   private String quoteScenario;
   private String customer;
+  private String salespersonName;
   private LocalDate applyDate;
   private String applicantUnit;
   private String applicantDept;

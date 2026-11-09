@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import com.sanhua.marketingcost.dto.*;
 import com.sanhua.marketingcost.service.*;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioEditService;
 import java.io.InputStream;
 import java.util.*;
 import org.junit.jupiter.api.*;
@@ -16,8 +17,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class SupplierSupplyRatioControllerTest {
-  SupplierSupplyRatioService service;SupplierSupplyRatioImportService imports;SupplierSupplyRatioController controller;
-  @BeforeEach void setup(){service=mock(SupplierSupplyRatioService.class);imports=mock(SupplierSupplyRatioImportService.class);controller=new SupplierSupplyRatioController(service,imports);var a=new UsernamePasswordAuthenticationToken("finance",null);a.setDetails(Map.of("businessUnitType","COMMERCIAL"));SecurityContextHolder.getContext().setAuthentication(a);}
+  SupplierSupplyRatioEditService edits;SupplierSupplyRatioService service;SupplierSupplyRatioImportService imports;SupplierSupplyRatioController controller;
+  @BeforeEach void setup(){service=mock(SupplierSupplyRatioService.class);imports=mock(SupplierSupplyRatioImportService.class);edits=mock(SupplierSupplyRatioEditService.class);controller=new SupplierSupplyRatioController(service,imports,edits);var a=new UsernamePasswordAuthenticationToken("finance",null);a.setDetails(Map.of("businessUnitType","COMMERCIAL"));SecurityContextHolder.getContext().setAuthentication(a);}
   @AfterEach void clear(){SecurityContextHolder.clearContext();}
   @Test void importUsesSelectedUnitAndAuthenticatedOperator() {
     var result=new SupplierSupplyRatioImportResponse();result.setBatchNo("batch");when(imports.importExcel(any(InputStream.class),eq("ratio.xlsx"),eq("COMMERCIAL"),eq("finance"),isNull())).thenReturn(result);
@@ -38,11 +39,34 @@ class SupplierSupplyRatioControllerTest {
   @Test void readsAndImportsKeepExistingPermissions() {
     for(var method:SupplierSupplyRatioController.class.getDeclaredMethods()) {
       var permission=method.getAnnotation(PreAuthorize.class);if(permission==null)continue;
-      assertThat(permission.value()).isEqualTo("@ss.hasPermi('base:supplier-supply-ratio:"+(method.getName().equals("importExcel")?"import":"list")+"')");
+      assertThat(permission.value()).isEqualTo("@ss.hasPermi('base:supplier-supply-ratio:"+(Set.of("importExcel","update").contains(method.getName())?"import":"list")+"')");
     }
   }
   @Test void invalidOrEmptyWorkbookCannotReachAWrite() {
     assertThat(controller.importExcel(new MockMultipartFile("file",new byte[0]),null,null,null).isSuccess()).isFalse();
     verifyNoInteractions(imports);
+  }
+  @Test void editUsesAuthenticatedUnitAndVersionAndReturnsValidationErrors() throws Exception {
+    var row = new com.sanhua.marketingcost.entity.SupplierSupplyRatio();
+    row.setId(2L);row.setSupplyRatio(new java.math.BigDecimal("0.75"));
+    when(edits.update(eq(1L),any(),eq("COMMERCIAL"),eq("finance"))).thenReturn(row);
+    var mvc=MockMvcBuilders.standaloneSetup(controller).build();
+    var result=mvc.perform(put("/api/v1/supplier-supply-ratios/1")
+        .principal(SecurityContextHolder.getContext().getAuthentication())
+        .contentType("application/json").content("{\"supplyRatio\":0.75,\"selectionRule\":null}"))
+        .andReturn().getResponse();
+    assertThat(result.getStatus()).isEqualTo(200);
+    assertThat(result.getContentAsString()).contains("\"supplyRatio\":0.75");
+    verify(edits).update(1L,new SupplierSupplyRatioUpdateRequest(new java.math.BigDecimal("0.75"),null),"COMMERCIAL","finance");
+    when(edits.update(eq(1L),any(),any(),any())).thenThrow(new IllegalArgumentException("请刷新列表后重新编辑"));
+    assertThat(controller.update(1L,new SupplierSupplyRatioUpdateRequest(null,null),null).isSuccess()).isFalse();
+  }
+  @Test void incompleteEditCannotAccidentallyClearRatioOrRule() throws Exception {
+    var mvc=MockMvcBuilders.standaloneSetup(controller).build();
+    for (String body : List.of("{}", "{\"supplyRatio\":0.5}", "{\"selectionRule\":null}")) {
+      assertThat(mvc.perform(put("/api/v1/supplier-supply-ratios/1").contentType("application/json").content(body))
+          .andReturn().getResponse().getStatus()).isEqualTo(400);
+    }
+    verifyNoInteractions(edits);
   }
 }

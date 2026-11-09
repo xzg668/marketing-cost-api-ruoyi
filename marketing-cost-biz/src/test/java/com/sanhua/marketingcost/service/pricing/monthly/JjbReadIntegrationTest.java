@@ -32,7 +32,7 @@ class JjbReadIntegrationTest {
     for(var type:List.of(QuoteCostRunVersionMapper.class,OaFormMapper.class,OaFormItemMapper.class,CostRunTraceSnapshotMapper.class,PricePrepareItemMapper.class)) config.addMapper(type);
     var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(jdbc.getDataSource());factory.setConfiguration(config);
     var sql=new SqlSessionTemplate(factory.getObject());
-    reader=new JjbReadService(new JjbVersionAccess(sql.getMapper(QuoteCostRunVersionMapper.class),sql.getMapper(OaFormMapper.class),sql.getMapper(OaFormItemMapper.class)),costing,new JjbProjection(new ObjectMapper()),sql.getMapper(CostRunTraceSnapshotMapper.class),sql.getMapper(PricePrepareItemMapper.class));
+    reader=new JjbReadService(new JjbVersionAccess(sql.getMapper(QuoteCostRunVersionMapper.class),sql.getMapper(OaFormMapper.class),sql.getMapper(OaFormItemMapper.class)),costing,new JjbProjection(new ObjectMapper()),sql.getMapper(CostRunTraceSnapshotMapper.class),sql.getMapper(PricePrepareItemMapper.class),new com.sanhua.marketingcost.service.jjb.JjbMeasurementUnits(org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)));
   }
   @AfterAll static void close(){stop();}
   @BeforeEach void login(){auth("COMMERCIAL");}
@@ -145,10 +145,10 @@ class JjbReadIntegrationTest {
       try(var wb=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(output.toByteArray()))) {
         var s=wb.getSheet("见机表3");
         for(var entry:Map.of("不含税总成本1",m.totals().totalCost(),"材料成本差异",m.totals().cuMaterialAdjustment(),"不含税总成本2",m.totals().finalQuoteAmount()).entrySet())
-          JjbExcelRendererTest.amount(s.getRow(JjbExcelRendererTest.find(s,entry.getKey()).getRowIndex()).getCell(5),entry.getValue());
+          JjbExcelRendererTest.amount(s.getRow(JjbExcelRendererTest.find(s,entry.getKey()).getRowIndex()).getCell(6),entry.getValue());
         var hh=m.rows().stream().filter(r->r.kind().equals("HOUSEHOLD")).findFirst().orElseThrow();
         var r=s.getRow(JjbExcelRendererTest.find(s,hh.code()).getRowIndex());
-        JjbExcelRendererTest.amount(r.getCell(3),"20.985300");JjbExcelRendererTest.amount(r.getCell(5),"51.641245");
+        JjbExcelRendererTest.amount(r.getCell(3),"20.985300");JjbExcelRendererTest.amount(r.getCell(6),"51.641245");
         assertThat(r.getCell(4).getNumericCellValue()).isEqualTo(2);
         assertThat(wb.getNumberOfSheets()).isEqualTo(1);
         assertThat(s.getRow(0).getCell(0).getCellComment().getString().getString())
@@ -180,8 +180,8 @@ class JjbReadIntegrationTest {
     try(var wb=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(out.toByteArray()))) {
       var s=wb.getSheet("见机表3");
       for(String label:List.of("材料成本差异","不含税总成本2","模具费","认证费","折旧费","工装夹具费"))
-        JjbExcelRendererTest.amount(s.getRow(JjbExcelRendererTest.find(s,label).getRowIndex()).getCell(5),null);
-      JjbExcelRendererTest.amount(s.getRow(JjbExcelRendererTest.find(s,"不含税总成本1").getRowIndex()).getCell(5),"12.345678");
+        JjbExcelRendererTest.amount(s.getRow(JjbExcelRendererTest.find(s,label).getRowIndex()).getCell(6),null);
+      JjbExcelRendererTest.amount(s.getRow(JjbExcelRendererTest.find(s,"不含税总成本1").getRowIndex()).getCell(6),"12.345678");
     }
   }
 

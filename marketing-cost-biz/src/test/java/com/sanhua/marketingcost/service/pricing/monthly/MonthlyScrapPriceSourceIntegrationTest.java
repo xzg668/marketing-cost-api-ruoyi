@@ -33,7 +33,7 @@ class MonthlyScrapPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/scrap-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_scrap_source_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyScrapSourceMapper.class);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -182,11 +182,11 @@ class MonthlyScrapPriceSourceIntegrationTest {
     var selected=new LinkedHashMap<MonthlyPriceRequest,MonthlyAdoptionPlan.Selection>();for(var r:List.of(b,explicit))selected.put(r,candidates.values().get(r).selection());
     var receipt=operation.adopt(c,new MonthlyAdoptionPlan(selected,List.of(new MonthlyAdoptionPlan.Use("root/shared220",b,BigDecimal.ONE),new MonthlyAdoptionPlan.Use("root/explicit210",explicit,BigDecimal.ONE)),Set.of()));var origin=new ObjectMapper().findAndRegisterModules().valueToTree(Map.of("supplierReviews",receipt.supplierReviews()));assertThat(origin.path("supplierReviews").size()).isEqualTo(1);assertThat(origin.path("supplierReviews").get(0).path("scope").path("orgCode").asText()).isEqualTo("220");
   }
-  @Test void explicitWithdrawalAppliesBeforeSingleAndSamePriceScrapShortcuts() {
+  @Test void singleAndSamePriceScrapPreserveTheExistingPriceShortcutsWithoutADecisiveMainSupplier() {
     String code=code(),month="2040-03"; rule(code,"COMMERCIAL",month,"S1","10",null); var req=request(code,"COMMERCIAL",month,"210");
     assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).problems()).isEmpty();
     jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',0,1,0)",code);
-    assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).values()).isEmpty();
+    assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).values().get(req).selection().fact().price()).isEqualByComparingTo("10");
     rule(code,"COMMERCIAL",month,"S2","10",null); var result=source.read(context("COMMERCIAL",month,"210"),Set.of(req));
     assertThat(result.problems()).isEmpty(); assertThat(result.values().get(req).selection().fact().evidence().json()).contains("S2");
   }

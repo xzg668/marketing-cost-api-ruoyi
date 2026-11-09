@@ -264,16 +264,12 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
           com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Metric.DIRECT_LABOR,
           com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Metric.MANUFACTURE_COST),key,item,null,1,20);
     var result=comparisonService.compare(selected);
-    // The direct old-format source has no saved customer identity. Keep it visible separately;
-    // the two adopted monthly results have a reliable customer identity and compare together.
-    assertThat(result.comparison().products()).hasSize(2);
-    var product=result.comparison().products().stream().filter(p->p.identity().matched()).findFirst().orElseThrow();
-    var unmatched=result.comparison().products().stream().filter(p->!p.identity().matched()).findFirst().orElseThrow();
-    assertThat(unmatched.baseline()).isNotNull();assertThat(unmatched.comparison()).isNull();
-    assertThat(unmatched.change()).isEqualTo(com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Change.IDENTITY_UNMATCHED);
-    assertThat(result.comparison().rows()).hasSize(5);
-    var legacyRows=result.comparison().rows().stream().filter(r->r.objectKey().equals(unmatched.objectKey())).toList();
-    assertThat(legacyRows).hasSize(2).allSatisfy(row->{assertThat(row.baseline()).isNotNull();assertThat(row.comparison()).isNull();});
+    // Current costing captures the customer on the original result too; the same object
+    // appears once across the two months, with all three component comparisons retained.
+    assertThat(result.comparison().products()).hasSize(1);
+    var product=result.comparison().products().getFirst();
+    assertThat(product.identity().matched()).isTrue();
+    assertThat(result.comparison().rows()).hasSize(3);
     var rows=result.comparison().rows().stream().filter(r->r.objectKey().equals(product.objectKey())).toList();assertThat(rows).hasSize(3);
     var br=rows.stream().filter(r->b.equals(r.key().materialCode())).findFirst().orElseThrow();
     var cr=rows.stream().filter(r->c.equals(r.key().materialCode())).findFirst().orElseThrow();
@@ -310,20 +306,17 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
           .header("Authorization","Bearer "+jwt.generateToken("admin","COMMERCIAL")).GET().build(),java.net.http.HttpResponse.BodyHandlers.ofByteArray());
       assertThat(download.statusCode()).isEqualTo(200);assertThat(download.headers().firstValue("Content-Type").orElse("")).contains("spreadsheetml");
       try(var workbook=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(download.body()))) {
-        var sheet=workbook.getSheetAt(0);assertThat(sheet.getRow(3).getLastCellNum()).isEqualTo((short)48);
-        assertThat(sheet.getLastRowNum()).isEqualTo(10); // Two products and all five parts.
-        var knownRows=java.util.stream.IntStream.rangeClosed(4,sheet.getLastRowNum()).mapToObj(sheet::getRow)
-            .filter(row->row.getCell(6).getStringCellValue().equals("MRP-CUSTOMER")).toList();
+        var sheet=workbook.getSheetAt(0);assertThat(sheet.getRow(1).getLastCellNum()).isEqualTo((short)38);
+        assertThat(sheet.getLastRowNum()).isEqualTo(5); // Two header rows, one product and three parts.
+        var knownRows=java.util.stream.IntStream.rangeClosed(2,sheet.getLastRowNum()).mapToObj(sheet::getRow)
+            .filter(row->row.getCell(2).getStringCellValue().equals(key)).toList();
         assertThat(knownRows).hasSize(4);
-        var materialB=knownRows.stream().filter(row->row.getCell(2).getCellType()==org.apache.poi.ss.usermodel.CellType.STRING
-            && row.getCell(2).getStringCellValue().equals(b)).findFirst().orElseThrow();
-        assertThat(materialB.getCell(42).getNumericCellValue()).isEqualTo(14.125);
+        var materialB=knownRows.stream().filter(row->row.getCell(0).getCellType()==org.apache.poi.ss.usermodel.CellType.STRING
+            && row.getCell(0).getStringCellValue().equals(b)).findFirst().orElseThrow();
+        assertThat(materialB.getCell(32).getNumericCellValue()).isEqualTo(14.125);
         assertThat(knownRows.getFirst().getCell(12).getNumericCellValue()).isEqualTo(1);
         assertThat(materialB.getCell(12).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.BLANK);
-        var legacyRowsInWorkbook=java.util.stream.IntStream.rangeClosed(4,sheet.getLastRowNum()).mapToObj(sheet::getRow)
-            .filter(row->!row.getCell(6).getStringCellValue().equals("MRP-CUSTOMER")).toList();
-        assertThat(legacyRowsInWorkbook).hasSize(3).allSatisfy(row->
-            assertThat(row.getCell(28).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.BLANK));
+
       }
       assertThat(jdbc.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id")).isEqualTo(monthlyBefore);
     } catch(Exception failure){throw new AssertionError("Actual comparison workbook HTTP download failed",failure);}
@@ -337,7 +330,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     var raw=rawHierarchy.selectOne(com.baomidou.mybatisplus.core.toolkit.Wrappers.<com.sanhua.marketingcost.entity.BomRawHierarchy>lambdaQuery().eq(com.sanhua.marketingcost.entity.BomRawHierarchy::getBuildBatchId,product).eq(com.sanhua.marketingcost.entity.BomRawHierarchy::getMaterialCode,original));
     var copy=new com.sanhua.marketingcost.entity.BomRawHierarchy();org.springframework.beans.BeanUtils.copyProperties(raw,copy);
     copy.setId(null);copy.setSourceLineKey("MRP08-"+material);copy.setMaterialCode(material);copy.setMaterialName(material);copy.setPath("/"+product+"/"+material+"/");
-    copy.setQtyPerParent(new BigDecimal(quantity));copy.setQtyPerTop(new BigDecimal(quantity));copy.setSortSeq(10);rawHierarchy.insert(copy);
+    copy.setQtyPerParent(new BigDecimal(quantity));copy.setQtyPerTop(new BigDecimal(quantity));copy.setSortSeq(10);insertStandardFixture(copy);
   }
 
   @BeforeEach void tenant() {
@@ -529,6 +522,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     }
     byte[] original;
     try(var input=getClass().getResourceAsStream("/inquiry-pricing/采购件询价录入格式1031.xls")){original=input.readAllBytes();}
+    original = inquiryWithMaterialCode(original, "YCQC02-043002", material);
     var revision=invoiceInputRevisions.currentRevision(oaForms.selectById(form),oaItems.selectById(item),month);
     inquiryImports.publish("COMMERCIAL",month,"fixture",UUID.randomUUID().toString(),"询价.xls",original);
     assertThat(invoiceInputRevisions.currentRevision(oaForms.selectById(form),oaItems.selectById(item),month)).isNotEqualTo(revision);
@@ -543,7 +537,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     var adopted=jdbc.queryForMap("SELECT id,source_type,unit_price FROM lp_material_monthly_price WHERE material_code=?",material);
     assertThat(adopted.get("source_type")).isEqualTo("INQUIRY");assertThat((BigDecimal)adopted.get("unit_price")).isEqualByComparingTo("0.0442");
     var stableRevision=invoiceInputRevisions.currentRevision(oaForms.selectById(form),oaItems.selectById(item),month);
-    inquiryImports.publish("COMMERCIAL",month,"fixture",UUID.randomUUID().toString(),"新询价.xlsx",InquiryBrowserAcceptance.fixedWorkbook("YCQC02-043002","1"));
+    inquiryImports.publish("COMMERCIAL",month,"fixture",UUID.randomUUID().toString(),"新询价.xlsx",inquiryWithMaterialCode(InquiryBrowserAcceptance.fixedWorkbook("YCQC02-043002","1"), "YCQC02-043002", material));
     assertThat(invoiceInputRevisions.currentRevision(oaForms.selectById(form),oaItems.selectById(item),month)).isEqualTo(stableRevision);
     assertThat(monthlyCosts.read("COMMERCIAL",calculated.version().getId()).version().getTotalCost()).isEqualByComparingTo(calculated.totalCost());
     // Finance already exists for the target month; an older source arriving afterwards must be refreshed by enqueue.
@@ -928,7 +922,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
       source.setIsLeaf(index > 1 ? 1 : 0); source.setU9IsCostFlag(1); source.setSourceType("U9");
       source.setSourceImportBatchId(key); source.setBuildBatchId(key); source.setBuiltAt(date);
       source.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); source.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1)); source.setBusinessUnitType("COMMERCIAL");
-      source.setPriceOrgCode("210"); rawHierarchy.insert(source);
+      source.setPriceOrgCode("210"); insertStandardFixture(source);
     }
     ordinaryExpenseSources(key, form, date);
     var parent = buildOriginalFixture(form, item, key, month, date, parentCode,
@@ -994,7 +988,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     child.setBomPurpose("主制造"); child.setBomVersion("MPP12"); child.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); child.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1));
     child.setBomStatus("已核准"); child.setIsLeaf(1); child.setU9IsCostFlag(1); child.setSourceType("U9");
     child.setSourceImportBatchId(key); child.setBuildBatchId(key); child.setBuiltAt(date); child.setPriceOrgCode("210");
-    child.setBusinessUnitType("COMMERCIAL"); rawHierarchy.insert(child);
+    child.setBusinessUnitType("COMMERCIAL"); insertStandardFixture(child);
     var original = monthlyU9.read(new com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext(
         form, item, key, month, "COMMERCIAL", key, key, null, null, "210", "COMMERCIAL", date.toLocalDate(), date));
     assertThat(original.status()).as(original.message()).isEqualTo(com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult.Status.AVAILABLE);
@@ -1147,7 +1141,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
       source.setIsLeaf(level == 2 ? 1 : 0); source.setU9IsCostFlag(1); source.setSourceType("U9");
       source.setSourceImportBatchId(top); source.setBuildBatchId(top); source.setBuiltAt(date);
       source.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); source.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1)); source.setBusinessUnitType("COMMERCIAL");
-      source.setPriceOrgCode("210"); rawHierarchy.insert(source);
+      source.setPriceOrgCode("210"); insertStandardFixture(source);
     }
   }
 
@@ -1204,7 +1198,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
       raw.setShapeAttr(level == 0 ? "制造件" : "采购件"); raw.setBomPurpose("主制造"); raw.setBomVersion("MPP12");
       raw.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); raw.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1)); raw.setBomStatus("已核准");
       raw.setIsLeaf(level); raw.setU9IsCostFlag(1); raw.setSourceType("U9"); raw.setSourceImportBatchId(product);
-      raw.setBuildBatchId(product); raw.setBuiltAt(date); raw.setPriceOrgCode("210"); raw.setBusinessUnitType("COMMERCIAL"); rawHierarchy.insert(raw);
+      raw.setBuildBatchId(product); raw.setBuiltAt(date); raw.setPriceOrgCode("210"); raw.setBusinessUnitType("COMMERCIAL"); insertStandardFixture(raw);
     }
     zeroPackaging(product, date);
     ordinaryExpenseSources(product, formId, date);
@@ -1227,7 +1221,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
       raw.setBomPurpose("主制造"); raw.setBomVersion("MPP12"); raw.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); raw.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1));
       raw.setBomStatus("已核准"); raw.setIsLeaf(index); raw.setU9IsCostFlag(1); raw.setSourceType("U9");
       raw.setSourceImportBatchId(product); raw.setBuildBatchId(product); raw.setBuiltAt(date);
-      raw.setPriceOrgCode("210"); raw.setBusinessUnitType("COMMERCIAL"); rawHierarchy.insert(raw);
+      raw.setPriceOrgCode("210"); raw.setBusinessUnitType("COMMERCIAL"); insertStandardFixture(raw);
     }
   }
 
@@ -1282,5 +1276,37 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     var full=quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
         oaForms.selectById(oaItems.selectById(itemId).getOaFormId()),oaItems.selectById(itemId),month,customerNo,oa,null,true));
     compareRepriceCalculation(full,oaItems.selectById(itemId).getOaFormId(),itemId,month,customerNo);
+  }
+  /** These owned fixtures have no alternatives; freeze the explicit U9 normal-line fact. */
+  private void insertStandardFixture(com.sanhua.marketingcost.entity.BomRawHierarchy row) {
+    row.setChildType("NORMAL");
+    rawHierarchy.insert(row);
+  }
+  @org.springframework.beans.factory.annotation.Autowired
+  com.sanhua.marketingcost.config.MonthlyRepriceProperties matchingFixturePeriods;
+
+  @org.junit.jupiter.api.BeforeEach
+  void configureOwnedFixturePeriod() {
+    String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    matchingFixturePeriods.setGoLiveMonths(java.util.Map.of("COMMERCIAL", month, "HOUSEHOLD", month));
+  }
+  private static byte[] inquiryWithMaterialCode(byte[] original, String specification, String code) throws Exception {
+    try (var book = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(original));
+         var bytes = new java.io.ByteArrayOutputStream()) {
+      var format = new org.apache.poi.ss.usermodel.DataFormatter();
+      for (var sheet : book) {
+        int codeColumn = -1, specificationColumn = -1;
+        for (var row : sheet) {
+          for (var cell : row) {
+            if ("料号".equals(format.formatCellValue(cell).trim())) codeColumn = cell.getColumnIndex();
+            if ("规格型号".equals(format.formatCellValue(cell).trim())) specificationColumn = cell.getColumnIndex();
+          }
+          if (codeColumn >= 0 && specificationColumn >= 0
+              && specification.equals(format.formatCellValue(row.getCell(specificationColumn)).trim()))
+            row.getCell(codeColumn, org.apache.poi.ss.usermodel.Row.MissingCellPolicy.CREATE_NULL_AS_BLANK).setCellValue(code);
+        }
+      }
+      book.write(bytes); return bytes.toByteArray();
+    }
   }
 }

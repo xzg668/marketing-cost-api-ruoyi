@@ -94,6 +94,7 @@ public class TechnicalDataTaskApplicationServiceImpl
     if (!actor.admin() || actor.oaSession()) throw forbidden("只有管理员可以直接补录未分派产品");
     return transactionTemplate.execute(status -> {
       var source = sourceReader.lockAndRead(itemId, accountingMonth);
+      if (!actor.canAccessForm(source.product().oaFormId())) throw forbidden("无权访问该报价范围的单据");
       oaWorkflowAccess.requireCosting(source.product().oaFormId());
       var task = repository.lockActiveTask(itemId, accountingMonth).orElse(null);
       if (task != null) {
@@ -147,6 +148,7 @@ public class TechnicalDataTaskApplicationServiceImpl
     // 一个本地事务：某项归属或数据校验失败时整批回滚，调用方不会遇到半批成功。
     for (Long itemId : command.itemIds()) {
       var source = sourceReader.lockAndRead(itemId, command.accountingMonth());
+      if (!actor.canAccessForm(source.product().oaFormId())) throw forbidden("无权访问该报价范围的单据");
       oaWorkflowAccess.requireOaHandling(source.product().oaFormId());
       requireCurrentCheck(request.getCheckFingerprints().get(itemId), source, "分派");
       requireSupplementGap(source);

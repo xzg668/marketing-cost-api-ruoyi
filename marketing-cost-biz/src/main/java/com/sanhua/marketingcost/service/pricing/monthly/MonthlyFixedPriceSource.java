@@ -28,7 +28,7 @@ public final class MonthlyFixedPriceSource {
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()))throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Fixed source scope differs from request");
-      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.family().materialCode(),ignored->new ArrayList<>()).add(request);
+      groups.computeIfAbsent(request.priceOrgCode(),ignored->new TreeMap<>()).computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     for(var organization:groups.entrySet()){
       var codes=new ArrayList<>(organization.getValue().keySet());
@@ -41,10 +41,11 @@ public final class MonthlyFixedPriceSource {
         var scopes=new HashMap<String,SupplierPriceScope>();for(String code:ratioCodes)if(byCode.get(code).size()>1)scopes.put(code,scope(context,organization.getKey(),code));
         var decisions=new HashMap<String,SupplierPriceDecision>();if(!scopes.isEmpty())supplierInputs.decisions(scopes.values().stream().map(SupplierPriceSelectionService::scopeKey).distinct().toList()).forEach(row->decisions.put(row.getScopeKey(),row));
         for(String code:batch)for(var request:organization.getValue().get(code)){
-          var candidates=byCode.getOrDefault(code,List.of());if(candidates.isEmpty())continue;
+          var candidates=byCode.getOrDefault(code,List.of()).stream().filter(row->request.matchesSpecification(row.getSpecModel())).toList();if(candidates.isEmpty())continue;
           try{
             String requested=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
             var scoped=requested==null?candidates:candidates.stream().filter(row->requested.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()))).toList();
+            scoped=SupplierRatioPricePolicy.forPrimarySupplier(scoped,ratios.getOrDefault(code,List.of()),PriceFixedItem::getSupplierCode,PriceFixedItem::getSupplierName);
             var preferred=SupplyPriceDatePolicy.preferCurrentOrLatestPeriod(scoped,context.priceAsOfTime().toLocalDate(),PriceFixedItem::getEffectiveFrom,PriceFixedItem::getEffectiveTo);
             var versions=versions(preferred);
             if(versions.isEmpty())continue;
@@ -53,7 +54,7 @@ public final class MonthlyFixedPriceSource {
             var scope=scope(context,organization.getKey(),code);var actualRatios=ratios.getOrDefault(code,List.of());
             var selected=suppliers.selectPrepared(scope,supplierCandidates,actualRatios,decisions.get(SupplierPriceSelectionService.scopeKey(scope)),context.supplierReviews().packagingHighestFallback());
             if(selected.review()!=null)context.supplierReviews().forOrganization(request.priceOrgCode()).add(selected.review());
-            if(selected.candidate()==null){problems.put(request,new Problem(Failure.WAITING,selected.message()));continue;}
+            if(selected.candidate()==null){problems.put(request,new Problem(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(selected.rule())?Failure.MISSING:Failure.WAITING,selected.message()));continue;}
             var chosen=versions.get(selected.candidate().key());
             var snapshot=new Snapshot(1,"PURCHASE_FIXED",new Source(chosen,active,actualRatios,selected.rule()),new Basis(request.family().unit(),"CNY",request.family().taxBasis(),"IDENTITY","EXISTING_CNY_COST_PRICE_CONTRACT","IDENTITY"));
             var fact=PriceFact.normal(chosen.getFixedPrice(),SourceEvidence.ofJson(codec.unwrap(codec.encode(snapshot))),Set.of());
@@ -80,7 +81,7 @@ public final class MonthlyFixedPriceSource {
     return result;
   }
   private void validateBasis(MonthlyPriceRequest request,PriceFixedItem row){
-    if(row.getFixedPrice().signum()<0 || row.getUnit()==null || !row.getUnit().strip().equals(request.family().unit()) || !"CNY".equals(request.family().currency()) || row.getTaxIncluded()==null || row.getTaxIncluded()!=(request.family().taxBasis()==TaxBasis.INCLUDED?1:0))throw new IllegalArgumentException("单位、币种、税口径或价格与请求不匹配，不能猜测转换");
+    if(row.getFixedPrice().signum()<0 || !"CNY".equals(request.family().currency()) || row.getTaxIncluded()==null || row.getTaxIncluded()!=(request.family().taxBasis()==TaxBasis.INCLUDED?1:0))throw new IllegalArgumentException("币种、税口径或价格与请求不匹配，不能猜测转换");
   }
   private SupplierPriceScope scope(Context context,String org,String code){return new SupplierPriceScope(context.businessUnitType(),context.oaNo(),context.oaFormItemId(),context.month().toString(),context.priceAsOfTime().toLocalDate(),org,code,"FIXED");}
 }

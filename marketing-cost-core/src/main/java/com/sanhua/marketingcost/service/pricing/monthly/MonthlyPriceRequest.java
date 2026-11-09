@@ -31,4 +31,19 @@ public record MonthlyPriceRequest(
     priceBasisQuantity = priceBasisQuantity.stripTrailingZeros();
     annualUsagePieces = annualUsagePieces == null || annualUsagePieces.signum() <= 0 ? null : annualUsagePieces.stripTrailingZeros();
   }
+
+  public String materialCode() {
+    return family.materialCode();
+  }
+
+  /** The BOM keeps its own code, including an absent code after specification matching. */
+  public boolean matchesBomMaterialCode(String bomCode) {
+    String code = bomCode == null ? "" : bomCode.trim();
+    return family.specificationOnly() ? code.isEmpty() : family.materialCode().equals(code);
+  }
+
+  public boolean matchesSpecification(String sourceSpecification) {
+    return !family.specificationOnly()
+        || Objects.equals(family.specification(), sourceSpecification == null ? null : sourceSpecification.trim());
+  }
 }

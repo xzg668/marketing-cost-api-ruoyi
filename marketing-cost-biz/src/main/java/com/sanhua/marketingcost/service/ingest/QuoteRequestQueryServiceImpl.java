@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.ingest;
 
+import com.sanhua.marketingcost.security.QuoteVisibilityContext;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -136,6 +137,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
                 trimToNull(classificationStatus))
             .orderByDesc(OaForm::getApplyDate)
             .orderByDesc(OaForm::getId);
+    query.apply(QuoteVisibilityContext.formCondition("oa_form"));
     applyCompletionFilter(query, completionStatus);
     Page<OaForm> page = new Page<>(normalizePageNo(pageNo), normalizePageSize(pageSize));
     Page<OaForm> result = oaFormMapper.selectPage(page, query);
@@ -234,6 +236,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
                 trimToNull(ingestStatus))
             .orderByDesc(QuoteIngestLog::getReceivedAt)
             .orderByDesc(QuoteIngestLog::getId);
+    if (QuoteVisibilityContext.restricted()) {
+      query.apply(QuoteVisibilityContext.ingestLogCondition("lp_quote_ingest_log"));
+    }
     Page<QuoteIngestLog> page =
         quoteIngestLogMapper.selectPage(
             new Page<>(normalizePageNo(pageNo), normalizePageSize(pageSize)), query);
@@ -270,6 +275,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     row.setSourceSystem(form.getSourceSystem());
     row.setQuoteScenario(form.getQuoteScenario());
     row.setCustomer(form.getCustomer());
+    row.setSalespersonName(form.getApplicantName());
     row.setApplyDate(form.getApplyDate());
     row.setApplicantUnit(form.getApplicantUnit());
     row.setApplicantDept(form.getApplicantDept());

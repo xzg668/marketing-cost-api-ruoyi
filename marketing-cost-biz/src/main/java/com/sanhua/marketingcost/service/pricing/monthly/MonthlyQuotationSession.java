@@ -78,8 +78,14 @@ public final class MonthlyQuotationSession implements QuotationPriceSession {
     var issues = new LinkedHashMap<Input, MonthlyMaterialPrices.Problem>();
     for (var input : inputs) if (!values.containsKey(input)) {
       var item = MonthlyQuotationPrices.item(input);
-      var matches = MonthlyQuotationPrices.requests(context, item).stream()
-          .map(this::captured).filter(Objects::nonNull).toList();
+      List<Value> matches;
+      try {
+        matches = prices.requestsFor(context, item).stream()
+            .map(this::captured).filter(Objects::nonNull).toList();
+      } catch (MonthlyPriceProblem problem) {
+        issues.put(input, new MonthlyMaterialPrices.Problem(problem.reason(), problem.getMessage()));
+        continue;
+      }
       if (matches.size() == 1) {
         var value = matches.get(0);
         capturedValues.putIfAbsent(value.request(), value);

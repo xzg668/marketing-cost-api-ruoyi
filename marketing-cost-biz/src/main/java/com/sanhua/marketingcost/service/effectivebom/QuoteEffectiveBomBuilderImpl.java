@@ -150,12 +150,12 @@ public final class QuoteEffectiveBomBuilderImpl
       return;
     }
     String materialCode = trimToNull(row.getMaterialCode());
-    if (materialCode == null) {
-      state.issues().add(issue("MATERIAL_CODE_MISSING", row, "节点料号为空"));
+    if (materialCode == null && trimToNull(row.getMaterialSpec()) == null) {
+      state.issues().add(issue("MATERIAL_CODE_MISSING", row, "节点料号和规格均为空"));
       markSubtreeHandled(path, structure, state.handledPaths());
       return;
     }
-    if (ancestorMaterials.contains(materialCode)) {
+    if (materialCode != null && ancestorMaterials.contains(materialCode)) {
       state.issues().add(
           issue(
               "BOM_CYCLE",
@@ -168,7 +168,9 @@ public final class QuoteEffectiveBomBuilderImpl
       return;
     }
 
-    EffectiveBomShapeDecision decision = decisions.get(materialCode);
+    EffectiveBomShapeDecision decision = materialCode == null
+        ? EffectiveBomShapeDecision.u9("",row.getShapeAttr(),QuoteMaterialShape.fromU9(row.getShapeAttr()))
+        : decisions.get(materialCode);
     if (decision == null) {
       state.issues().add(
           issue(
@@ -268,7 +270,7 @@ public final class QuoteEffectiveBomBuilderImpl
       return;
     }
 
-    ancestorMaterials.add(materialCode);
+    if(materialCode != null) ancestorMaterials.add(materialCode);
     for (BomRawHierarchy child : retainedChildren) {
       visit(
           child,
@@ -282,7 +284,7 @@ public final class QuoteEffectiveBomBuilderImpl
           maxDepth,
           state);
     }
-    ancestorMaterials.remove(materialCode);
+    if(materialCode != null) ancestorMaterials.remove(materialCode);
   }
 
   private static List<BomRawHierarchy> excludeConfiguredDirectChildren(
@@ -339,7 +341,7 @@ public final class QuoteEffectiveBomBuilderImpl
         depth,
         row.getSortSeq() == null ? 0 : row.getSortSeq(),
         path,
-        trimToNull(row.getMaterialCode()),
+        java.util.Objects.toString(trimToNull(row.getMaterialCode()),""),
         trimToNull(row.getMaterialName()),
         trimToNull(row.getMaterialSpec()),
         trimToNull(row.getPriceOrgCode()),

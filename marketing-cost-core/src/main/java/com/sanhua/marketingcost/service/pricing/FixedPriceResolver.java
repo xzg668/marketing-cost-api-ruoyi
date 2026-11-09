@@ -71,8 +71,16 @@ public class FixedPriceResolver implements PriceResolver {
         || !StringUtils.hasText(context.getBusinessUnitType())) {
       return PriceResolveResult.miss("FIXED_PRICE_SCOPE_MISSING", "固定价缺少取价组织、业务单元或核算日期：" + code);
     }
+    String businessUnit = context.getBusinessUnitType().trim();
+    var reviewContext = context == null ? null : context.getSupplierPriceReviewContext();
+    Long itemId = reviewContext == null ? (context == null ? null : context.getOaFormItemId())
+        : reviewContext.oaFormItemId();
+    SupplierPriceScope scope = new SupplierPriceScope(businessUnit, oaNo, itemId,
+        context == null ? null : context.getPricingMonth(), priceDate, orgCode, code, "FIXED");
+    var activeRatios=supplierPriceSelectionService.activeRatios(scope);
     List<PriceFixedItem> rows = SupplyPriceDatePolicy.preferCurrentOrLatestPeriod(
-        selectRows(code, orgCode, context), priceDate,
+        SupplierRatioPricePolicy.forPrimarySupplier(selectRows(code, orgCode, context),activeRatios,
+            PriceFixedItem::getSupplierCode,PriceFixedItem::getSupplierName), priceDate,
         PriceFixedItem::getEffectiveFrom, PriceFixedItem::getEffectiveTo);
     var bySupplier = new LinkedHashMap<String, PriceFixedItem>();
     for (PriceFixedItem row : rows) {
@@ -91,16 +99,11 @@ public class FixedPriceResolver implements PriceResolver {
     List<SupplierPriceCandidate> candidates = new ArrayList<>();
     bySupplier.forEach((supplier, row) -> candidates.add(new SupplierPriceCandidate(supplier,
         supplier, row.getSupplierName(), row.getFixedPrice(), row.getEffectiveFrom(), row.getEffectiveTo())));
-    String businessUnit = context.getBusinessUnitType().trim();
-    var reviewContext = context == null ? null : context.getSupplierPriceReviewContext();
-    Long itemId = reviewContext == null ? (context == null ? null : context.getOaFormItemId())
-        : reviewContext.oaFormItemId();
-    SupplierPriceScope scope = new SupplierPriceScope(businessUnit, oaNo, itemId,
-        context == null ? null : context.getPricingMonth(), priceDate, orgCode, code, "FIXED");
-    var selection = supplierPriceSelectionService.select(scope, candidates);
+    var selection = supplierPriceSelectionService.select(scope, candidates, activeRatios);
     if (selection.review() != null && reviewContext != null) reviewContext.add(selection.review());
     if (selection.candidate() == null) {
-      return PriceResolveResult.miss(SupplierPriceSelectionService.REVIEW_REQUIRED, selection.message());
+      return PriceResolveResult.miss(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(selection.rule())
+          ? selection.rule() : SupplierPriceSelectionService.REVIEW_REQUIRED, selection.message());
     }
     return resolved(bySupplier.get(selection.candidate().key()), "固定采购价",
         selection.message(), priceDate, selection);

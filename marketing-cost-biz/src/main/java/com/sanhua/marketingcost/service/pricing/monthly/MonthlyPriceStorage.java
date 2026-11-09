@@ -192,8 +192,9 @@ public class MonthlyPriceStorage {
     return result;
   }
   private StoredPrice read(MonthlyMaterialPriceRow row) {
+    var firstUse=codec.decode(row.getFirstUseJson(),JsonNode.class);
     var key=new MonthlyPriceFamilyKey(YearMonth.parse(row.getPricingMonth()),row.getBusinessUnitType(),row.getMaterialCode(),
-        row.getSpecification(),row.getPricingUnit(),row.getCurrency(),TaxBasis.valueOf(row.getTaxBasis()),row.getRequestedSupplierCode());
+        row.getSpecification(),row.getPricingUnit(),row.getCurrency(),TaxBasis.valueOf(row.getTaxBasis()),row.getRequestedSupplierCode(),firstUse.path("specificationOnly").asBoolean(false));
     var applicability=codec.decode(row.getApplicabilityJson(),MonthlyPriceApplicability.class);
     var parsed=parsedEvidence.get(row.getSourceEvidenceJson(), encoded -> {
       var evidence=SourceEvidence.ofJson(codec.unwrap(encoded));

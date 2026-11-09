@@ -164,7 +164,9 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
 
   private static boolean sameNode(QuoteEffectiveBomNode node, MonthlyPriceRequest request) {
     var family = request.family();
-    return family.materialCode().equals(node.getMaterialCode())
+    return (node.getMaterialCode() == null || node.getMaterialCode().isBlank()
+            ? family.specificationOnly() && Objects.equals(family.specification(), node.getMaterialSpec())
+            : !family.specificationOnly() && family.materialCode().equals(node.getMaterialCode()))
         && request.priceOrgCode().equals(node.getPriceOrgCode())
         && (node.getMaterialUnit() == null || family.unit().equals(node.getMaterialUnit()))
         && Objects.equals(Objects.toString(family.specification(), ""), Objects.toString(node.getMaterialSpec(), ""));

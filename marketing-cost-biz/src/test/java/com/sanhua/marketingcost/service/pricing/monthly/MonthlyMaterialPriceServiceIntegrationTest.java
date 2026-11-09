@@ -97,7 +97,7 @@ class MonthlyMaterialPriceServiceIntegrationTest {
     MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/V360__finance_correction_monthly_price.sql"),"/tmp/finance-correction.sql");
     var financePatch=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot mpp_module_test < /tmp/finance-correction.sql");
     assertThat(financePatch.getExitCode()).withFailMessage(financePatch.getStderr()).isZero();
-    for(String migration:List.of("V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")) {
+    for(String migration:List.of("V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/household.sql");
       var patch=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot mpp_module_test < /tmp/household.sql");
       assertThat(patch.getExitCode()).withFailMessage(patch.getStderr()).isZero();
@@ -682,7 +682,7 @@ class MonthlyMaterialPriceServiceIntegrationTest {
   }
 
   @Test
-  void aHouseholdSourceCannotGuessUnitCurrencyTaxOrAnUnrecordedSupplier() throws Exception {
+  void aCodedHouseholdSourceIgnoresUnitAndPreservesCurrencyTaxAndSupplierContract() throws Exception {
     var bytes =
         getClass().getResourceAsStream("/household-inquiry/real-20261023.xls").readAllBytes();
     var preview =
@@ -723,9 +723,14 @@ class MonthlyMaterialPriceServiceIntegrationTest {
                 "SUPPLIER"))) {
       var request = new MonthlyPriceRequest(family, "210", NonCuConditions.empty(), BigDecimal.ONE);
       var result = householdSource.read(context, Set.of(request));
-      assertThat(result.values()).isEmpty();
-      assertThat(result.problems().get(request).reason())
-          .isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+      if ("KG".equals(family.unit())) {
+        assertThat(result.problems()).isEmpty();
+        assertThat(result.values()).containsKey(request);
+      } else {
+        assertThat(result.values()).isEmpty();
+        assertThat(result.problems().get(request).reason())
+            .isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+      }
     }
     assertThat(
             householdSource

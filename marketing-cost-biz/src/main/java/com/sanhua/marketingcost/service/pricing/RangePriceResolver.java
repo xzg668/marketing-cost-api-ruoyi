@@ -769,7 +769,8 @@ public class RangePriceResolver implements PriceResolver {
                 batch == null ? null : batch.ratios().getOrDefault(material, List.of()));
         if (chosen.price() == null)
           return PriceResolveResult.miss(
-              SupplierPriceSelectionService.REVIEW_REQUIRED, chosen.supplier().message());
+              SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE.equals(chosen.supplier().rule())
+                  ? chosen.supplier().rule() : SupplierPriceSelectionService.REVIEW_REQUIRED, chosen.supplier().message());
         var row =
             candidates.stream()
                 .filter(rule -> rule.getId().equals(chosen.price().getOriginalId()))

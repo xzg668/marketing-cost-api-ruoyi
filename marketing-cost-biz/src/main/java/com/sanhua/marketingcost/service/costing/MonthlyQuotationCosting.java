@@ -197,7 +197,7 @@ public final class MonthlyQuotationCosting {
       row.setCuAffected(affected(exposure, line.monthlyPriceIds()) ? 1 : 0);
       row.setPriceFormulaRefType(MonthlyPreparationPrice.KIND);
       snapshot.calculation().adoptedPrices().stream().filter(price ->
-          price.request().family().materialCode().equals(line.materialCode())
+          price.request().matchesBomMaterialCode(line.materialCode())
               && line.monthlyPriceIds().contains(price.selection().monthlyPriceId()))
           .findFirst().ifPresent(price -> row.setPriceFormulaRefId(price.selection().monthlyPriceId()));
       var children = componentRows(version, binding, line.path(), line.materialCode(), saved, exposure);

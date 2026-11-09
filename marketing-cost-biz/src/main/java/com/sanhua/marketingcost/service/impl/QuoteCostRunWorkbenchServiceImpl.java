@@ -164,7 +164,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             accessScope.businessUnitType());
     QuoteCostRunSummaryResponse latestTrial = latestInProgressVersion(scope);
     QuoteCostRunSummaryResponse latestConfirmed = latestSuccessfulVersion(scope);
-    QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed);
+    QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed, false);
     response.setCurrentDisplayVersion(summary(selected, selected.getTotalCost()));
     fillResultRows(response, selected.getId(), sheet);
     return response;
@@ -530,6 +530,14 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       Scope scope,
       QuoteCostRunSummaryResponse latestTrial,
       QuoteCostRunSummaryResponse latestConfirmed) {
+    return baseResponse(scope, latestTrial, latestConfirmed, true);
+  }
+
+  private QuoteCostRunWorkbenchResponse baseResponse(
+      Scope scope,
+      QuoteCostRunSummaryResponse latestTrial,
+      QuoteCostRunSummaryResponse latestConfirmed,
+      boolean checkCurrentReadiness) {
     QuoteCostRunWorkbenchResponse response = new QuoteCostRunWorkbenchResponse();
     response.setOaNo(scope.oaNo());
     response.setOaFormItemId(scope.oaFormItemId());
@@ -538,9 +546,10 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     response.setLatestTrial(latestTrial);
     response.setLatestConfirmed(latestConfirmed);
     response.setVersions(versionItems(scope, latestTrial, latestConfirmed));
-    List<String> blockingReasons = readinessBlockingReasons(scope);
+    // A saved-version read must not scan mutable preparation JSON or validate a new calculation.
+    List<String> blockingReasons = checkCurrentReadiness ? readinessBlockingReasons(scope) : List.of();
     response.setBlockingReasons(blockingReasons);
-    response.setCanStartTrial(blockingReasons.isEmpty());
+    response.setCanStartTrial(checkCurrentReadiness && blockingReasons.isEmpty());
     return response;
   }
 

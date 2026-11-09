@@ -22,9 +22,16 @@ import org.springframework.stereotype.Component;
 public final class CostRunManufacturingSources {
   public static final int MAX_BATCH_OBJECTS = 64;
   private final CostRunManufacturingSourceMapper mapper;
+  private final com.sanhua.marketingcost.mapper.AuxCostItemMapper auxiliaryMapper;
 
   public CostRunManufacturingSources(CostRunManufacturingSourceMapper mapper) {
+    this(mapper,null);
+  }
+  @org.springframework.beans.factory.annotation.Autowired
+  public CostRunManufacturingSources(CostRunManufacturingSourceMapper mapper,
+      com.sanhua.marketingcost.mapper.AuxCostItemMapper auxiliaryMapper) {
     this.mapper = Objects.requireNonNull(mapper);
+    this.auxiliaryMapper=auxiliaryMapper;
   }
 
   public record Demand(Integer costYear, String businessUnitType, String pricingMonth,
@@ -70,6 +77,7 @@ public final class CostRunManufacturingSources {
       for (var row : mapper.selectEffectiveAuxCostItemsBatch(reads(auxiliarySlots))) {
         aux.get(row.getReadSlot()).add(row);
       }
+      auxiliarySlots.forEach((scope,slot)->SinteredBaseSurfaceCosts.apply(aux.get(slot),scope.businessUnitType(),auxiliaryMapper));
     }
     var result = new ArrayList<Sources>(stable.size());
     for (var demand : stable) {

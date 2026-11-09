@@ -75,12 +75,14 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
     item.setBomRowId(row.getId());
     String materialCode = trimToNull(row.getMaterialCode());
     item.setMaterialCode(materialCode);
-    item.setMaterialName(resolveMaterialName(row, masters.get(materialCode), rawMasters.get(materialCode)));
+    item.setMaterialName(resolveMaterialName(row, materialCode == null ? null : masters.get(materialCode), materialCode == null ? null : rawMasters.get(materialCode)));
 
     if (materialCode == null) {
+      item.setMaterialCode("");
       item.setItemType(ITEM_TYPE_NORMAL);
-      item.setStatus(STATUS_MISSING_MASTER);
-      item.setMessage("BOM结算行缺料号，无法进入价格准备");
+      item.setStatus(hasText(row.getMaterialSpec()) ? STATUS_READY : STATUS_MISSING_MASTER);
+      item.setMessage(hasText(row.getMaterialSpec())
+          ? "BOM未填料号，按该行规格匹配价格" : "BOM未填写料号或规格，无法匹配价格");
       return item;
     }
     if (com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing.HOUSEHOLD_ROW

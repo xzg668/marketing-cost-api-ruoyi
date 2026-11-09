@@ -693,7 +693,8 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       String specification = ordinary && original != null ? original.getMaterialSpec()
           : packaging != null && StringUtils.hasText(packaging.specification()) ? packaging.specification()
           : master == null ? null : master.getMaterialSpec();
-      if (!StringUtils.hasText(row.getMaterialCode()) || !StringUtils.hasText(unit) || quantity == null) {
+      if ((!StringUtils.hasText(row.getMaterialCode()) && !StringUtils.hasText(specification))
+          || (StringUtils.hasText(row.getMaterialCode()) && !StringUtils.hasText(unit)) || quantity == null) {
         row.setTypeStatus(STATUS_NO_SOURCE);
         row.setMessage("缺少明确的物料计价单位或用量，请核实当前报价物料");
         continue;

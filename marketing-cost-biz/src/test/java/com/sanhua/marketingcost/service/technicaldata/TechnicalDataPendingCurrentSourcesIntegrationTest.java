@@ -83,6 +83,46 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_task WHERE oa_form_item_id=?",Integer.class,itemId)).isZero();
   }
 
+  @Test void previouslyCheckedMixedGapsCanRecoverMissingPriceWithoutReplayingCostingOrWritingHistory() throws Exception {
+    var time=LocalDateTime.now();
+    var saved=new TechnicalDataSourceCheckResponse(itemId,"2026-11","old-check",time,List.of(
+        new TechnicalDataModuleRequirement("PRICE",false,"PRICE_BASIS_UNCONFIRMED","仍有结构或来源冲突",
+            TechnicalDataAvailability.UNCONFIRMED,"old-price",time)),null,List.of());
+    jdbc.update("UPDATE lp_quote_costing_workspace SET technical_check_json=? WHERE oa_form_item_id=?",
+        json.writeValueAsString(Map.of("check",saved)),itemId);
+    current(false,true);
+    var before=protectedRows();
+    for(int i=0;i<2;i++) {
+      var page=tasks.workbench(1,20,null,"2026-11",null,oaNo,ADMIN);
+      assertThat(page.total()).isEqualTo(1);
+      assertThat(page.summary().total()).isEqualTo(1);
+      assertThat(page.records().getFirst().product().modules()).filteredOn(m->m.required())
+          .extracting(m->m.moduleType()).containsExactly("PRICE");
+      assertThat(pending.hasPendingItem(oaNo,itemId)).isTrue();
+    }
+    assertThat(protectedRows()).isEqualTo(before);
+    current(true,true);
+    assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isZero();
+    assertThat(protectedRows()).isEqualTo(before);
+  }
+
+  @Test void uncheckedProductsCannotEnterWorkbenchThroughMixedGapRecovery() throws Exception {
+    jdbc.update("UPDATE lp_quote_costing_workspace SET last_checked_at=NULL WHERE oa_form_item_id=?",itemId);
+    clearInvocations(sources);
+    assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isZero();
+    verifyNoInteractions(sources);
+  }
+
+  @Test void resolvedPriceWithRemainingSourceMaintenanceIsNotATechnicalPriceTask() {
+    var facts = current(true, true).facts().stream().map(fact -> fact.moduleType() == TechnicalDataModuleType.PRICE
+        ? new TechnicalDataSourceFact(TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
+            "PRICE_BASIS_UNCONFIRMED", "仍有结构或来源问题，但无实际缺价", "price", LocalDateTime.now()) : fact).toList();
+    when(sources.check(any(),any())).thenReturn(new TechnicalDataSourceCheckService.Check(facts,Map.of()));
+    var before=protectedRows();
+    assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isZero();
+    assertThat(protectedRows()).isEqualTo(before);
+  }
+
   @Test void unavailableSourcesKeepTheOriginalPendingRowWithoutWritingAnything() {
     var before=protectedRows();
     when(sources.check(any(),any())).thenThrow(new IllegalStateException("当前来源暂时不可用"));

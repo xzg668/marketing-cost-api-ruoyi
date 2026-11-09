@@ -9,6 +9,7 @@ CREATE TABLE `lp_supplier_supply_ratio` (
   `material_shape` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '物料形态属性',
   `supplier_name` varchar(180) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '供应商名称',
   `supplier_code` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '供应商代码，当前 Excel 可为空，后续 SRM 可补充',
+  `selection_rule` varchar(255) DEFAULT NULL,
   `supply_ratio` decimal(18,6) DEFAULT NULL COMMENT '供货比例，小数；NULL表示未填写',
   `effective_from` date DEFAULT NULL COMMENT '生效日期，Excel 导入阶段可为空',
   `effective_to` date DEFAULT NULL COMMENT '失效日期',

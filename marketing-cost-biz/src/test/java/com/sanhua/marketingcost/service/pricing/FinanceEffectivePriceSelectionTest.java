@@ -65,13 +65,13 @@ class FinanceEffectivePriceSelectionTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"LINKED", "RANGE"})
-  void singleQuoteUsesPriceWithoutRatioLookup(String type) {
+  void singleQuoteChecksRatioBeforeUsingPrice(String type) {
     var result =
         service.select(
             scope(type), List.of(price(type, "A", "10")), new SupplierPriceReviewContext(17L));
     assertThat(result.price().getSupplierCode()).isEqualTo("A");
     assertThat(result.supplier().rule()).isEqualTo("SINGLE");
-    verifyNoInteractions(ratios, prices, decisions);
+    verify(ratios).selectList(any()); verifyNoInteractions(prices, decisions);
   }
 
   @ParameterizedTest
@@ -84,14 +84,16 @@ class FinanceEffectivePriceSelectionTest {
             candidates,
             null,
             List.of(ratio("A", "0.3"), ratio("B", "0.1"), ratio("C", "0.6")));
-    assertThat(chosen.price().getSupplierCode()).isEqualTo("A");
+    assertThat(chosen.price()).isNull();
+    assertThat(chosen.supplier().rule()).isEqualTo(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE);
     chosen =
         service.select(
             scope(type),
             candidates,
             null,
             List.of(ratio("A", "0.4"), ratio("B", null), ratio("C", "0.5")));
-    assertThat(chosen.price().getSupplierCode()).isEqualTo("A");
+    assertThat(chosen.price()).isNull();
+    assertThat(chosen.supplier().rule()).isEqualTo(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE);
   }
 
   @ParameterizedTest

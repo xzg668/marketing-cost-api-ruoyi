@@ -272,6 +272,34 @@ class TechnicalDataSourceCheckServiceTest {
     verifyNoInteractions(prices);
   }
 
+  @Test void confirmedMissingPriceSurvivesOtherMaterialsStructureAndSupplierFailures() {
+    var missing = new PricePrepareGap(); missing.setGapMaterialCode("301021669");
+    missing.setGapType("MISSING_PRICE"); missing.setReasonCode("MISSING");
+    var weight = new PricePrepareGap(); weight.setGapMaterialCode("301240292");
+    weight.setGapType("MISSING_STRUCTURE"); weight.setMessage("缺制造件净重");
+    var supplier = new PricePrepareGap(); supplier.setGapMaterialCode("301200309");
+    supplier.setGapType("PRICE_SOURCE_ERROR"); supplier.setReasonCode("RAW_PRICE_ERROR");
+    supplier.setMessage("有效报价对应供应商已明确退出供货");
+    when(prices.calculate(any())).thenReturn(priceResult(List.of(weight,supplier,missing),"MISSING_PRICE"));
+    var price = fact(TechnicalDataModuleType.PRICE);
+    assertThat(price.availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    assertThat(price.reason()).contains("1 项");
+    assertThat(new TechnicalDataModuleRequirementEvaluator().evaluate(List.of(price)))
+        .filteredOn(TechnicalDataModuleRequirement::required).extracting(TechnicalDataModuleRequirement::moduleType)
+        .containsExactly("PRICE");
+    when(prices.calculate(any())).thenReturn(priceResult(List.of(weight,supplier),"MISSING_PRICE"));
+    assertThat(fact(TechnicalDataModuleType.PRICE).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"WAITING","INVALID_INPUT","INVALID_SOURCE","SOURCE_CONFLICT"})
+  void aPriceLookupBlockDoesNotBecomeTechnicalMissingPrice(String reason) {
+    var blocked=new PricePrepareGap();blocked.setGapMaterialCode("SUPPLIER");
+    blocked.setGapType("MISSING_PRICE");blocked.setReasonCode(reason);
+    when(prices.calculate(any())).thenReturn(priceResult(List.of(blocked),"MISSING_PRICE"));
+    assertThat(fact(TechnicalDataModuleType.PRICE).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
+  }
+
   @Test void originalTechnicalBlockEscapesJoinedTransactionInsteadOfBecomingUnexpectedRollback() throws Exception {
     var failure = new com.sanhua.marketingcost.service.EffectiveTechnicalDataException(
         "TECH_DATA_TASK_NOT_SUBMITTED", 2L, "2026-09", List.of("SOLDER"), "原补录尚未全部提交：焊料");

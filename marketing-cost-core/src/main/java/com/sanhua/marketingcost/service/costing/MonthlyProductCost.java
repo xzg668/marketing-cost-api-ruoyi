@@ -26,7 +26,8 @@ public final class MonthlyProductCost {
       BigDecimal customerAmount, String explanationOf) {
     public MaterialLine {
       path = MonthlyBomPricingScope.pathKey(path);
-      if (materialCode == null || materialCode.isBlank() || quantity == null || quantity.signum() == 0)
+      materialCode = materialCode == null ? "" : materialCode.trim();
+      if (quantity == null || quantity.signum() == 0)
         throw new IllegalArgumentException("Material identity and nonzero signed quantity required");
       monthlyPriceIds = List.copyOf(monthlyPriceIds);
       if (monthlyPriceIds.isEmpty() || monthlyPriceIds.stream().anyMatch(id -> id == null || id <= 0))
@@ -377,7 +378,7 @@ public final class MonthlyProductCost {
         }
         if (settlement == null || !settlement.monthlyPriceIds().contains(selection.monthlyPriceId()))
           throw new IllegalArgumentException("Ordinary use is missing from costing: " + use.path());
-        if (settlement.path().equals(path) && (!settlement.materialCode().equals(use.request().family().materialCode())
+        if (settlement.path().equals(path) && (!use.request().matchesBomMaterialCode(settlement.materialCode())
             || settlement.quantity().abs().compareTo(use.cumulativeQuantity()) != 0))
           throw new IllegalArgumentException("Direct ordinary settlement differs from its adopted use");
       }

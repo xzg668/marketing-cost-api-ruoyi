@@ -10,9 +10,10 @@ import org.springframework.stereotype.Component;
 /** Latest successful batch per material, then highest applicable untaxed invoice amount. */
 @Component
 public final class MonthlyInvoicePriceSource {
+  private final com.sanhua.marketingcost.mapper.monthly.MonthlySupplierInputMapper supplierInputs;
   private final JdbcTemplate jdbc;
   private final MonthlyPriceDocumentCodec codec;
-  public MonthlyInvoicePriceSource(JdbcTemplate jdbc,MonthlyPriceDocumentCodec codec){this.jdbc=jdbc;this.codec=codec;}
+  public MonthlyInvoicePriceSource(JdbcTemplate jdbc,MonthlyPriceDocumentCodec codec,com.sanhua.marketingcost.mapper.monthly.MonthlySupplierInputMapper supplierInputs){this.jdbc=jdbc;this.codec=codec;this.supplierInputs=supplierInputs;}
 
   public Candidates read(Context context,Set<MonthlyPriceRequest> requests) {
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
@@ -23,7 +24,7 @@ public final class MonthlyInvoicePriceSource {
       groups.computeIfAbsent(request.priceOrgCode(),ignored->new ArrayList<>()).add(request);
     }
     for(var group:groups.entrySet()) {
-      var codes=group.getValue().stream().map(r->r.family().materialCode()).distinct().toList();
+      var codes=group.getValue().stream().map(r->r.materialCode()).distinct().toList();
       var byCode=new HashMap<String,List<Map<String,Object>>>();
       for(int start=0;start<codes.size();start+=256) {
         var batch=codes.subList(start,Math.min(start+256,codes.size()));
@@ -35,19 +36,26 @@ public final class MonthlyInvoicePriceSource {
             """+String.join(",",Collections.nCopies(batch.size(),"?"))+") AND p.batch_id=(SELECT MAX(v.batch_id) FROM lp_invoice_price v WHERE v.business_unit_type=p.business_unit_type AND v.org_code=p.org_code AND v.material_code=p.material_code) ORDER BY p.unit_price DESC,p.document_no,p.supplier_code",args.toArray());
         rows.forEach(row->byCode.computeIfAbsent(row.get("material_code").toString(),ignored->new ArrayList<>()).add(row));
       }
+      var ratios=new HashMap<String,List<com.sanhua.marketingcost.entity.SupplierSupplyRatio>>();
+      for(int start=0;start<codes.size();start+=256) supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),
+          codes.subList(start,Math.min(start+256,codes.size()))).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
       for(var request:group.getValue()) {
         var family=request.family();
-        var applicable=byCode.getOrDefault(family.materialCode(),List.of()).stream()
-            .filter(row->family.unit().equals(row.get("pricing_unit")) && family.currency().equals(row.get("currency")))
+        var applicable=byCode.getOrDefault(request.materialCode(),List.of()).stream()
+            .filter(row->request.matchesSpecification((String)row.get("specification")))
+            .filter(row->family.currency().equals(row.get("currency")))
             .filter(row->family.requestedSupplierCode()==null || family.requestedSupplierCode().equals(row.get("supplier_code")))
             .filter(row->family.taxBasis()==TaxBasis.EXCLUDED).toList();
+        var actualRatios=ratios.getOrDefault(request.materialCode(),List.of());
+        applicable=com.sanhua.marketingcost.service.pricing.SupplierRatioPricePolicy.forPrimarySupplier(applicable,actualRatios,
+            row->Objects.toString(row.get("supplier_code"),null),row->Objects.toString(row.get("supplier_name"),null));
         if(applicable.isEmpty()) {
           problems.put(request,new Problem(MonthlyAdoptionRetryPolicy.Failure.MISSING,"没有适用的发票价格"));continue;
         }
         var selected=new LinkedHashMap<>(applicable.getFirst());
         selected.put("supplierCode",selected.get("supplier_code"));selected.put("supplierName",selected.get("supplier_name"));
         var snapshot=Map.of("snapshotSchema",1,"sourceKind","INVOICE","source",Map.of("selected",selected,
-            "candidates",applicable,"selectionRule","LATEST_IMPORT_THEN_HIGHEST"));
+            "candidates",applicable,"ratios",actualRatios,"selectionRule",com.sanhua.marketingcost.service.pricing.SupplierRatioPricePolicy.primarySuppliers(actualRatios).isEmpty()?"LATEST_IMPORT_THEN_HIGHEST":"RATIO_MAX"));
         var fact=PriceFact.normal((BigDecimal)selected.get("unit_price"),SourceEvidence.ofJson(codec.unwrap(codec.encode(snapshot))),Set.of());
         var coverage=MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of(request.priceOrgCode()),QuantityInterval.all(),ConditionDomain.any()));
         values.put(request,new Candidate(new Selection(null,coverage,fact),null));

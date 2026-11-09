@@ -15,7 +15,7 @@ public class JjbExcelRenderer {
   private static final String MONEY = "0.000000", DECIMAL = "0.########################",
       PERCENT = "0.########################%";
   private static final String[] COLUMNS = {
-    "子件编码", "部品名", "部品图号", "部品单价", "部品用量", "部品价格", "毛重", "净重",
+    "子件编码", "部品名", "部品图号", "部品单价", "部品用量", "计量单位", "部品价格", "毛重", "净重",
     "原材料\n单价", "废料\n单价", "材质", "形态属性", "价格来源", "备注\n（手填）", "备注-CMS\n来源信息"
   };
 
@@ -52,7 +52,7 @@ public class JjbExcelRenderer {
   private static final class Layout {
     final XSSFWorkbook wb;
     final Sheet sheet;
-    final CellStyle[][] template = new CellStyle[75][15];
+    final CellStyle[][] template = new CellStyle[75][16];
     final float[] heights = new float[75];
     final Map<String, CellStyle> formats = new HashMap<>();
     final Drawing<?> drawing;
@@ -65,8 +65,10 @@ public class JjbExcelRenderer {
       for (int r = 0; r < 75; r++) {
         Row row = sheet.getRow(r);
         heights[r] = row.getHeightInPoints();
-        for (int c = 0; c < 15; c++) template[r][c] = row.getCell(c, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK).getCellStyle();
+        for (int c = 0; c < 16; c++) template[r][c] = row.getCell(c > 5 ? c - 1 : c == 5 ? 4 : c, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK).getCellStyle();
       }
+      for (int c = 15; c > 5; c--) sheet.setColumnWidth(c, sheet.getColumnWidth(c - 1));
+      sheet.setColumnWidth(5, 10 * 256);
       for (int r = sheet.getLastRowNum(); r >= 0; r--) sheet.removeRow(sheet.getRow(r));
       while (sheet.getNumMergedRegions() > 0) sheet.removeMergedRegion(0);
       drawing = sheet.createDrawingPatriarch();
@@ -85,6 +87,7 @@ public class JjbExcelRenderer {
       for (int r = 1; r <= 4; r++) {
         Row row = create(r);
         for (int c = 0; c < 15; c++) string(row, c, labels[r - 1][c]);
+        sheet.addMergedRegion(new CellRangeAddress(row.getRowNum(), row.getRowNum(), 4, 5));
         merge(row, 1, 2, switch (r) {
           case 1 -> m.identity().oaNo(); case 2 -> h.customerName();
           case 3 -> h.productName(); default -> m.identity().productCode();
@@ -109,15 +112,15 @@ public class JjbExcelRenderer {
       numeric(sheet.getRow(4), 10, h.quotation().get("silverPrice"), MONEY);
       numeric(sheet.getRow(4), 12, h.quotation().get("goldPrice"), MONEY);
       numeric(sheet.getRow(4), 8, h.quotation().get("customerCuPrice"), MONEY);
-      comment(sheet.getRow(1).getCell(12), "报价需求单电解铜；单位：元/吨");
-      comment(sheet.getRow(4).getCell(8), "报价需求单铜价（元/吨）÷1000；单位：元/公斤；仅展示，不重算成本");
+      comment(sheet.getRow(1).getCell(col(12)), "报价需求单电解铜；单位：元/吨");
+      comment(sheet.getRow(4).getCell(col(8)), "报价需求单铜价（元/吨）÷1000；单位：元/公斤；仅展示，不重算成本");
       for (int r = 1; r <= 4; r++)
         for (int c : new int[] {1, 4, 6, 8, 10, 12, 14})
-          headerFont(sheet.getRow(r).getCell(c), false);
-      headerFont(sheet.getRow(4).getCell(5), true);
-      headerFont(sheet.getRow(4).getCell(7), true);
+          headerFont(sheet.getRow(r).getCell(col(c)), false);
+      headerFont(sheet.getRow(4).getCell(col(5)), true);
+      headerFont(sheet.getRow(4).getCell(col(7)), true);
       Row columns = create(5);
-      for (int c = 0; c < 15; c++) string(columns, c, COLUMNS[c]);
+      for (int c = 0; c < COLUMNS.length; c++) stringAt(columns, c, COLUMNS[c]);
       sheet.createFreezePane(3, 6);
       sheet.setRepeatingRows(new CellRangeAddress(0, 5, -1, -1));
       pageHeight = 0;
@@ -154,12 +157,13 @@ public class JjbExcelRenderer {
       boolean ordinaryRate = List.of("LOSS", "MANUFACTURE").contains(text(v.code()));
       if (ordinaryRate) numeric(row, 3, v.rate(), PERCENT);
       numeric(row, 4, v.quantity(), DECIMAL);
+      stringAt(row, 5, v.unit());
       numeric(row, 5, "PROPERTY".equals(v.kind()) ? v.coefficient() : v.amount(),
           "PROPERTY".equals(v.kind()) ? DECIMAL : MONEY);
       numeric(row, 6, v.grossWeight(), DECIMAL); numeric(row, 7, v.netWeight(), DECIMAL);
       numeric(row, 8, v.rawUnitPrice(), MONEY); numeric(row, 9, v.scrapUnitPrice(), MONEY);
       string(row, 10, v.material()); string(row, 11, v.shape());
-      string(row, 12, "HOUSEHOLD".equals(v.kind()) ? "家用部件含二项费用询价" : v.priceSource());
+      string(row, 12, "HOUSEHOLD".equals(v.kind()) && v.priceSource() == null ? "询价（家用部件）" : v.priceSource());
       string(row, 13, compact(v.remark(), 12));
       if (v.rate() != null && !ordinaryRate) numeric(row, 14, v.rate(), "ADJUSTED_MANUFACTURE_COST".equals(v.code()) ? DECIMAL : PERCENT);
       else if ("HOUSEHOLD".equals(v.kind())) string(row, 14, "H=" + percent(v.householdRate()) + "；S=" + percent(v.salesRate()));
@@ -167,8 +171,8 @@ public class JjbExcelRenderer {
         case "MISSING" -> "未填写"; case "EXPLICIT_NONE" -> "明确无费用";
         case "EXPLICIT_AMOUNT" -> "有效填写金额"; case "LEGACY" -> "历史保存值"; default -> "";
       });
-      comment(row.getCell(13), text(v.remark()));
-      comment(row.getCell(14), v.toString());
+      comment(row.getCell(col(13)), text(v.remark()));
+      comment(row.getCell(col(14)), v.toString());
       pageHeight += row.getHeightInPoints();
     }
 
@@ -212,7 +216,7 @@ public class JjbExcelRenderer {
     Row create(int prototype) {
       Row row = sheet.createRow(next++);
       row.setHeightInPoints(heights[prototype]);
-      for (int c = 0; c < 15; c++) row.createCell(c).setCellStyle(template[prototype][c]);
+      for (int c = 0; c < 16; c++) row.createCell(c).setCellStyle(template[prototype][c]);
       return row;
     }
 
@@ -231,17 +235,21 @@ public class JjbExcelRenderer {
 
     void merge(Row row, int from, int to, String value) {
       string(row, from, value);
-      sheet.addMergedRegion(new CellRangeAddress(row.getRowNum(), row.getRowNum(), from, to));
+      sheet.addMergedRegion(new CellRangeAddress(row.getRowNum(), row.getRowNum(), col(from), col(to)));
     }
 
     void string(Row row, int column, String value) {
+      stringAt(row, col(column), value);
+    }
+
+    void stringAt(Row row, int column, String value) {
       Cell cell = row.getCell(column);
       cell.setCellStyle(formatted(cell.getCellStyle(), "@", true));
       if (value == null || value.isEmpty()) cell.setBlank(); else cell.setCellValue(value);
     }
 
     void numeric(Row row, int column, String value, String format) {
-      Cell cell = row.getCell(column);
+      Cell cell = row.getCell(col(column));
       cell.setCellStyle(formatted(cell.getCellStyle(), format, true));
       if (value == null || value.isEmpty()) { cell.setBlank(); return; }
       BigDecimal decimal = new BigDecimal(value);
@@ -270,12 +278,12 @@ public class JjbExcelRenderer {
         int split = Character.isHighSurrogate(text.charAt(31999)) ? 31999 : 32000;
         comment(cell, text.substring(0, split));
         int col = cell.getColumnIndex() + 1;
-        if (col >= 15) throw new IllegalArgumentException("保存依据超出Excel单行批注容量");
+        if (col >= 16) throw new IllegalArgumentException("保存依据超出Excel单行批注容量");
         comment(cell.getRow().getCell(col), text.substring(split));
         return;
       }
       var anchor = wb.getCreationHelper().createClientAnchor();
-      anchor.setCol1(cell.getColumnIndex()); anchor.setCol2(Math.min(15, cell.getColumnIndex() + 4));
+      anchor.setCol1(cell.getColumnIndex()); anchor.setCol2(Math.min(16, cell.getColumnIndex() + 4));
       anchor.setRow1(cell.getRowIndex()); anchor.setRow2(cell.getRowIndex() + 8);
       Comment comment = cell.getCellComment();
       if (comment == null) comment = drawing.createCellComment(anchor);
@@ -298,9 +306,12 @@ public class JjbExcelRenderer {
       sheet.setDisplayGridlines(false); sheet.setPrintGridlines(false);
       sheet.getFooter().setLeft("&\"宋体,Regular\"&10见机表3");
       sheet.getFooter().setRight("&\"宋体,Regular\"&10第 &P 页 / 共 &N 页");
-      wb.setPrintArea(0, 0, 14, 0, next - 1);
+      wb.setPrintArea(0, 0, 15, 0, next - 1);
     }
   }
+
+  // Map the reference A:O positions to A:P after inserting the unit column at F.
+  private static int col(int original) { return original >= 5 ? original + 1 : original; }
 
   private static String compact(String value, int limit) {
     String text = text(value).replace('\n', ' ');

@@ -35,7 +35,7 @@ public final class MonthlyRepriceSupplementalPriceSource {
     for(var request:missing)for(var price:previous) {
       var old=price.family();
       if(!old.month().isBefore(context.month()) || !new MonthlyPriceFamilyKey(context.month(),old.businessUnitType(),
-          old.materialCode(),old.specification(),old.unit(),old.currency(),old.taxBasis(),old.requestedSupplierCode())
+          old.materialCode(),old.specification(),old.unit(),old.currency(),old.taxBasis(),old.requestedSupplierCode(),old.specificationOnly())
           .equals(request.family()) || !price.applicability().matches(request))continue;
       var evidence=documents.decode(documents.wrap(price.evidence().json()),ObjectNode.class);
       if(price.pricingType()!=PricingType.NORMAL || !"TECH_FIXED".equals(evidence.path("sourceKind").asText()))

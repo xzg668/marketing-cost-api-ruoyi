@@ -64,6 +64,7 @@ class PendingSupplementPublicImportIntegrationTest extends OriginalPricingIntegr
     jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,organization_code,import_batch_id,active_flag,main_category_code,shape_attr,unit) VALUES(?,?,'COMMERCIAL',?,1,'11','制造件','件')",oaNo+"-BARE",oaNo+"-BARE",oaNo);
     jdbc.update("UPDATE lp_quality_loss_rate SET bare_product_code=? WHERE bare_product_code=?",oaNo+"-BARE",oaNo);
     jdbc.update("UPDATE lp_bom_raw_hierarchy SET child_type='STANDARD' WHERE top_product_code=? AND level>0",oaNo);
+    additionalSources();
     pipeline.prepare(new ProductCostingRequest(oaNo,itemId,month,"import-gap-test",false));
     jdbc.update("DELETE FROM lp_quality_loss_rate WHERE bare_product_code=? AND business_unit_type='COMMERCIAL'",oaNo+"-BARE");
     var checked=pipeline.prepare(new ProductCostingRequest(oaNo,itemId,month,"import-gap-test",false));
@@ -74,6 +75,8 @@ class PendingSupplementPublicImportIntegrationTest extends OriginalPricingIntegr
   }
 
   @AfterEach void clearActor() { SecurityContextHolder.clearContext(); }
+
+  protected void additionalSources() {}
 
   @Test void realImportsRemoveOnlyResolvedGapsWithoutCreatingSupplementOrPreviewRows() {
     var before=protectedRows();

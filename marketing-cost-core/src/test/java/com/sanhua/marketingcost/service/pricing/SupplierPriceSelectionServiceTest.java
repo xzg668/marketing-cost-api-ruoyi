@@ -22,6 +22,33 @@ class SupplierPriceSelectionServiceTest {
   private final SupplierPriceScope scope = new SupplierPriceScope("COMMERCIAL", "SAME-PRICE", 1L,
       "2026-10", LocalDate.of(2026, 10, 26), "210", "201350006", "FIXED");
 
+  @Test void configuredHighestUsesBothDirectAndPreparedSelectionWithoutManualDecision() {
+    var configured = ratio("A", "0.1");
+    configured.setSelectionRule("无供货比率，取最高价");
+    var candidates = List.of(candidate("A", "10"), candidate("B", "20"), candidate("C", "99"));
+    var active = List.of(configured, ratio("C", "0"));
+    when(ratios.selectList(any())).thenReturn(active);
+    for (var result : List.of(service.select(scope, candidates), service.selectPrepared(scope, candidates, active, null))) {
+      assertThat(result.candidate()).isNotNull();
+      assertThat(result.candidate().supplierCode()).isEqualTo("B");
+      assertThat(result.rule()).isEqualTo("CONFIGURED_HIGH");
+      assertThat(result.review()).isNull();
+      assertThat(result.message()).contains("配置");
+    }
+    verifyNoInteractions(decisions);
+  }
+
+  @Test void configuredHighestStillPrefersDecisiveRatioAndDoesNotInterpretUnrelatedNotes() {
+    var a = ratio("A", "0.8"); a.setSelectionRule("无供货比例取最高价");
+    var candidates = List.of(candidate("A", "10"), candidate("B", "20"));
+    assertThat(service.selectPrepared(scope,candidates,List.of(a),null).candidate().supplierCode()).isEqualTo("A");
+    a.setSupplyRatio(null); a.setSelectionRule("未确认是否取最高价");
+    assertThat(service.selectPrepared(scope,candidates,List.of(a),null).candidate()).isNull();
+    a.setSelectionRule("无供货比例取最高价");
+    var waiting = new SupplierPriceDecision(); waiting.setScopeKey(SupplierPriceSelectionService.scopeKey(scope)); waiting.setDecision("WAIT_IMPORT");
+    assertThat(service.selectPrepared(scope,candidates,List.of(a),waiting).rule()).isEqualTo("CONFIGURED_HIGH");
+  }
+
   @Test void parallelRulesTakeHighestWithinSupplierBeforeExistingSupplierRatioPolicy() {
     var low = new SupplierPriceCandidate("A-low", "A", "供应商A", new BigDecimal("10"), null, null);
     var high = new SupplierPriceCandidate("A-high", "A", "供应商A", new BigDecimal("15"), null, null);
@@ -40,16 +67,30 @@ class SupplierPriceSelectionServiceTest {
     assertThat(service.selectPrepared(scope, List.of(publicPrice), List.of(), null).candidate()).isEqualTo(publicPrice);
   }
 
+  @Test void absentMainSupplierContinuesToTheNextSourceEvenWithOneOrEqualPrices() {
+    var main=List.of(ratio("MAIN","1"));
+    for(var candidates:List.of(List.of(candidate("OTHER","1057.5221")),
+        List.of(candidate("OTHER","10"),candidate("ANOTHER","10")))) {
+      var selected=service.selectPrepared(scope,candidates,main,null);
+      assertThat(selected.candidate()).isNull();
+      assertThat(selected.rule()).isEqualTo(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE);
+      assertThat(selected.review()).isNull();
+    }
+    var order=service.selectPrepared(scope,List.of(candidate("MAIN","1094.6903"),candidate("OTHER","9999")),main,null);
+    assertThat(order.candidate().supplierCode()).isEqualTo("MAIN");
+    assertThat(order.rule()).isEqualTo("RATIO_MAX");
+  }
+
   @ParameterizedTest
   @CsvSource({"0.7226,0.722600", "0,0.0000"})
-  void equalEffectivePricesNeedNeitherRatiosNorApproval(String first, String second) {
+  void equalEffectivePricesStillCheckForAConfiguredMainSupplier(String first, String second) {
     var a = candidate("A", first); var b = candidate("B", second);
     var result = service.select(scope, List.of(a, b));
     assertThat(result.candidate()).isEqualTo(b);
     assertThat(result.rule()).isEqualTo("SAME_PRICE");
     assertThat(result.ratio()).isNull();
     assertThat(result.review()).isNull();
-    verifyNoInteractions(ratios, decisions);
+    verify(ratios).selectList(any()); verifyNoInteractions(decisions);
     assertThat(service.select(scope, List.of(b, a)).candidate()).isEqualTo(b);
   }
 
@@ -97,10 +138,10 @@ class SupplierPriceSelectionServiceTest {
     assertThat(service.selectPrepared(scope, candidates, List.of(zero), decision).candidate()).isNull();
   }
 
-  @Test void singleSupplierReadsNoRatiosAndSupplementalPackagingFallbackDoesNotChangeOrdinaryPolicy() {
+  @Test void singleSupplierReadsRatiosAndSupplementalPackagingFallbackDoesNotChangeOrdinaryPolicy() {
     assertThat(service.select(scope, List.of(candidate("A", "0.84956"))).candidate().unitPrice())
         .isEqualByComparingTo("0.84956");
-    verifyNoInteractions(ratios, decisions);
+    verify(ratios).selectList(any()); verifyNoInteractions(decisions);
     var candidates = List.of(candidate("A", "10"), candidate("B", "20"));
     assertThat(service.selectPrepared(scope, candidates, List.of(), null).candidate()).isNull();
     var packaging = service.selectPrepared(scope, candidates, List.of(), null, true);

@@ -74,14 +74,14 @@ class PricePrepareSettlementKeyGeneratorTest {
   }
 
   @Test
-  @DisplayName("稳定键拒绝缺少顶级产品或料号的新增明细")
+  @DisplayName("稳定键拒绝料号和规格均缺失的新增明细")
   void requiredIdentityCannotBeBlank() {
     PricePreparePlanItem item = planItem(1L, "/TOP/UNKNOWN/", null, "NORMAL");
 
     assertThatThrownBy(
         () -> PricePrepareSettlementKeyGenerator.settlementKey(101L, "TOP", item))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("materialCode");
+        .hasMessageContaining("规格");
   }
 
   private PricePreparePlanItem planItem(

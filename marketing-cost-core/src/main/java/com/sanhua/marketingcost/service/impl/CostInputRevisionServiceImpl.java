@@ -33,6 +33,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "lp_other_expense_rate",
           "lp_product_property",
           "lp_product_property_rule",
+          // Whole-quote preparation must rebuild pricing rows when a settlement fee rule changes.
+          "lp_bom_settlement_rule",
           "lp_bom_byproduct_cost_rule",
           "lp_cost_business_rule");
 
@@ -190,6 +192,11 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     // Missing department rates used to be stored as zero. Keep those versions as
     // history, but require a new calculation under the mandatory-fee/OA fallback rule.
     append(canonical, "departmentFeePolicy", "U9_OR_OA_REQUIRED_V1");
+    // 已存旧版本保持原金额；下次整单核算必须使用包含独立包装料的材料费。
+    append(canonical, "materialAggregationPolicy", "PACKAGE_COMPONENT_AND_INDEPENDENT_MATERIAL_V2");
+    append(canonical, "surfaceTreatmentPolicy", "EXCLUDE_SINTERED_BASE_SUBTREE_V1");
+    append(canonical, "supplierSelectionPolicy", "MAIN_SUPPLIER_BEFORE_PRICE_SOURCE_V1");
+    append(canonical, "orderPriceVersionPolicy", "SOURCE_APPROVAL_DATE_THEN_HIGHEST_V1");
     append(canonical, "materialDifferencePolicy",
         com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);

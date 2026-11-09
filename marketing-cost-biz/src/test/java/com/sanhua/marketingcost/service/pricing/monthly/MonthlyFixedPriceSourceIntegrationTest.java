@@ -35,7 +35,7 @@ class MonthlyFixedPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/fixed-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V366__household_model_specification_match.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/fixed-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_fixed_source_test < /tmp/fixed-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new org.apache.ibatis.session.Configuration();configuration.setMapUnderscoreToCamelCase(true);configuration.addMapper(MonthlyFixedSourceMapper.class);configuration.addMapper(MonthlySupplierInputMapper.class);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -59,6 +59,24 @@ class MonthlyFixedPriceSourceIntegrationTest {
     var row=new ObjectMapper().readTree(selected.values().get(request).selection().fact().evidence().json()).path("source").path("selected");
     assertThat(row.path("effectiveFrom").asText()).isEqualTo(from);assertThat(row.path("effectiveTo").asText()).isEqualTo(to);
   }
+  @Test void configuredHighestIsCapturedAndAdoptedOnceWithoutManualReview() throws Exception {
+    String code=code();price(code,"210","S1","10","2026-01-01",null);price(code,"210","S2","20","2026-01-01",null);
+    var request=request(code,"210");var c=context();
+    assertThat(operation.resolveCandidates(c,Set.of(request)).problems()).containsKey(request);
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted,selection_rule) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',NULL,1,0,'无供货比例取最高价')",code);
+    c=context();var candidates=operation.resolveCandidates(c,Set.of(request));
+    assertThat(candidates.problems()).isEmpty();assertThat(c.supplierReviews().reviews()).isEmpty();
+    var selected=candidates.values().get(request).selection();
+    assertThat(selected.fact().price()).isEqualByComparingTo("20");
+    assertThat(selected.fact().evidence().json()).contains("CONFIGURED_HIGH","无供货比例取最高价");
+    var adopted=operation.adopt(c,new MonthlyAdoptionPlan(Map.of(request,selected),List.of(new MonthlyAdoptionPlan.Use("root",request,BigDecimal.ONE)),Set.of()));
+    long id=adopted.plan().selections().get(request).monthlyPriceId();
+    jdbc.update("UPDATE lp_supplier_supply_ratio SET selection_rule=NULL,supply_ratio=1 WHERE material_code=?",code);
+    var reused=operation.resolveCandidates(context(),Set.of(request)).values().get(request).selection();
+    assertThat(reused.monthlyPriceId()).isEqualTo(id);assertThat(reused.fact()).isEqualTo(selected.fact());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_supplier_price_decision WHERE material_code=?",Long.class,code)).isZero();
+  }
+
   @Test void threeReportedMaterialsPreferCurrentSuppliersWithoutReview() {
     for(String material:List.of("201850117","201850130","201850463")) {
       String code=code();String expected;
@@ -127,10 +145,10 @@ class MonthlyFixedPriceSourceIntegrationTest {
     jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=9 WHERE material_code=? AND supplier_code='S2'",code);
     var next=context();var reused=operation.resolveCandidates(next,Set.of(request)).values().get(request).selection();assertThat(reused.monthlyPriceId()).isEqualTo(id);assertThat(reused.fact().price()).isEqualByComparingTo("0.7226");assertThat(next.supplierReviews().reviews()).isEmpty();
   }
-  @Test void equalNumbersNeverBypassUnitAndTaxValidation() {
+  @Test void codeMatchIgnoresUnitsWhileTaxBasisRemainsExplicit() {
     String code=code();price(code,"210","S1","10","2026-10-01","2027-01-01");price(code,"210","S2","10","2026-10-01","2027-01-01");
     jdbc.update("UPDATE lp_price_fixed_item SET unit='KG' WHERE material_code=? AND supplier_code='S2'",code);
-    var request=request(code,"210");var result=source.read(context(),Set.of(request));assertThat(result.values()).isEmpty();assertThat(result.problems().get(request).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+    var request=request(code,"210");var result=source.read(context(),Set.of(request));assertThat(result.problems()).isEmpty();assertThat(result.values().get(request).selection().fact().price()).isEqualByComparingTo("10");
     jdbc.update("UPDATE lp_price_fixed_item SET unit='件',tax_included=1 WHERE material_code=? AND supplier_code='S2'",code);
     result=source.read(context(),Set.of(request));assertThat(result.values()).isEmpty();assertThat(result.problems().get(request).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
   }
@@ -178,10 +196,10 @@ class MonthlyFixedPriceSourceIntegrationTest {
     var family=request(code,"210").family();var explicit=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(family.month(),family.businessUnitType(),code,null,"件","CNY",TaxBasis.EXCLUDED,"S2"),"210",NonCuConditions.empty(),BigDecimal.ONE);
     var result=source.read(context(),Set.of(explicit));assertThat(result.problems()).isEmpty();assertThat(result.values().get(explicit).selection().fact().price()).isEqualByComparingTo("20");
   }
-  @Test void fixedSourceDoesNotGuessUnitCurrencyOrTaxConversions(){
+  @Test void codedFixedPriceUsesUnitAsDisplayAndPreservesCurrencyTaxContract(){
     String code=code();price(code,"210","S1","10","2026-10-01","2027-01-01");var c=context();
     for(var family:List.of(new MonthlyPriceFamilyKey(c.month(),c.businessUnitType(),code,null,"KG","CNY",TaxBasis.EXCLUDED,null),new MonthlyPriceFamilyKey(c.month(),c.businessUnitType(),code,null,"件","USD",TaxBasis.EXCLUDED,null),new MonthlyPriceFamilyKey(c.month(),c.businessUnitType(),code,null,"件","CNY",TaxBasis.INCLUDED,null))){
-      var request=new MonthlyPriceRequest(family,"210",NonCuConditions.empty(),BigDecimal.ONE);var result=source.read(c,Set.of(request));assertThat(result.values()).isEmpty();assertThat(result.problems().get(request).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+      var request=new MonthlyPriceRequest(family,"210",NonCuConditions.empty(),BigDecimal.ONE);var result=source.read(c,Set.of(request));if("KG".equals(family.unit())){assertThat(result.problems()).isEmpty();assertThat(result.values().get(request).selection().fact().price()).isEqualByComparingTo("10");}else{assertThat(result.values()).isEmpty();assertThat(result.problems().get(request).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);}
     }
   }
   static String approvedMaterial(){

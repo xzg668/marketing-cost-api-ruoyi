@@ -8,6 +8,24 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class OdsOrderPriceVersionsTest {
+  @Test void latestApprovalDateWinsBeforeEffectiveDateAndPrice() {
+    var old=new OdsOrderPriceVersions.Price("S1",LocalDate.of(2026,10,1),null,new BigDecimal("999"),"订单价格审批单-DDJGCG05202604010099");
+    var latest=new OdsOrderPriceVersions.Price("S1",null,null,new BigDecimal("10"),"订单价格审批单-DDJGCG05202604150001");
+    for(var input:List.of(List.of(old,latest),List.of(latest,old)))
+      assertThat(OdsOrderPriceVersions.latestPerSupplier(input).get("S1")).isEqualTo(latest);
+  }
+  @Test void sameApprovalDateUsesPriceWithoutConsideringSequenceOrEffectiveDate() {
+    var high=new OdsOrderPriceVersions.Price("S1",null,null,new BigDecimal("12"),"订单价格审批单-DDJGCG05202604150001");
+    var low=new OdsOrderPriceVersions.Price("S1",LocalDate.of(2026,10,1),null,new BigDecimal("10"),"订单价格审批单-DDJGCG05202604150999");
+    for(var input:List.of(List.of(high,low),List.of(low,high)))
+      assertThat(OdsOrderPriceVersions.latestPerSupplier(input).get("S1")).isEqualTo(high);
+  }
+  @Test void parsesBothOriginalSourceDocumentTypesAndValidatesTheCalendar() {
+    assertThat(OdsOrderPriceVersions.approval("订单价格审批单-DDJGCG05202604150004").documentDate()).isEqualTo(LocalDate.of(2026,4,15));
+    assertThat(OdsOrderPriceVersions.approval("采购订单价格审批单-CGDDCG05202610080169").documentDate()).isEqualTo(LocalDate.of(2026,10,8));
+    for(var source:Arrays.asList(null,"","fixture order","订单价格审批单-DDJGCG05202602300001","订单价格审批单-DDJGCG052026041500010"))
+      assertThat(OdsOrderPriceVersions.approval(source)).isNull();
+  }
   private static OdsOrderPriceVersions.Price row(String supplier, String date, String price) {
     return new OdsOrderPriceVersions.Price(supplier, LocalDate.parse(date), null, new BigDecimal(price));
   }

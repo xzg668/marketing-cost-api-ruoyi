@@ -227,7 +227,8 @@ public class QuoteEffectiveBomPersistenceServiceImpl
     }
     requireText(draft.nodeKey(), "节点键");
     requireText(draft.nodePath(), "节点路径");
-    requireText(draft.materialCode(), "节点料号");
+    if (!org.springframework.util.StringUtils.hasText(draft.materialCode()))
+      requireText(draft.materialSpec(), "无料号节点规格");
     requireText(draft.sourceBomType(), "原始BOM类型");
     if (draft.nodeLevel() == null
         || draft.sortSeq() == null

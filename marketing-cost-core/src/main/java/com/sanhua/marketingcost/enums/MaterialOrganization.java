@@ -10,6 +10,10 @@ public enum MaterialOrganization {
   COMMERCIAL("COMMERCIAL", "商用", "210"),
   PLATE("PLATE", "板换", "220");
 
+  /** 报价归属与BOM组织识别共用的产品关键字。 */
+  public static final java.util.List<String> PLATE_PRODUCT_KEYWORDS =
+      java.util.List.of("板换", "板式换热器", "板式热交换器", "钎焊板式");
+
   private final String code;
   private final String label;
   private final String priceOrgCode;
@@ -213,10 +217,7 @@ public enum MaterialOrganization {
 
   private static boolean isPlateProduct(String productName, String productModel, String materialNo) {
     String text = join(productName, productModel, materialNo);
-    return text.contains("板换")
-        || text.contains("板式换热器")
-        || text.contains("板式热交换器")
-        || text.contains("钎焊板式");
+    return PLATE_PRODUCT_KEYWORDS.stream().anyMatch(text::contains);
   }
 
   private static String join(String... values) {

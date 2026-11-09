@@ -28,6 +28,7 @@ public class JjbExcelRendererTest {
               .drawingNo("图号" + i)
               .unitPrice("1.234567")
               .quantity("2.5")
+              .unit("千克")
               .amount("3.086418")
               .priceSource("固定采购价")
               .build());
@@ -159,23 +160,24 @@ public class JjbExcelRendererTest {
           assertThat(code.getCellStyle().getDataFormatString()).isEqualTo("@");
           Row excel = sheet.getRow(code.getRowIndex());
           amount(excel.getCell(3), row.unitPrice());
-          amount(excel.getCell(5), row.amount());
+          amount(excel.getCell(6), row.amount());
+          if (row.kind().equals("PART")) assertThat(excel.getCell(5).getStringCellValue()).isEqualTo("千克");
           assertThat(BigDecimal.valueOf(excel.getCell(4).getNumericCellValue()))
               .isEqualByComparingTo(row.quantity());
         } else if (row.kind().equals("FEE"))
-          amount(sheet.getRow(find(sheet, row.name()).getRowIndex()).getCell(5), row.amount());
+          amount(sheet.getRow(find(sheet, row.name()).getRowIndex()).getCell(6), row.amount());
       }
-      amount(sheet.getRow(find(sheet, "不含税总成本1").getRowIndex()).getCell(5), m.totals().totalCost());
+      amount(sheet.getRow(find(sheet, "不含税总成本1").getRowIndex()).getCell(6), m.totals().totalCost());
       amount(
-          sheet.getRow(find(sheet, "材料成本差异").getRowIndex()).getCell(5),
+          sheet.getRow(find(sheet, "材料成本差异").getRowIndex()).getCell(6),
           m.totals().cuMaterialAdjustment());
       amount(
-          sheet.getRow(find(sheet, "不含税总成本2").getRowIndex()).getCell(5),
+          sheet.getRow(find(sheet, "不含税总成本2").getRowIndex()).getCell(6),
           m.totals().finalQuoteAmount());
       Row rate = sheet.getRow(find(sheet, "MGMT_EXP").getRowIndex());
-      assertThat(rate.getCell(14).getNumericCellValue()).isEqualTo(.085);
-      assertThat(rate.getCell(14).getCellStyle().getDataFormatString()).endsWith("%");
-      assertThat(wb.getPrintArea(0)).contains("$A$1:$O$");
+      assertThat(rate.getCell(15).getNumericCellValue()).isEqualTo(.085);
+      assertThat(rate.getCell(15).getCellStyle().getDataFormatString()).endsWith("%");
+      assertThat(wb.getPrintArea(0)).contains("$A$1:$P$");
       assertThat(sheet.getRepeatingRows().getLastRow()).isEqualTo(5);
       assertThat(sheet.getPrintSetup().getFitWidth()).isEqualTo((short) 1);
       assertThat(sheet.getPrintSetup().getFitHeight()).isZero();
@@ -189,7 +191,7 @@ public class JjbExcelRendererTest {
             assertThat(c.getCellType()).isNotIn(CellType.FORMULA, CellType.ERROR);
             if (c.getCellType() == CellType.STRING) texts.add(c.getStringCellValue());
           }
-      assertThat(texts.contains("家用部件含二项费用询价")).isEqualTo(household > 0);
+      assertThat(texts.contains("询价（家用部件）")).isEqualTo(household > 0);
       assertThat(texts)
           .noneMatch(
               t ->
@@ -226,9 +228,9 @@ public class JjbExcelRendererTest {
       Sheet s = wb.getSheetAt(0);
       Cell c = find(s, "999999999999.999999");
       assertThat(c.getCellType()).isEqualTo(CellType.STRING);
-      amount(s.getRow(find(s, "不含税总成本1").getRowIndex()).getCell(5), "999999999999.999999");
-      amount(s.getRow(find(s, "材料成本差异").getRowIndex()).getCell(5), "0.000000");
-      amount(s.getRow(find(s, "不含税总成本2").getRowIndex()).getCell(5), null);
+      amount(s.getRow(find(s, "不含税总成本1").getRowIndex()).getCell(6), "999999999999.999999");
+      amount(s.getRow(find(s, "材料成本差异").getRowIndex()).getCell(6), "0.000000");
+      amount(s.getRow(find(s, "不含税总成本2").getRowIndex()).getCell(6), null);
     }
   }
 
@@ -244,7 +246,7 @@ public class JjbExcelRendererTest {
       Sheet s = wb.getSheetAt(0);
       int first = find(s, rows.getFirst().code()).getRowIndex();
       Row row = s.getRow(first);
-      assertThat(row.getCell(13).getCellComment().getString().getString()).contains(note);
+      assertThat(row.getCell(14).getCellComment().getString().getString()).contains(note);
       assertThat(row.getHeightInPoints()).isEqualTo(18);
       assertThat(s.getRow(first + 1).getCell(0).getStringCellValue()).isEqualTo("三项费用");
     }
@@ -256,9 +258,9 @@ public class JjbExcelRendererTest {
       Sheet s = wb.getSheetAt(0);
       assertThat(s.getRow(0).getHeightInPoints()).isEqualTo(43);
       assertThat(s.getRow(5).getCell(0).getStringCellValue()).isEqualTo("子件编码");
-      assertThat(s.getRow(5).getCell(14).getStringCellValue()).isEqualTo("备注-CMS\n来源信息");
+      assertThat(s.getRow(5).getCell(15).getStringCellValue()).isEqualTo("备注-CMS\n来源信息");
       assertThat(s.getColumnWidth(0)).isEqualTo((int) Math.round(15.9166666666667 * 256));
-      assertThat(s.getColumnWidth(14)).isEqualTo((int) Math.round(13.5833333333333 * 256));
+      assertThat(s.getColumnWidth(15)).isEqualTo((int) Math.round(13.5833333333333 * 256));
       assertThat(s.getRow(6).getHeightInPoints()).isEqualTo(18);
       var merges = s.getMergedRegions().stream().map(Object::toString).toList();
       int three = find(s, "三项费用").getRowIndex();
@@ -270,7 +272,7 @@ public class JjbExcelRendererTest {
       assertThat(s.getMergedRegions()).anyMatch(r -> r.getFirstRow() == total && r.getFirstColumn() == 0 && r.getLastColumn() == 2);
       assertThat(s.getRow(find(s, "模具费").getRowIndex()).getCell(2).getStringCellValue()).isEqualTo("模具费");
       assertThat(find(s, "产品属性").getColumnIndex()).isZero();
-      assertThat(s.getRow(5).getCell(6).getCellStyle().getFillPattern()).isEqualTo(FillPatternType.SOLID_FOREGROUND);
+      assertThat(s.getRow(5).getCell(7).getCellStyle().getFillPattern()).isEqualTo(FillPatternType.SOLID_FOREGROUND);
     }
   }
 
@@ -283,10 +285,10 @@ public class JjbExcelRendererTest {
         h.copperUnit(), h.productProperty(), h.coefficient(), Map.of("businessType", "批量品", "copperPrice", "100000.000000", "customerCuPrice", "100.000000"));
     try (var wb = render(new JjbReadModel(base.identity(), header, base.rows(), base.monthlyPrices(), base.totals(), base.warnings()))) {
       var s = wb.getSheetAt(0);
-      assertThat(wb.getFontAt(s.getRow(3).getCell(6).getCellStyle().getFontIndexAsInt()).getFontHeightInPoints()).isEqualTo((short) 11);
-      assertThat(s.getRow(1).getCell(12).getCellComment().getString().getString()).contains("元/吨");
-      amount(s.getRow(1).getCell(12), "100000.000000");
-      amount(s.getRow(4).getCell(8), "100.000000");
+      assertThat(wb.getFontAt(s.getRow(3).getCell(7).getCellStyle().getFontIndexAsInt()).getFontHeightInPoints()).isEqualTo((short) 11);
+      assertThat(s.getRow(1).getCell(13).getCellComment().getString().getString()).contains("元/吨");
+      amount(s.getRow(1).getCell(13), "100000.000000");
+      amount(s.getRow(4).getCell(9), "100.000000");
     }
   }
 

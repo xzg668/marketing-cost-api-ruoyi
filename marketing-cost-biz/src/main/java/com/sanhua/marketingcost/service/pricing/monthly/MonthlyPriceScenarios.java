@@ -299,8 +299,6 @@ public final class MonthlyPriceScenarios {
     String explicit = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
     var rows = source.bands().stream().filter(row -> Objects.equals(row.getFactorRuleId(), rule.getId()))
         .filter(row -> dated || row.getEffectiveFrom() == null || !row.getEffectiveFrom().isAfter(firstAdoptionDate))
-        .filter(row -> request.family().unit().equals(row.getUnit())
-            && (request.family().specification() == null || request.family().specification().equals(row.getSpecModel())))
         .filter(row -> explicit == null || explicit.equals(com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())))
         .toList();
     if (rows.isEmpty()) throw new IllegalArgumentException("Captured legacy range has no applicable bands");

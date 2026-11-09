@@ -234,7 +234,7 @@ class MonthlyQuotationInputRevisionIntegrationTest extends OriginalPricingIntegr
       raw.setShapeAttr(level == 0 ? "制造件" : "采购件"); raw.setBomPurpose("主制造"); raw.setBomVersion("MPP12");
       raw.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); raw.setBomStatus("已核准"); raw.setIsLeaf(level);
       raw.setU9IsCostFlag(1); raw.setSourceType("U9"); raw.setSourceImportBatchId(key); raw.setBuildBatchId(key);
-      raw.setBuiltAt(date); raw.setPriceOrgCode("210"); raw.setBusinessUnitType("COMMERCIAL"); rawHierarchy.insert(raw);
+      raw.setBuiltAt(date); raw.setPriceOrgCode("210"); raw.setBusinessUnitType("COMMERCIAL"); insertStandardFixture(raw);
       sources.add(raw);
     }
     var original = monthlyU9.read(new com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext(
@@ -324,5 +324,18 @@ class MonthlyQuotationInputRevisionIntegrationTest extends OriginalPricingIntegr
     var submitted = technicalVersions.selectById(id);
     assertThat(submitted.getVersionStatus()).isEqualTo("SUBMITTED");
     assertThat(submitted.getContentFingerprint()).isEqualTo(hash);
+  }
+  /** These owned fixtures have no alternatives; freeze the explicit U9 normal-line fact. */
+  private void insertStandardFixture(com.sanhua.marketingcost.entity.BomRawHierarchy row) {
+    row.setChildType("NORMAL");
+    rawHierarchy.insert(row);
+  }
+  @org.springframework.beans.factory.annotation.Autowired
+  com.sanhua.marketingcost.config.MonthlyRepriceProperties matchingFixturePeriods;
+
+  @org.junit.jupiter.api.BeforeEach
+  void configureOwnedFixturePeriod() {
+    String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    matchingFixturePeriods.setGoLiveMonths(java.util.Map.of("COMMERCIAL", month, "HOUSEHOLD", month));
   }
 }

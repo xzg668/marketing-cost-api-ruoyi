@@ -571,6 +571,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
     when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
+    when(readinessService.check(anyString(), anyLong(), anyString(), anyString()))
+        .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("Current preparation sort memory unavailable"));
     var response = service.getCostRun("OA-001", 101L, null, 88L);
 
     assertThat(response.getPeriodMonth()).isEqualTo("2026-05");
@@ -589,6 +591,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
     assertThat(response.getCurrentDisplayVersion().getFinancePricePrepareNo())
         .isEqualTo("PPR-FIN-HISTORY");
     verify(cuAdjustmentCalcService, never()).calculate(any());
+    verify(readinessService, never()).check(anyString(), anyLong(), anyString(), anyString());
+    assertThat(response.isCanStartTrial()).isFalse();
   }
 
   @Test

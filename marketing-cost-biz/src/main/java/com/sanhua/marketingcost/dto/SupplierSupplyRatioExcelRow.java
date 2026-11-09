@@ -16,4 +16,6 @@ public class SupplierSupplyRatioExcelRow {
   private String supplierName;
   private String supplierCode;
   private BigDecimal supplyRatio;
+  /** 缺少可判定比率时的取价规则；空白沿用人工确认。 */
+  private String selectionRule;
 }

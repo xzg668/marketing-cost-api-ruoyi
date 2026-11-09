@@ -47,6 +47,10 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
     @Bean PlatformTransactionManager transactionManager(){return new DataSourceTransactionManager(ds);}
     @Bean SupplierSupplyRatioImportService imports(ApplicationEventPublisher events){return new SupplierSupplyRatioImportServiceImpl(sql.getMapper(SupplierSupplyRatioMapper.class),new SupplierSupplyRatioWorkbookParserImpl(),events,sql.getMapper(BusinessChangeLogMapper.class),new SupplierSupplyRatioImportLock(ds),new ObjectMapper());}
     @Bean SupplierSupplyRatioService queries(){return new SupplierSupplyRatioServiceImpl(sql.getMapper(SupplierSupplyRatioMapper.class),sql.getMapper(SupplierSupplyRatioHistoryMapper.class));}
+    @Bean SupplierSupplyRatioEditService edits(ApplicationEventPublisher events) {
+      return new SupplierSupplyRatioEditService(sql.getMapper(SupplierSupplyRatioMapper.class),
+          sql.getMapper(BusinessChangeLogMapper.class), new SupplierSupplyRatioImportLock(ds), events, new ObjectMapper());
+    }
     @Bean CommitObserver observer(){return new CommitObserver();}
   }
   static class CommitObserver {
@@ -75,13 +79,145 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
   static List<Map<String,Object>> all(){return jdbc.queryForList("SELECT * FROM lp_supplier_supply_ratio ORDER BY id");}
   static Map<String,Object> current(String supplier){return jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE business_unit_type='COMMERCIAL' AND material_code='000M' AND supplier_code=? AND is_active=1",supplier);}
   static int logs(){return jdbc.queryForObject("SELECT COUNT(*) FROM lp_business_change_log",Integer.class);}
+  static com.sanhua.marketingcost.entity.SupplierSupplyRatio edit(long id, String ratio, String rule) {
+    return context.getBean(SupplierSupplyRatioEditService.class).update(id,
+        new SupplierSupplyRatioUpdateRequest(ratio == null ? null : new BigDecimal(ratio), rule),
+        com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(), "finance-editor");
+  }
+  static long currentId(String supplier) { return ((Number)current(supplier).get("id")).longValue(); }
+
+  @Test void manualCorrectionKeepsOtherSuppliersAndOldValuesWithOneAuditedVersion() throws Exception {
+    save(row("000A", "0.2"), row("000B", "0.8"), row("OTHER", "000C", "1"));
+    var before = current("000A");
+    var otherSupplier = current("000B");
+    var otherMaterial = jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE material_code='OTHER'");
+    observer.committed.clear();
+    var edited = edit(currentId("000A"), "0.9", "无供货比例取最高价");
+    assertThat(edited.getId()).isNotEqualTo(before.get("id"));
+    assertThat(edited.getSourceType()).isEqualTo("MANUAL");
+    assertThat(edited.getSupplyRatio()).isEqualByComparingTo("0.9");
+    assertThat(edited.getImportFileName()).isNull();
+    assertThat(current("000B")).isEqualTo(otherSupplier);
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE material_code='OTHER'")).isEqualTo(otherMaterial);
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE id=?",before.get("id")))
+        .containsEntry("supply_ratio",new BigDecimal("0.200000")).containsEntry("is_active",0);
+    var log = queries.changes("000M", "000A", edited.getSourceBatchNo(), 1, 20, "COMMERCIAL").records().getFirst();
+    assertThat(log.previousVersionId()).isEqualTo(before.get("id"));
+    assertThat(log.changedByName()).isEqualTo("finance-editor");
+    assertThat(new ObjectMapper().readTree(log.beforeValue()).path("supplyRatio").decimalValue()).isEqualByComparingTo("0.2");
+    assertThat(observer.committed).hasSize(1);
+  }
+
+  @Test void manualZeroAndBlankAreDifferentAndUnchangedSaveDoesNotCreateHistory() {
+    save(row("000A", "0.2"));
+    var zero = edit(currentId("000A"), "0", null);
+    assertThat(current("000A").get("supply_ratio")).isEqualTo(new BigDecimal("0.000000"));
+    var blank = edit(zero.getId(), null, null);
+    assertThat(current("000A").get("supply_ratio")).isNull();
+    var before = all(); int count = logs(); int events = observer.committed.size();
+    assertThat(edit(blank.getId(), null, "  ").getId()).isEqualTo(blank.getId());
+    assertThat(all()).isEqualTo(before); assertThat(logs()).isEqualTo(count);
+    assertThat(observer.committed).hasSize(events);
+  }
+
+  @Test void manualCorrectionRejectsStaleMissingCrossUnitAndInvalidValuesWithoutChanges() {
+    save(row("000A", "0.2")); long stale = currentId("000A");
+    edit(stale, "0.3", null);
+    var before = all(); int count = logs();
+    assertThatThrownBy(() -> edit(stale,"0.4",null)).hasMessageContaining("刷新");
+    assertThatThrownBy(() -> edit(-1,"0.4",null)).hasMessageContaining("不存在");
+    for (String ratio : List.of("-0.1", "1.1", "0.1234567"))
+      assertThatThrownBy(() -> edit(currentId("000A"),ratio,null)).isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> edit(currentId("000A"),"0.4","x".repeat(256))).hasMessageContaining("255");
+    long id = currentId("000A"); auth("HOUSEHOLD");
+    assertThatThrownBy(() -> edit(id,"0.4",null)).hasMessageContaining("不存在");
+    assertThat(all()).isEqualTo(before); assertThat(logs()).isEqualTo(count);
+  }
+
+  @Test void manualCorrectionRollsBackRetirementAndInsertIfAuditFails() {
+    save(row("000A", "0.2")); var before = all(); int count = logs();
+    observer.committed.clear();
+    jdbc.execute("CREATE TRIGGER ssr_edit_fail BEFORE INSERT ON lp_business_change_log FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='edit audit failure'");
+    try {
+      assertThatThrownBy(() -> edit(currentId("000A"),"0.4",null)).hasStackTraceContaining("edit audit failure");
+      assertThat(all()).isEqualTo(before); assertThat(logs()).isEqualTo(count);
+      assertThat(observer.committed).isEmpty();
+    } finally { jdbc.execute("DROP TRIGGER ssr_edit_fail"); }
+  }
+
+  @Test void concurrentManualCorrectionsAcceptOnlyOneAndImportMakesTheOldEditorStale() throws Exception {
+    save(row("000A", "0.2"),row("000B", "0.8")); long id = currentId("000A");
+    var ready = new CountDownLatch(2); var start = new CountDownLatch(1);
+    var pool = Executors.newFixedThreadPool(2);
+    try {
+      var futures = new ArrayList<Future<Boolean>>();
+      for (String value : List.of("0.4","0.6")) futures.add(pool.submit(() -> {
+        auth("COMMERCIAL"); ready.countDown(); start.await();
+        try { edit(id,value,null);return true; }
+        catch (IllegalArgumentException conflict) { assertThat(conflict).hasMessageContaining("刷新");return false; }
+        finally { SecurityContextHolder.clearContext(); }
+      }));
+      assertThat(ready.await(5,TimeUnit.SECONDS)).isTrue(); start.countDown();
+      assertThat(List.of(futures.get(0).get(15,TimeUnit.SECONDS),futures.get(1).get(15,TimeUnit.SECONDS)))
+          .containsExactlyInAnyOrder(true,false);
+      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_supplier_supply_ratio WHERE supplier_code='000A' AND is_active=1",Integer.class)).isEqualTo(1);
+    } finally { pool.shutdownNow(); }
+    long beforeImport = currentId("000A");
+    save(row("000A","0.9"),row("000B","0.1"));
+    var imported = all();
+    assertThatThrownBy(() -> edit(beforeImport,"0.7",null)).hasMessageContaining("刷新");
+    assertThat(all()).isEqualTo(imported);
+  }
+
+  @Test void selectionImmediatelyUsesManualRatioRuleAndZeroWithdrawal() {
+    save(row("000A", "0.2"),row("000B", "0.8"));
+    var selector = new com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService(sql.getMapper(SupplierSupplyRatioMapper.class),null);
+    var scope = new com.sanhua.marketingcost.service.pricing.SupplierPriceScope("COMMERCIAL","TEST",null,"2026-11",java.time.LocalDate.of(2026,11,8),"210","000M","FIXED");
+    var candidates = List.of(new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("A","000A","供应商000A",new BigDecimal("10"),null,null),new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("B","000B","供应商000B",new BigDecimal("20"),null,null));
+    assertThat(selector.select(scope,candidates).candidate().unitPrice()).isEqualByComparingTo("20");
+    edit(currentId("000A"),"0.9",null);
+    assertThat(selector.select(scope,candidates).candidate().unitPrice()).isEqualByComparingTo("10");
+    edit(currentId("000A"),null,"无供货比例取最高价"); edit(currentId("000B"),null,null);
+    assertThat(selector.select(scope,candidates).rule()).isEqualTo("CONFIGURED_HIGH");
+    edit(currentId("000B"),"0",null);
+    assertThat(selector.select(scope,candidates).candidate().unitPrice()).isEqualByComparingTo("10");
+    edit(currentId("000A"),null,null);
+    assertThat(current("000A").get("selection_rule")).isNull();
+  }
   static byte[] workbook(SupplierSupplyRatioExcelRow... rows) throws Exception {
     try(var book=new XSSFWorkbook();var out=new ByteArrayOutputStream()){
-      var sheet=book.createSheet("供货比例");var header=sheet.createRow(0);String[] labels={"物料代码","物料名称","型号","单位","物料形态属性","供应商","供应商代码","供货比例"};for(int i=0;i<labels.length;i++)header.createCell(i).setCellValue(labels[i]);
-      for(int i=0;i<rows.length;i++){var r=rows[i];var x=sheet.createRow(i+1);String[] values={r.getMaterialCode(),r.getMaterialName(),r.getSpecModel(),r.getUnit(),r.getMaterialShape(),r.getSupplierName(),r.getSupplierCode()};for(int n=0;n<values.length;n++)if(values[n]!=null)x.createCell(n).setCellValue(values[n]);if(r.getSupplyRatio()!=null)x.createCell(7).setCellValue(r.getSupplyRatio().doubleValue());}
+      var sheet=book.createSheet("供货比例");var header=sheet.createRow(0);String[] labels={"物料代码","物料名称","型号","单位","物料形态属性","供应商","供应商代码","供货比例","取价规则"};for(int i=0;i<labels.length;i++)header.createCell(i).setCellValue(labels[i]);
+      for(int i=0;i<rows.length;i++){var r=rows[i];var x=sheet.createRow(i+1);String[] values={r.getMaterialCode(),r.getMaterialName(),r.getSpecModel(),r.getUnit(),r.getMaterialShape(),r.getSupplierName(),r.getSupplierCode()};for(int n=0;n<values.length;n++)if(values[n]!=null)x.createCell(n).setCellValue(values[n]);if(r.getSupplyRatio()!=null)x.createCell(7).setCellValue(r.getSupplyRatio().doubleValue());if(r.getSelectionRule()!=null)x.createCell(8).setCellValue(r.getSelectionRule());}
       book.write(out);return out.toByteArray();
     }
   }
+  @Test void configuredHighestRoundTripsThroughImportVersioningAndActualMapper() throws Exception {
+    var a=row("000A",null); var b=row("000B",null); save(a,b);
+    var old=current("000A");
+    a.setSelectionRule("无供货比例，取最高价");
+    var bytes=workbook(a,b);
+    var imported=imports.importExcel(new ByteArrayInputStream(bytes),"configured.xlsx","COMMERCIAL","finance",null);
+    assertThat(imported.getChangedRelations()).isEqualTo(1);
+    assertThat(current("000A").get("selection_rule")).isEqualTo(a.getSelectionRule());
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE id=?",old.get("id")))
+        .containsEntry("selection_rule",null).containsEntry("is_active",0);
+    var saved=all();
+    assertThat(imports.importExcel(new ByteArrayInputStream(bytes),"configured.xlsx","COMMERCIAL","finance",null).getUnchangedRows()).isEqualTo(2);
+    assertThat(all()).isEqualTo(saved);
+    var selector=new com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService(sql.getMapper(SupplierSupplyRatioMapper.class),null);
+    var scope=new com.sanhua.marketingcost.service.pricing.SupplierPriceScope("COMMERCIAL","TEST",null,"2026-11",java.time.LocalDate.of(2026,11,8),"210","000M","FIXED");
+    var candidates=List.of(new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("A","000A","供应商000A",new BigDecimal("10"),null,null),new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("B","000B","供应商000B",new BigDecimal("20"),null,null));
+    assertThat(selector.select(scope,candidates).candidate().unitPrice()).isEqualByComparingTo("20");
+    assertThat(selector.selectPrepared(scope,candidates,selector.prepareRatios("COMMERCIAL",Set.of("000M"),scope.pricingDate()).get("000M"),null).rule()).isEqualTo("CONFIGURED_HIGH");
+    jdbc.update("UPDATE lp_supplier_supply_ratio SET effective_to='2026-10-31' WHERE material_code='000M' AND selection_rule IS NOT NULL");
+    assertThat(selector.select(scope,candidates).candidate()).isNull();
+    jdbc.update("UPDATE lp_supplier_supply_ratio SET effective_to=NULL,business_unit_type='HOUSEHOLD' WHERE material_code='000M' AND selection_rule IS NOT NULL");
+    assertThat(selector.select(scope,candidates).candidate()).isNull();
+    a.setSelectionRule(null); save(a,b);
+    assertThat(current("000A").get("selection_rule")).isNull();
+    assertThat(selector.select(scope,candidates).candidate()).isNull();
+  }
+
   @Test void importedMaterialReplacesItsSupplierSetAndUnmentionedMaterialCarriesForward() {
     save(row("000A","0.6"),row("000B","0.4"),row("OTHER","000D","1"));
     var other=jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE material_code='OTHER'");

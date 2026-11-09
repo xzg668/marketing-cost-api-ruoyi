@@ -15,7 +15,13 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     public Dependency {Objects.requireNonNull(request);if(monthlyPriceId<=0)throw new IllegalArgumentException("Saved child ID required");}
   }
   public record FirstUse(int schemaVersion,Context origin,List<Dependency> dependencies,
-      List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierReviews) {
+      List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierReviews,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT)
+      boolean specificationOnly) {
+    public FirstUse(int schemaVersion,Context origin,List<Dependency> dependencies,
+        List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierReviews) {
+      this(schemaVersion,origin,dependencies,supplierReviews,false);
+    }
     public FirstUse {Objects.requireNonNull(origin);dependencies=List.copyOf(dependencies);supplierReviews=List.copyOf(supplierReviews);}
   }
   private record ConsumerPrice(String organization,String materialCode) {}
@@ -260,7 +266,7 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     for(var occupied:rows)if(occupied.family().equals(request.family()))coverage=coverage.flatMap(value->value.subtract(occupied.applicability()));
     if(coverage.isEmpty() || !coverage.get().matches(request) || !coverage.get().equals(proposed.applicability()))
       throw failure(Failure.REPLAN_REQUIRED,"Candidate coverage changed before commit");
-    var first=new FirstUse(2,context,dependencies,reviews(context,Map.of(request,proposed)));
+    var first=new FirstUse(2,context,dependencies,reviews(context,Map.of(request,proposed)),request.family().specificationOnly());
     var row=storage.insertPrice(request.family(),proposed.applicability(),proposed.fact(),householdSourceId(proposed),
         codec.unwrap(codec.encode(first)),context.actor());
     rows.add(row);

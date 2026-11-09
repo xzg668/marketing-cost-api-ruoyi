@@ -17,6 +17,8 @@ public class QuotePricePrepareWorkbenchResponse {
       technicalPriceCorrection;
   private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview>
       supplierPriceReviews = java.util.List.of();
+  private List<com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials.Material>
+      supplierPriceReviewMaterials = List.of();
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;

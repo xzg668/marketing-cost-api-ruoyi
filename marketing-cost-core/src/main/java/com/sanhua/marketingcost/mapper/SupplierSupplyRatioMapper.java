@@ -12,6 +12,10 @@ import java.time.LocalDateTime;
 @Mapper
 public interface SupplierSupplyRatioMapper extends BaseMapper<SupplierSupplyRatio> {
 
+  @Select("SELECT * FROM lp_supplier_supply_ratio WHERE business_unit_type=#{unit} "
+      + "AND id=#{id} AND deleted=0 FOR UPDATE")
+  SupplierSupplyRatio versionForUpdate(@Param("unit") String unit, @Param("id") long id);
+
   /** Complete current relationships, including explicit zero and unfilled ratios.
    * Legacy date bounds remain applicable; new imports have open bounds. Never read historical
    * positive versions as a fallback for a current zero relationship. */

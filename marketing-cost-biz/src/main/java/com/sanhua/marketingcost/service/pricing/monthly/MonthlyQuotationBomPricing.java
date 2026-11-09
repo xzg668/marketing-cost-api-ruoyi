@@ -48,6 +48,8 @@ public final class MonthlyQuotationBomPricing {
       String path = MonthlyBomPricingScope.pathKey(node.path());
       if (node.level() == 0 && !node.leaf() && !units.containsKey(path)) continue;
       String unit = units.getOrDefault(path, byMaterial.get(node.priceOrgCode() + "|" + node.materialCode()));
+      if (unit == null && (node.materialCode() == null || node.materialCode().isBlank()))
+        unit = prices.specificationUnit(session.context(),node.priceOrgCode(),node.materialSpec());
       if (unit == null) throw new IllegalArgumentException("BOM 月价范围缺少物料计价单位：" + node.materialCode());
       units.put(path, unit);
       inputs.put(path, new MonthlyQuotationPrices.Item(node.materialCode(), node.priceOrgCode(), unit,
@@ -65,9 +67,15 @@ public final class MonthlyQuotationBomPricing {
         continue;
       }
       var found = probes.values().get(input);
-      var request = found == null ? MonthlyQuotationPrices.requests(session.context(), input).getLast() : found.request();
-      if (probes.problems().containsKey(input)) problems.put(request, probes.problems().get(input));
-      nodes.add(new MonthlyBomPricingScope.Node(node.path(), node.materialCode(), node.level() == 0 ? null : node.parentCode(), request, node.qtyPerTop()));
+      MonthlyPriceRequest request = found == null ? null : found.request();
+      if (request == null) {
+        try { request = prices.requestsFor(session.context(), input).getLast(); }
+        catch (MonthlyPriceProblem lookupProblem) {
+          if (node.materialCode() != null && !node.materialCode().isBlank()) throw lookupProblem;
+        }
+      }
+      if (request != null && probes.problems().containsKey(input)) problems.put(request, probes.problems().get(input));
+      nodes.add(new MonthlyBomPricingScope.Node(node.path(), node.materialCode(), node.level() == 0 ? null : node.parentCode(), request, node.qtyPerTop(), node.materialSpec()));
     }
     var scope = MonthlyBomPricingScope.select(nodes, new MonthlyMaterialPrices.Candidates(probes.candidates(), problems), pricingPaths);
     var ordinary = new HashSet<String>(); scope.ordinary().forEach(node -> ordinary.add(MonthlyBomPricingScope.pathKey(node.path())));
