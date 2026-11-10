@@ -179,8 +179,9 @@ class OaWorkflowClientTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"新品,1328371833677696778", "衍生品,1328371833677696778", "批量品,1328371833677696777"})
-  void householdFinalCostHttpRequestContainsBothFieldsForEveryOriginalRow(String businessType, String tableId)
+  @CsvSource({"新品,1328371833677696778,zcbbhs,hysfzcbbhs", "衍生品,1328371833677696778,cb1,zcbbhs", "批量品,1328371833677696777,cb1,zcbbhs"})
+  void householdFinalCostHttpRequestContainsBothFieldsForEveryOriginalRow(
+      String businessType, String tableId, String withoutShipping, String withShipping)
       throws Exception {
     properties.getFinalCostSubFormIds().put("FI-SR-005_NEW", "1328371833677696778");
     properties.getFinalCostSubFormIds().put("FI-SR-005_MASS", "1328371833677696777");
@@ -196,8 +197,8 @@ class OaWorkflowClientTest {
       assertThat(detail.path("subFormId").isIntegralNumber()).isTrue();
       assertThat(detail.path("subFormId").asText()).isEqualTo(tableId);
     }
-    assertThat(details.get(0).path("dataKey").asText()).isEqualTo("zcbbhs");
-    assertThat(details.get(1).path("dataKey").asText()).isEqualTo("hysfzcbbhs");
+    assertThat(details.get(0).path("dataKey").asText()).isEqualTo(withoutShipping);
+    assertThat(details.get(1).path("dataKey").asText()).isEqualTo(withShipping);
     assertThat(details.get(0).path("content").asText()).isEqualTo("292.15974237");
     assertThat(details.get(1).path("content").asText()).isEqualTo("293.39424237");
     assertThat(details.get(2).path("content").asText()).isEqualTo("151.57419573");

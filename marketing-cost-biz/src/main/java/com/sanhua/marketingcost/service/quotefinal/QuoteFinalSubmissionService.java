@@ -77,7 +77,6 @@ public class QuoteFinalSubmissionService {
       if (costs.isEmpty()) throw invalid("报价单没有产品");
       access.requireCostPublication(form.getId());
       access.requireOaHandling(form.getId());
-      requireRecalculation(repository.returnedBaseline(form.getId()), costs);
       if (!repository.linked(form.getId())) throw invalid("本单未关联 OA 原流程，可查看核算成本，暂不能提交 OA");
       if (error == null) preview(form, costs, oaContext.operatorEmployeeNo(actor.userId()));
     } catch (IllegalArgumentException | IllegalStateException failure) {
@@ -131,7 +130,6 @@ public class QuoteFinalSubmissionService {
     if (costs.isEmpty() || costs.stream().anyMatch(c -> !"READY".equals(c.status()))) {
       throw invalid("仍有产品尚未完成有效核算，请处理后重新确认");
     }
-    requireRecalculation(repository.returnedBaseline(form.getId()), costs);
     if (!fingerprint(form, period, costs).equals(expected)) throw invalid("核算版本或原产品明细已变化，请刷新核对成本后再提交");
     String employeeNo = oaContext.operatorEmployeeNo(actor.userId());
     var document = oaContext.document(form.getId());
@@ -159,8 +157,6 @@ public class QuoteFinalSubmissionService {
         .orderByAsc(OaFormItem::getSeq).orderByAsc(OaFormItem::getId));
     var rowIds = repository.sourceRows(form.getId());
     List<CostLine> result = new ArrayList<>();
-    var returned = repository.returnedBaseline(form.getId());
-    Set<Long> returnedVersions = returnedVersions(returned);
     for (var item : products) {
       String product = item.getMaterialNo() == null ? item.getSunlModel() : item.getMaterialNo();
       String shipping = item.getShippingFee() == null ? null : item.getShippingFee().toPlainString();
@@ -171,7 +167,6 @@ public class QuoteFinalSubmissionService {
         var match = successes.findSaved(context);
         if (match.isEmpty()) throw invalid("尚无已完成的核算结果，请先完成核算");
         var version = match.get().version();
-        if (returnedVersions.contains(version.getId())) throw invalid("领导已退回，请重新核算");
         if (version.getFinalQuoteAmount() == null || version.getFinalQuoteAmount().signum() < 0) throw invalid("最终成本缺失或为负数，请重新核算");
         if (item.getShippingFee() != null && item.getShippingFee().signum() < 0) throw invalid("产品运费不能为负数，请核对报价需求单");
         // 最终成本已包含一次材料费差额；TOTAL 仅为财务正常成本，不作为对外提交金额。
@@ -183,17 +178,6 @@ public class QuoteFinalSubmissionService {
       }
     }
     return List.copyOf(result);
-  }
-  private Set<Long> returnedVersions(QuoteFinalSubmissionRepository.Submission prior) {
-    Set<Long> ids = new HashSet<>();
-    if (prior != null) codec.read(prior.snapshotJson()).forEach(c -> ids.add(c.path("costVersionId").longValue()));
-    return ids;
-  }
-  private void requireRecalculation(QuoteFinalSubmissionRepository.Submission prior, List<CostLine> costs) {
-    var ids = returnedVersions(prior);
-    if (costs.stream().anyMatch(c -> c.costVersionId() != null && ids.contains(c.costVersionId()))) {
-      throw invalid("领导已退回，请先重新核算各产品再确认");
-    }
   }
   private String fingerprint(OaForm form, String month, List<CostLine> costs) {
     return codec.canonicalHash(Map.of("formId", form.getId(), "periodMonth", month,

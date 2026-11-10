@@ -360,6 +360,9 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
    assertThat(receive(returned)).isEqualTo("SUCCEEDED");assertThat(flowState(f.flow())).isEqualTo("RECOSTING");
    assertThat(jdbc.queryForObject("SELECT status FROM lp_quote_final_submission WHERE id=?",String.class,f.submissionId())).isEqualTo("RETURNED");
    assertThat(jdbc.queryForObject("SELECT cost_snapshot_json FROM lp_quote_final_submission WHERE id=?",String.class,f.submissionId())).isEqualTo(f.snapshot());
+   long formId=jdbc.queryForObject("SELECT oa_form_id FROM lp_quote_final_submission WHERE id=?",Long.class,f.submissionId());
+   assertThat(jdbc.queryForList("SELECT calc_status FROM oa_form_item WHERE oa_form_id=? AND deleted=0",String.class,formId)).allMatch("待核算"::equals);
+   assertThat(jdbc.queryForObject("SELECT calc_status FROM oa_form WHERE id=?",String.class,formId)).isEqualTo("待核算");
    long version=flowVersion(f.flow());receive(returned);assertThat(flowVersion(f.flow())).isEqualTo(version);
    assertThatThrownBy(()->receive(event(f.flow(),"COMPLETED"))).hasMessageContaining("须重新提交");
  }

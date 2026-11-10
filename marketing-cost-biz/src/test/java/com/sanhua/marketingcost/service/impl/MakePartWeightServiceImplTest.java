@@ -6,7 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.MakePartWeightResult;
@@ -23,14 +23,26 @@ import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class MakePartWeightServiceImplTest {
 
+  @BeforeAll
+  static void initializeByproductMetadata() {
+    com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+        new org.apache.ibatis.builder.MapperBuilderAssistant(
+            new com.baomidou.mybatisplus.core.MybatisConfiguration(), ""),
+        U9BomByproductMaster.class);
+  }
+
   @Test
-  @DisplayName("单子料优先取父件料品档案净重，不被可用的U9副产品反算覆盖")
-  void singleRawMaterialPrefersParentTheoreticalNetWeightOverByproduct() {
+  @DisplayName("单子料有U9副产品时优先反算，不使用父件理论净重")
+  void singleRawMaterialPrefersByproductOverParentTheoreticalNetWeight() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
     MakePartChildNetWeightMapper childWeightMapper = mock(MakePartChildNetWeightMapper.class);
     MakePartScrapMappingService scrapMappingService = mock(MakePartScrapMappingService.class);
@@ -40,6 +52,10 @@ class MakePartWeightServiceImplTest {
             mapper, childWeightMapper, scrapMappingService, byproductMapper);
     when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("PLATE")))
         .thenReturn(List.of(raw("1053000301690", "5.553"), raw("301070047", "")));
+    when(scrapMappingService.listMappings("301070047", "COMMERCIAL"))
+        .thenReturn(List.of(scrap("301990315")));
+    when(byproductMapper.selectList(any()))
+        .thenReturn(List.of(byproduct("301990315", "0.0006", "千克")));
 
     MakePartWeightResult result =
         service.resolveWeights(
@@ -48,9 +64,8 @@ class MakePartWeightServiceImplTest {
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getGrossWeightG()).isEqualByComparingTo("5.6000");
-    assertThat(result.getNetWeightG()).isEqualByComparingTo("5.553");
-    assertThat(result.getRemark()).contains("净重取 parent 理论净重");
-    verifyNoInteractions(scrapMappingService, byproductMapper);
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("5.0");
+    assertThat(result.getRemark()).contains("净重按U9副产品反算", "byproduct_weight_g=0.6");
   }
 
   @Test
@@ -150,7 +165,8 @@ class MakePartWeightServiceImplTest {
     assertThat(stainlessResult.getNetWeightG()).isEqualByComparingTo("33.6");
     assertThat(copperResult.getGrossWeightG()).isEqualByComparingTo("5.6");
     assertThat(copperResult.getNetWeightG()).isEqualByComparingTo("5.0");
-    verifyNoInteractions(scrapMappingService, byproductMapper);
+    verify(scrapMappingService).listMappings("301240299", "COMMERCIAL");
+    verify(scrapMappingService).listMappings("301070047", "COMMERCIAL");
   }
 
   @Test
@@ -199,7 +215,7 @@ class MakePartWeightServiceImplTest {
   }
 
   @Test
-  @DisplayName("单子料缺父件料品档案净重时才使用U9副产品反算")
+  @DisplayName("单子料缺父件料品档案净重时仍可使用U9副产品反算")
   void missingParentTheoreticalNetWeightFallsBackToByproduct() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
     MakePartChildNetWeightMapper childWeightMapper = mock(MakePartChildNetWeightMapper.class);
@@ -241,6 +257,134 @@ class MakePartWeightServiceImplTest {
     assertThat(result.getStatus()).isEqualTo("MISSING_WEIGHT");
     assertThat(result.getNetWeightG()).isNull();
     assertThat(result.getRemark()).contains("缺父子材料净重", "P-001", "RAW-001");
+  }
+
+  static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> processAndUnits() {
+    return java.util.stream.Stream.of("原材料加工", "毛坯加工").flatMap(process ->
+        java.util.stream.Stream.of("千克", "公斤", "kg", "KG", "kgs", "克", "g")
+            .map(unit -> org.junit.jupiter.params.provider.Arguments.of(
+                process, unit, List.of("克", "g").contains(unit) ? "2.50753" : "0.00250753")));
+  }
+
+  @ParameterizedTest
+  @MethodSource("processAndUnits")
+  @DisplayName("原材料及毛坯均先统一克制，再以副产品反算净重并完成扣废计价")
+  void bothProcessesConvertByproductUnitsBeforeCalculatingPrice(
+      String process, String unit, String quantity) {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var netMapper = mock(MakePartChildNetWeightMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(rawMapper, netMapper, mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("203240172", "20.016"), raw("301200309", "22.20653")));
+    // 多子料即使旧父子配置存在，有效副产品也必须优先。
+    when(netMapper.selectEffective(any(), any(), any(), any(), any()))
+        .thenReturn(childNetWeight("20.1"));
+    when(mappings.listMappings("301200309", "COMMERCIAL"))
+        .thenReturn(List.of(scrap("301990044")));
+    when(products.selectList(any()))
+        .thenReturn(List.of(byproduct("301990044", quantity, unit)));
+    var result = service.resolveWeights("203240172", child("301200309", "0.02220653"),
+        process, "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", true);
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getGrossWeightG()).isEqualByComparingTo("22.20653");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("19.699");
+    assertThat(result.getRemark()).contains("byproduct_weight_g=2.50753");
+    var row = new com.sanhua.marketingcost.entity.MakePartPriceCalcRow();
+    row.setParentMaterialNo("203240172");
+    row.setItemProcessType(process);
+    row.setGrossWeightG(result.getGrossWeightG());
+    row.setNetWeightG(result.getNetWeightG());
+    row.setRawUnitPrice(new BigDecimal("10"));
+    row.setScrapCode("301990044");
+    row.setScrapUnitPrice(new BigDecimal("2"));
+    var calculated = new com.sanhua.marketingcost.service.MakePartPriceCalculator()
+        .calculate(List.of(row)).getFirst();
+    assertThat(calculated.getCostPrice()).isEqualByComparingTo(
+        "原材料加工".equals(process) ? "0.21705024" : "9.99498494");
+    assertThat(calculated.getRemark()).contains("scrap_weight_kg=0.00250753");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"原材料加工,0,kg,22.20653", "毛坯加工,0,克,22.20653",
+      "原材料加工,0.02220653,kg,0", "毛坯加工,22.20653,g,0"})
+  void zeroByproductAndZeroNetWeightRemainValid(
+      String process, String output, String unit, String expectedNet) {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(rawMapper,
+        mock(MakePartChildNetWeightMapper.class), mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", "20.016"), raw("C", "22.20653")));
+    when(mappings.listMappings("C", "COMMERCIAL")).thenReturn(List.of(scrap("S")));
+    when(products.selectList(any())).thenReturn(List.of(byproduct("S", output, unit)));
+    var result = service.resolveWeights("P", child("C", "0.02220653"), process,
+        "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", false);
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo(expectedNet);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"原材料加工,0.0025,吨", "毛坯加工,0.0025,吨",
+      "原材料加工,-0.0025,kg", "毛坯加工,-2.5,g",
+      "原材料加工,0.1,kg", "毛坯加工,100,g"})
+  void unusableByproductFallsBackToParentWithReason(String process, String output, String unit) {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(rawMapper,
+        mock(MakePartChildNetWeightMapper.class), mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", "20.016"), raw("C", "22.20653")));
+    when(mappings.listMappings("C", "COMMERCIAL")).thenReturn(List.of(scrap("S")));
+    when(products.selectList(any())).thenReturn(List.of(byproduct("S", output, unit)));
+    var result = service.resolveWeights("P", child("C", "0.02220653"), process,
+        "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", false);
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("20.016");
+    assertThat(result.getRemark()).contains("副产品反算失败", "净重取 parent 理论净重");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"原材料加工,false", "毛坯加工,false", "原材料加工,true", "毛坯加工,true"})
+  void singleMaterialCannotUseByproductWithDifferentOrMissingCmsScrapCode(
+      String process, boolean mappingMissing) {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(rawMapper,
+        mock(MakePartChildNetWeightMapper.class), mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("203240172", "20.016"), raw("301200309", "22.20653")));
+    when(mappings.listMappings("301200309", "COMMERCIAL"))
+        .thenReturn(mappingMissing ? List.of() : List.of(scrap("301990444")));
+    when(products.selectList(any()))
+        .thenReturn(List.of(byproduct("301990044", "0.00250753", "千克")));
+    var result = service.resolveWeights("203240172", child("301200309", "0.02220653"),
+        process, "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", false);
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("20.016");
+    assertThat(result.getRemark()).contains("副产品反算失败", "净重取 parent 理论净重");
+    assertThat(result.getRemark()).doesNotContain("净重按U9副产品反算");
+  }
+
+  @Test void ambiguousMappedSingleMaterialByproductsCannotBeGuessed() {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var service = new MakePartWeightServiceImpl(rawMapper,
+        mock(MakePartChildNetWeightMapper.class), mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", "20.016")));
+    when(mappings.listMappings("C", "COMMERCIAL")).thenReturn(List.of(scrap("S")));
+    when(products.selectList(any())).thenReturn(List.of(
+        byproduct("S", "0.0025", "kg"), byproduct("S", "0.001", "kg")));
+    var result = service.resolveWeights("P", child("C", "0.02220653"), "原材料加工",
+        "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", false);
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("20.016");
+    assertThat(result.getRemark()).contains("有效副产品匹配不唯一", "净重取 parent 理论净重");
   }
 
   private BomU9Source child(String childCode, String qtyPerParent) {

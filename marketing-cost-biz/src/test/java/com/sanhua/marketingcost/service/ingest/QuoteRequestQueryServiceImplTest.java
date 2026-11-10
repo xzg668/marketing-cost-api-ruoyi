@@ -176,6 +176,27 @@ class QuoteRequestQueryServiceImplTest {
   }
 
   @Test
+  void costingNoticeStaysPendingWithHistoricalConfirmedCostsInListAndDetail() {
+    OaForm form = form("OA-COSTING-NOTICE", "FI-SR-005", "CONFIRMED");
+    OaFormItem pending = item(22L, "MAT-PENDING");
+    pending.setCalcStatus("待核算");
+    pending.setConfirmedCostVersionId(123L);
+    pending.setCalcAt(java.time.LocalDateTime.of(2026, 11, 7, 12, 0));
+    stubRequestPage(form);
+    stubListAggregates(List.of(pending), List.of(status(22L, "SYNCED")), log(13L));
+    assertThat(service.pageRequests(1, 20, form.getOaNo(), null, null, null, null, null, null)
+        .getList().getFirst().getCalcStatus()).isEqualTo("待核算");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    var detail = service.getRequestDetail(form.getOaNo());
+    assertThat(detail.getCalcStatus()).isEqualTo("待核算");
+    assertThat(detail.getItems().getFirst().getCalcStatus()).isEqualTo("待核算");
+    assertThat(detail.getItems().getFirst().getConfirmedCostVersionId()).isEqualTo(123L);
+  }
+
+  @Test
   void calcStatusUsesItemAggregateInsteadOfFormHeader() {
     OaForm form = form("OA-T8-CALC", "FI-SC-020", "CONFIRMED");
     form.setCalcStatus("已核算");

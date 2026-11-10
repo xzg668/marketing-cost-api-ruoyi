@@ -191,7 +191,7 @@ public class OaWorkflowAccessPolicy {
   private String label(String state) {
     return switch(state) {
       case "TECHNICAL" -> "技术补录";
-      case "COSTING" -> "待核算"; case "RECOSTING" -> "待重新核算";
+      case "COSTING", "RECOSTING" -> "待核算";
       case "RESULT_APPROVAL" -> "成本审批中"; case "SALES_REVISION" -> "待营业更正";
       case "COMPLETED" -> "已完成"; case "CANCELLED" -> "已取消";
       case "WITHDRAWN" -> "已撤回"; case "TERMINATED" -> "已终止"; default -> "待同步";

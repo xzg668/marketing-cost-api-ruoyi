@@ -24,8 +24,8 @@ class OaFinalCostSubmissionClientTest {
       "FI-SC-006,,zcb1bhs,zcbbhs,1317497487388790985",
       "FI-SC-020,,bhysfzcbbhs,hysfzcbbhs,1315726685492431674",
       "FI-SR-005,新品,zcbbhs,hysfzcbbhs,1328371833677696778",
-      "FI-SR-005,衍生品,zcbbhs,hysfzcbbhs,1328371833677696778",
-      "FI-SR-005,批量品,zcbbhs,hysfzcbbhs,1328371833677696777"})
+      "FI-SR-005,衍生品,cb1,zcbbhs,1328371833677696778",
+      "FI-SR-005,批量品,cb1,zcbbhs,1328371833677696777"})
   void rowsUseTheConfiguredTableAndOriginalRowIndexes(String process, String businessType,
       String field, String withShipping, String tableId) throws Exception {
     properties.getFinalCostSubFormIds().put(process, tableId);

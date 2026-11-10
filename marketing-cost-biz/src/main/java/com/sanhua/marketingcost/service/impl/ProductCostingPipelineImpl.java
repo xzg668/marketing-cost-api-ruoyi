@@ -109,7 +109,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private ProductCostingResult prepareResolved(ProductCostingContext context, boolean force) {
     oaWorkflowAccess.requireCosting(context.form().getId());
     try {
-      if (force || !successLookup.hasCurrentVersion(context))
+      if (force || "待核算".equals(context.item().getCalcStatus()) || !successLookup.hasCurrentVersion(context))
         return withSourceCheck(context, executeStages(context, true));
       ProductCostingContext current = contextResolver.resolveRevision(context);
       var reusable = successLookup.find(current);
@@ -160,7 +160,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private ProductCostingResult executeResolved(ProductCostingContext context, boolean force) {
     try {
       // 新产品没有成功版本可复用，直接进入正式检查；价格和成本发布边界仍完整校验。
-      if (force || !successLookup.hasCurrentVersion(context)) return executeStages(context, false);
+      if (force || "待核算".equals(context.item().getCalcStatus()) || !successLookup.hasCurrentVersion(context)) return executeStages(context, false);
       context = contextResolver.resolveRevision(context);
       ProductCostingResult reusable = reusableSuccess(context);
       if (reusable != null) return reusable;

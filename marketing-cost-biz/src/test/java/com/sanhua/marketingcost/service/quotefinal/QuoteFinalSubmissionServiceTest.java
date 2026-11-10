@@ -165,8 +165,8 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
       "FI-SC-006,批量品,zcb1bhs,zcbbhs,1317497487388790985",
       "FI-SC-020,批量品,bhysfzcbbhs,hysfzcbbhs,1315726685492431674",
       "FI-SR-005,新品,zcbbhs,hysfzcbbhs,1328371833677696778",
-      "FI-SR-005,衍生品,zcbbhs,hysfzcbbhs,1328371833677696778",
-      "FI-SR-005,批量品,zcbbhs,hysfzcbbhs,1328371833677696777"})
+      "FI-SR-005,衍生品,cb1,zcbbhs,1328371833677696778",
+      "FI-SR-005,批量品,cb1,zcbbhs,1328371833677696777"})
   void finalWritebackAddsEachOriginalRowsFreightOnce(String process, String businessType,
       String without, String with, String tableId) {
     jdbc.update("UPDATE oa_form SET process_code=? WHERE id=?", process, formId);
@@ -308,10 +308,34 @@ class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase
     }
     verify(oa,times(1)).submit(any());
   }
-  @Test void returnRequiresNewCostVersionsAndOldSnapshotIsImmutable() {
-    var first=send(read().fingerprint(),key());String frozen=repository.find(first.submissionId()).snapshotJson();repository.returned(first.submissionId(),1,"重新核算");
-    assertThat(read().canConfirm()).isFalse();for(var v:versions.values()){v.setId(v.getId()+1);v.setVersionNo("V2");}
-    var ready=read();assertThat(ready.canConfirm()).isTrue();assertThat(send(ready.fingerprint(),key()).status()).isEqualTo("SUBMITTED");
+  @Test void returnedQuoteCanResubmitSavedCostsWithoutRecalculation() {
+    var first=send(read().fingerprint(),key());
+    String frozen=repository.find(first.submissionId()).snapshotJson();
+    repository.returned(first.submissionId(),1,"成本结果没有回写成功");
+    jdbc.update("UPDATE oa_form_item SET calc_status='待核算' WHERE oa_form_id=?",formId);
+    var ready=read();
+    assertThat(ready.canConfirm()).isTrue();
+    assertThat(ready.readyProducts()).isEqualTo(2);
+    assertThat(ready.costs()).isEqualTo(first.costs());
+    String request=key();
+    var second=send(ready.fingerprint(),request);
+    assertThat(second.status()).isEqualTo("SUBMITTED");
+    assertThat(second.submissionId()).isNotEqualTo(first.submissionId());
+    assertThat(repository.find(second.submissionId()).round()).isEqualTo(2);
+    send(ready.fingerprint(),request);send(ready.fingerprint(),key());
+    verify(oa,times(2)).submit(any());
+    assertThat(repository.find(first.submissionId()).snapshotJson()).isEqualTo(frozen);
+  }
+  @Test void returnedQuoteCanCombineRecalculatedAndExistingSavedCosts() {
+    var first=send(read().fingerprint(),key());
+    String frozen=repository.find(first.submissionId()).snapshotJson();
+    repository.returned(first.submissionId(),1,"重新确认");
+    var changed=versions.get(items.getFirst());changed.setId(changed.getId()+1);changed.setVersionNo("V2");
+    var ready=read();
+    assertThat(ready.canConfirm()).isTrue();
+    assertThat(ready.costs().getFirst().costVersionId()).isNotEqualTo(first.costs().getFirst().costVersionId());
+    assertThat(ready.costs().getLast().costVersionId()).isEqualTo(first.costs().getLast().costVersionId());
+    assertThat(send(ready.fingerprint(),key()).status()).isEqualTo("SUBMITTED");
     assertThat(repository.find(first.submissionId()).snapshotJson()).isEqualTo(frozen);
   }
   @Test void lateSuccessDoesNotOverrideAnEarlierReturnNotification() {

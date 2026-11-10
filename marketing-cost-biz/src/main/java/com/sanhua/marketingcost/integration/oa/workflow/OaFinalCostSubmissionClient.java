@@ -31,9 +31,9 @@ public class OaFinalCostSubmissionClient {
       throw new IllegalArgumentException("当前报价员未维护有效工号");
     }
     if (rows == null || rows.isEmpty()) throw new IllegalArgumentException("整单没有可提交的成本结果");
-    String key = costField(processCode);
-    String withShippingKey = costWithShippingField(processCode);
     String businessType = rows.getFirst().businessType();
+    String key = costField(processCode, businessType);
+    String withShippingKey = costWithShippingField(processCode, businessType);
     if ("FI-SR-005".equals(processCode)
         && rows.stream().anyMatch(row -> !Objects.equals(businessType, row.businessType()))) {
       throw new IllegalArgumentException("FI-SR-005 产品明细的业务类型不一致，请核对原报价需求单");
@@ -63,12 +63,12 @@ public class OaFinalCostSubmissionClient {
     return body;
   }
 
-  private String costWithShippingField(String processCode) {
+  private String costWithShippingField(String processCode, String businessType) {
     return switch (processCode) {
       case "FI-SC-005" -> "hyfzcbbhs";
       case "FI-SC-006" -> "zcbbhs";
       case "FI-SC-020" -> "hysfzcbbhs";
-      case "FI-SR-005" -> "hysfzcbbhs";
+      case "FI-SR-005" -> "新品".equals(businessType) ? "hysfzcbbhs" : "zcbbhs";
       default -> throw new IllegalArgumentException("未配置该 OA 流程的含运费成本字段：" + processCode);
     };
   }
@@ -82,13 +82,13 @@ public class OaFinalCostSubmissionClient {
     return amount;
   }
 
-  public String costField(String processCode) {
+  private String costField(String processCode, String businessType) {
     if (processCode == null) throw new IllegalArgumentException("缺少 OA 流程类型");
     return switch (processCode) {
       case "FI-SC-005" -> "zcbbhyf";
       case "FI-SC-006" -> "zcb1bhs";
       case "FI-SC-020" -> "bhysfzcbbhs";
-      case "FI-SR-005" -> "zcbbhs";
+      case "FI-SR-005" -> "新品".equals(businessType) ? "zcbbhs" : "cb1";
       default -> throw new IllegalArgumentException("未配置该 OA 流程的最终成本字段：" + processCode);
     };
   }

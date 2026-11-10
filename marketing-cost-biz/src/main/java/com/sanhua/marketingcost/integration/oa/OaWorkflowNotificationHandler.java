@@ -197,6 +197,9 @@ public class OaWorkflowNotificationHandler {
 
   private String costing(OaMessageRepository.Message message, OaWorkflowNotification event,
       OaWorkflowNotificationRepository.Document document, OaWorkflowNotificationRepository.Flow flow, Scope scope) {
+    // COSTING只表示进入核算环节；保留保存金额和版本，不能让旧成功覆盖本轮待办。
+    jdbc.update("UPDATE oa_form SET calc_status='待核算' WHERE id=?", document.id());
+    jdbc.update("UPDATE oa_form_item SET calc_status='待核算' WHERE oa_form_id=? AND deleted=0", document.id());
     var previous = scope.resultId() == null ? null : results.find(scope.resultId());
     // COSTING 是节点，不是审批动作；未提交过成本（含明确发送失败）也可以进入待核算。
     // 此处不审批技术资料，资料是否齐全仍由既有核算检查判断。

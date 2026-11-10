@@ -159,7 +159,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     String scope = " FROM oa_form_item qi WHERE qi.oa_form_id=oa_form.id AND qi.deleted=0";
     if (StringUtils.hasText(unit)) scope += " AND qi.business_unit_type={0}";
     String state = "TRIM(COALESCE(qi.calc_status,''))";
-    String pending = "(" + state + " IN ('CALCULATING','RUNNING','试算中') OR "
+    String pending = "(" + state + " IN ('CALCULATING','RUNNING','试算中','待核算') OR "
         + "(qi.calc_at IS NULL AND qi.confirmed_cost_version_id IS NULL AND "
         + state + " NOT IN ('CALCULATED','DONE','SUCCESS','已核算')))";
     String done = "(EXISTS (SELECT 1" + scope + ") AND NOT EXISTS (SELECT 1" + scope + " AND " + pending + "))";
@@ -530,6 +530,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       return "试算中";
     }
     String itemStatus = normalizeCalcStatus(item.getCalcStatus(), false);
+    if ("待核算".equals(itemStatus)) return "待核算";
     if ("试算中".equals(itemStatus)
         || (latestCostRun != null && QuoteCostRunStatus.isInProgress(latestCostRun.getStatus()))) {
       return "试算中";
@@ -906,6 +907,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     if (items == null || items.isEmpty()) {
       return "未核算";
     }
+    if (items.stream().anyMatch(item -> item != null && "待核算".equals(item.getCalcStatus()))) {
+      return "待核算";
+    }
     for (OaFormItem item : items) {
       if (item == null
           || !"已核算"
@@ -921,6 +925,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
 
   private String normalizeCalcStatus(String calcStatus, boolean hasConfirmedCost) {
     String text = calcStatus == null ? "" : calcStatus.trim();
+    if ("待核算".equals(text)) return "待核算";
     if ("CALCULATING".equals(text) || "RUNNING".equals(text) || "试算中".equals(text)) {
       return "试算中";
     }

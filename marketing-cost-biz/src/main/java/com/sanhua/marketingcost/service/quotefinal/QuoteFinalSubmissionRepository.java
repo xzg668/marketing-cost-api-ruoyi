@@ -27,9 +27,6 @@ public class QuoteFinalSubmissionRepository {
   public Submission latest(long formId) {
     return one("SELECT * FROM lp_quote_final_submission WHERE oa_form_id=? ORDER BY id DESC LIMIT 1", formId);
   }
-  public Submission returnedBaseline(long formId) {
-    return one("SELECT * FROM lp_quote_final_submission WHERE oa_form_id=? AND status='RETURNED' ORDER BY id DESC LIMIT 1", formId);
-  }
   public Submission lock(long id) {
     return one("SELECT * FROM lp_quote_final_submission WHERE id=? FOR UPDATE", id);
   }
