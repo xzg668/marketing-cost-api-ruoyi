@@ -165,7 +165,12 @@ public class JjbExcelRenderer {
       string(row, 10, v.material()); string(row, 11, v.shape());
       string(row, 12, "HOUSEHOLD".equals(v.kind()) && v.priceSource() == null ? "询价（家用部件）" : v.priceSource());
       string(row, 13, compact(v.remark(), 12));
-      if (v.rate() != null && !ordinaryRate) numeric(row, 14, v.rate(), "ADJUSTED_MANUFACTURE_COST".equals(v.code()) ? DECIMAL : PERCENT);
+      if (!v.separateCalculation().isEmpty()) {
+        var c = v.separateCalculation();
+        string(row, 14, "基础金额="+c.get("baseAmount")+"；净损失率="+percent(c.get("lossRate"))
+            +"；零件制造费用率="+percent(c.get("manufactureRate"))+"；三项费用率="+percent(c.get("threeExpenseRate")));
+      }
+      else if (v.rate() != null && !ordinaryRate) numeric(row, 14, v.rate(), "ADJUSTED_MANUFACTURE_COST".equals(v.code()) ? DECIMAL : PERCENT);
       else if ("HOUSEHOLD".equals(v.kind())) string(row, 14, "H=" + percent(v.householdRate()) + "；S=" + percent(v.salesRate()));
       else if ("FEE".equals(v.kind())) string(row, 14, switch (text(v.feeState())) {
         case "MISSING" -> "未填写"; case "EXPLICIT_NONE" -> "明确无费用";

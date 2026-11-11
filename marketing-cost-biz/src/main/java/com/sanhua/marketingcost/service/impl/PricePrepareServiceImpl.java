@@ -497,11 +497,14 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     if (session == null) return;
     var roots = new LinkedHashMap<String, String>();
     plans.forEach(plan -> roots.put(currentItemKey(batch, plan), plan.getBomRow().getPath()));
+    var rules = new LinkedHashMap<String, com.sanhua.marketingcost.service.costing.ProductPartCostRule>();
+    plans.forEach(plan -> { if (plan.getSeparateRule() != null) rules.put(currentItemKey(batch, plan), plan.getSeparateRule()); });
     var adoptedInputs = session.plan();
     var evidence = new MonthlyPreparationEvidence(monthlyCodec);
     for (var row : execution.items) {
       if (!ITEM_STATUS_READY.equals(row.getStatus()) || row.getQuantity() == null || row.getQuantity().signum() == 0) continue;
-      var inputs = evidence.capture(row, adoptedInputs, roots.get(row.getSettlementKey()));
+      var inputs = evidence.capture(row, adoptedInputs, roots.get(row.getSettlementKey()))
+          .withSeparateRule(rules.get(row.getSettlementKey()));
       if (inputs.uses().isEmpty()) throw new IllegalStateException("已计价准备缺少实际月价输入：" + row.getMaterialCode());
       row.setInputSnapshotJson(evidence.attach(row, inputs));
       if (execution.persist && execution.publishOrdinary) {

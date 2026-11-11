@@ -201,6 +201,12 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "materialDifferencePolicy",
         com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);
+    var partCostRules = jdbcTemplate.queryForList(
+        "SELECT id,revision,product_code,part_code,part_model,shape,manufacture_rate FROM lp_product_part_cost_rule"
+            + " WHERE business_unit_type=? AND product_code=? ORDER BY id",
+        item.getBusinessUnitType(), com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(item));
+    // Products without configuration keep their existing saved-cost revision and reuse behavior.
+    if (!partCostRules.isEmpty()) append(canonical, "productPartCostRules", partCostRules);
     var monthly = monthlyInputs.read(form, item, pricingMonth);
     append(canonical, "monthlyPrices", monthly.evidence());
     append(canonical, "materialPrices", materialPriceRevision(item, pricingMonth, monthly));

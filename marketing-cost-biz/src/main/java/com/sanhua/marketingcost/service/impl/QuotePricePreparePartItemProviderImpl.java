@@ -32,16 +32,27 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
   private final BomCostingRowMapper bomCostingRowMapper;
   private final MaterialMasterMapper materialMasterMapper;
   private final com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper sourceRefs;
+  private final com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationEvidence monthlyEvidence;
 
   public QuotePricePreparePartItemProviderImpl(
       PricePrepareItemMapper pricePrepareItemMapper,
       BomCostingRowMapper bomCostingRowMapper,
       MaterialMasterMapper materialMasterMapper,
       com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper sourceRefs) {
+    this(pricePrepareItemMapper, bomCostingRowMapper, materialMasterMapper, sourceRefs,
+        new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public QuotePricePreparePartItemProviderImpl(PricePrepareItemMapper pricePrepareItemMapper,
+      BomCostingRowMapper bomCostingRowMapper, MaterialMasterMapper materialMasterMapper,
+      com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper sourceRefs,
+      com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec codec) {
     this.pricePrepareItemMapper = pricePrepareItemMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.materialMasterMapper = materialMasterMapper;
     this.sourceRefs = sourceRefs;
+    this.monthlyEvidence = new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationEvidence(codec);
   }
 
   @Override
@@ -191,6 +202,11 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
         bomRow == null ? null : bomRow.getMaterialAttribute()));
     dto.setPriceSource(trimToNull(item.getPriceSource()));
     dto.setMonthlyPricingType(item.getMonthlyPricingType());
+    var captured = monthlyEvidence.read(item);
+    if (captured != null) {
+      dto.setSeparateCostRule(captured.separateRule());
+      if (captured.separateRule() != null) dto.setShapeAttr(captured.separateRule().shape());
+    }
     dto.setUnitPrice(item.getUnitPrice());
     dto.setAmount(item.getAmount());
     dto.setRemark(remark(item));

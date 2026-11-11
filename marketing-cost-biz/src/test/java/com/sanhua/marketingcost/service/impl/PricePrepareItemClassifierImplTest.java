@@ -70,6 +70,25 @@ class PricePrepareItemClassifierImplTest {
   }
 
   @Test
+  void configuredShapeOverridesMasterOnlyForTheMatchedProductAndUsesCodeBeforeModel() {
+    var store=mock(com.sanhua.marketingcost.service.costing.ProductPartCostRuleStore.class);
+    classifier=new PricePrepareItemClassifierImpl(packageComponentIdentifyService,materialMasterMapper,materialMasterRawMapper,store);
+    var code=new com.sanhua.marketingcost.service.costing.ProductPartCostRule(1,1,"COMMERCIAL","TOP-A",null,null,null,
+        "MAT-A",null,null,"制造件",new BigDecimal(".2"));
+    var model=new com.sanhua.marketingcost.service.costing.ProductPartCostRule(2,1,"COMMERCIAL","TOP-A",null,null,null,
+        null,null,"MODEL","采购件",BigDecimal.ZERO);
+    when(store.forProduct("COMMERCIAL","TOP-A")).thenReturn(List.of(code,model));
+    when(store.forProduct("COMMERCIAL","TOP-B")).thenReturn(List.of());
+    var a=raw("MAT-A","采购件","15");a.setMaterialModel("MODEL");
+    var b=raw("MAT-B","制造件","15");b.setMaterialModel("MODEL");
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(),any(),eq("COMMERCIAL"))).thenReturn(List.of(a,b));
+    var actual=classifier.classify(List.of(bomRow("TOP-A","MAT-A","采购件"),bomRow("TOP-A","MAT-B","制造件"),
+        bomRow("TOP-B","MAT-A","采购件")));
+    assertThat(actual).extracting(PricePreparePlanItem::getItemType).containsExactly("MAKE_PART","NORMAL","NORMAL");
+    assertThat(actual).extracting(PricePreparePlanItem::getSeparateRule).containsExactly(code,model,null);
+  }
+
+  @Test
   @DisplayName("包装组件按 15155% + 虚拟 识别结果分类")
   void classifiesPackageComponent() {
     BomCostingRow row = bomRow("1079900000536", "9830000026238", "虚拟");
@@ -187,6 +206,7 @@ class PricePrepareItemClassifierImplTest {
     row.setShapeAttr(shapeAttr);
     row.setQtyPerTop(BigDecimal.ONE);
     row.setPriceOrgCode("210");
+    row.setBusinessUnitType("COMMERCIAL");
     row.setMaterialOrganizationCode("COMMERCIAL");
     return row;
   }

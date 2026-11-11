@@ -348,7 +348,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     // Keep them out of every ordinary material/package bucket and fee base.
     List<CostRunPartItemDto> ordinaryPartItems = currentPartItems == null ? null
         : currentPartItems.stream().filter(item -> item == null
-            || !"HOUSEHOLD_INQUIRY".equals(item.getMonthlyPricingType())).toList();
+            || item.getSeparateCostRule() == null && !"HOUSEHOLD_INQUIRY".equals(item.getMonthlyPricingType())).toList();
     var resolved = resolveItems(oaNo.trim(), productCode.trim(), materialCodes,
         resolveCostSourceContext(oaNo.trim(), productCode.trim(), context, currentPartItems), ordinaryPartItems);
     var result = resolved.bind(ResolvedOrdinaryCost.calculate(resolved.inputs()));
@@ -364,7 +364,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     var materialCodes = Set.of(context.getProductCode().trim());
     if (context.getPreparedInputs() != null) context.getPreparedInputs().requireFor(context, materialCodes);
     var ordinary = currentPartItems.stream().filter(item -> item == null
-        || !"HOUSEHOLD_INQUIRY".equals(item.getMonthlyPricingType())).toList();
+        || item.getSeparateCostRule() == null && !"HOUSEHOLD_INQUIRY".equals(item.getMonthlyPricingType())).toList();
     return resolveItems(context.getOaNo().trim(), context.getProductCode().trim(), materialCodes,
         resolveCostSourceContext(context.getOaNo().trim(), context.getProductCode().trim(), context, currentPartItems), ordinary);
   }

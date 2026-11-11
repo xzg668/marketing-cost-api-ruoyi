@@ -28,6 +28,23 @@ class MonthlyQuotationDifferenceTest {
   final List<PricePrepareItem> saved = new ArrayList<>();
   final Map<String, PreparationBinding> bindings = new HashMap<>();
 
+  @Test void configuredPricingEvidenceKeepsAllPriceChecksAndRequiresItsOwnProductScope() {
+    var a=request("A");var selected=price(1,false,false,"10");
+    var plan=new MonthlyAdoptionPlan(Map.of(a,selected),List.of(new Use("P/A",a,d("2"))),Set.of());
+    var row=preparePair("P/A","A","MONTHLY_PRICE",d("2"),d("10"),d("10")).getFirst();row.setTopProductCode("P");
+    var rule=new ProductPartCostRule(7,2,"COMMERCIAL","P",null,null,null,"A",null,null,"采购件",d(".2"));
+    var evidence=new MonthlyPreparationEvidence(codec);
+    row.setInputSnapshotJson(codec.encode(MonthlyPreparationPrice.of(new QuotationPriceSession.Value(a,selected,d("10"),d("10")),"P/A",d("2"))));
+    row.setInputSnapshotJson(evidence.attach(row,evidence.capture(row,plan,"P/A").withSeparateRule(rule)));
+    var scenarios=Map.of(1L,new MonthlyPriceScenarios.Pair(1,selected.fact().evidence().sha256(),d("10"),d("10"),null));
+    var validation=new MonthlyPreparationValidation(json,codec);
+    assertThatCode(()->validation.validate(row,true,plan,scenarios,"P/A")).doesNotThrowAnyException();
+    row.setAmount(d("21"));
+    assertThatThrownBy(()->validation.validate(row,true,plan,scenarios,"P/A")).hasMessageContaining("准备金额");
+    row.setAmount(d("20"));row.setTopProductCode("OTHER");
+    assertThatThrownBy(()->validation.validate(row,true,plan,scenarios,"P/A")).hasMessageContaining("不属于");
+  }
+
   @Test void zeroDifferenceStillMarksCopperAndHouseholdWithoutMetalExposureHasZeroDifference() {
     var a = request("A"); var h = request("HH");
     var normal = price(1, false, true, "10"); var household = price(2, true, false, "20");
@@ -45,6 +62,19 @@ class MonthlyQuotationDifferenceTest {
     assertThat(hh.getDiffAmount()).isZero(); assertThat(hh.getContributesToAdjustment()).isEqualTo(1);
     assertThat(hh.getOaAmount()).isEqualByComparingTo("60");
     verify(preparations).selectBatchIds(anyCollection()); verifyNoMoreInteractions(preparations);
+  }
+
+  @Test void configuredPartMaterialDifferenceUsesTheSameSavedUpliftOnce() {
+    var a=request("A");var selected=price(1,false,true,"10");
+    var plan=new MonthlyAdoptionPlan(Map.of(a,selected),List.of(new Use("P/A",a,d("2"))),Set.of());
+    preparePair("P/A","A","MONTHLY_PRICE",d("2"),d("10"),d("12"));
+    var rule=new ProductPartCostRule(1,1,"COMMERCIAL","P",null,null,null,"A",null,null,"采购件",d(".2"));
+    var result=service.difference(stored(plan,List.of(new MaterialLine("P/A","A",d("2"),List.of(1L),d("20"),d("24"),null,rule))));
+    assertThat(result.adjustmentAmount()).isEqualByComparingTo("5");
+    assertThat(result.items()).hasSize(1);
+    assertThat(result.items().getFirst().getDiffAmount()).isEqualByComparingTo("5");
+    assertThat(result.items().getFirst().getOaAmount()).isEqualByComparingTo("30");
+    assertThat(result.items().getFirst().getTraceJson()).contains("separateCostRule","baseFinanceAmount","separateFinanceUplift");
   }
 
   @Test void savedMakeComponentsExplainRawAndScrapWithoutDoubleCountingParent() {

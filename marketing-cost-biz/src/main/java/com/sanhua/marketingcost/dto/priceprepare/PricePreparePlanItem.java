@@ -16,4 +16,5 @@ public class PricePreparePlanItem {
   private String itemType;
   private String status;
   private String message;
+  private com.sanhua.marketingcost.service.costing.ProductPartCostRule separateRule;
 }

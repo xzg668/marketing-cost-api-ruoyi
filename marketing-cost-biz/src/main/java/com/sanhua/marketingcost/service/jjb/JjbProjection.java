@@ -57,6 +57,33 @@ public class JjbProjection {
           .monthlyPriceIds(line.monthlyPriceIds()).paths(List.of(line.path()))
           .remark("已计入母件 "+line.explanationOf()+"，本行不重复汇总").build());
     }
+    var separateRows = new ArrayList<Row>();
+    if (calc != null) {
+      var configured = new HashMap<Long, MonthlyProductCost.MaterialLine>();
+      for (var line : calc.ordinaryInputs().materials()) if (line.separateRule() != null) {
+        var binding = snapshot.preparations().get(line.path());
+        configured.put(bound(partsByPrepare, binding.financialItemId()).getId(), line);
+      }
+      var ordinaryRows = new ArrayList<Row>();
+      for (var row : rows) {
+        var line = row.partItemIds().stream().map(configured::get).filter(Objects::nonNull).findFirst().orElse(null);
+        if (line == null) { ordinaryRows.add(row); continue; }
+        var moved = row.toBuilder().section("SEPARATE_PARTS");
+        if ("PART".equals(row.kind())) {
+          var input = calc.ordinaryInputs();
+          var rule = line.separateRule();
+          moved.amount(money(com.sanhua.marketingcost.service.costing.SeparatePartCost.amount(line, input, false)))
+              .baseAmount(money(line.financeAmount())).rate(decimal(rule.manufactureRate())).shape(rule.shape())
+              .separateCalculation(Map.of("ruleId", String.valueOf(rule.id()), "revision", String.valueOf(rule.revision()),
+                  "baseAmount", money(line.financeAmount()), "lossRate", decimal(input.lossRate()),
+                  "manufactureRate", decimal(rule.manufactureRate()),
+                  "threeExpenseRate", decimal(input.managementRate().add(input.salesRate()).add(input.financeRate()))))
+              .remark("基础金额×(1+成品净损失率)÷(1−零件制造费用率)×(1+成品三项费用率)");
+        }
+        separateRows.add(moved.build());
+      }
+      rows = ordinaryRows;
+    }
     Set<Long> feeIds = new HashSet<>();
     Map<ProductFeeCode,List<CostRunCostItem>> feeCosts = new EnumMap<>(ProductFeeCode.class);
     for (var fee : ProductFeeCode.values()) feeCosts.put(fee, new ArrayList<>());
@@ -65,7 +92,7 @@ public class JjbProjection {
       if (fee != null) { feeCosts.get(fee).add(cost); feeIds.add(cost.getId()); }
     }
     Set<String> reserved = new HashSet<>(ORDINARY); reserved.addAll(THREE);
-    reserved.addAll(List.of("TOTAL", "FINAL_QUOTE", "CU_MATERIAL_ADJUSTMENT", "HOUSEHOLD_SUBTOTAL", "HOUSEHOLD_CONTRIBUTION"));
+    reserved.addAll(List.of("TOTAL", "FINAL_QUOTE", "CU_MATERIAL_ADJUSTMENT", "HOUSEHOLD_SUBTOTAL", "HOUSEHOLD_CONTRIBUTION", "SEPARATE_PART_SUBTOTAL"));
     // Welding already appears as individual parts. Its classification subtotal must not be another sheet row.
     reserved.add("BOM_BUCKET_WELD");
     // Keep every legitimate ordinary detail, including historical public non-product expenses.
@@ -78,6 +105,9 @@ public class JjbProjection {
     for (String code : THREE) addCost(rows, costMap, code, "THREE_EXPENSES", calc, warnings);
     rows.add(subtotal("THREE_SUBTOTAL", "THREE_EXPENSES", "三项费用小计", THREE.stream()
         .flatMap(code -> costMap.getOrDefault(code, List.of()).stream()).toList(), THREE.stream().allMatch(costMap::containsKey)));
+    rows.addAll(separateRows);
+    if (!separateRows.isEmpty()) rows.add(subtotal("SEPARATE_PART_SUBTOTAL", "SEPARATE_PARTS", "单独计费零件小计",
+        costMap.getOrDefault("SEPARATE_PART_SUBTOTAL", List.of()), true));
 
     if (calc != null && !calc.household().isEmpty()) {
       for (var line : calc.household()) {
@@ -424,6 +454,10 @@ public class JjbProjection {
     expected.put("SALES_EXP",c.ordinary().sales());expected.put("FIN_EXP",c.ordinary().finance());
     expected.put("HOUSEHOLD_SUBTOTAL",c.householdSubtotal());expected.put("HOUSEHOLD_CONTRIBUTION",c.householdContribution());
     expected.put("OTHER_INDEPENDENT",c.ordinaryInputs().otherIndependentFees());
+    if (c.ordinaryInputs().materials().stream().anyMatch(line -> line.separateRule() != null))
+      expected.put("SEPARATE_PART_SUBTOTAL", c.ordinaryInputs().materials().stream().filter(line -> line.separateRule() != null)
+          .map(line -> com.sanhua.marketingcost.service.costing.SeparatePartCost.amount(line, c.ordinaryInputs(), false))
+          .reduce(BigDecimal.ZERO, BigDecimal::add));
     c.ordinaryInputs().details().forEach(d -> expected.putIfAbsent(d.costCode(),d.amount()));
     var allowed = new HashSet<>(expected.keySet());
     allowed.add("TOTAL");

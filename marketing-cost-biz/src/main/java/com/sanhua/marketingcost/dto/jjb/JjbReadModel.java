@@ -39,8 +39,9 @@ public record JjbReadModel(Identity identity, Header header, List<Row> rows,
       String feeState, List<Source> sources, List<Long> partItemIds, List<Long> costItemIds,
       List<Long> monthlyPriceIds, List<String> paths, String householdRate,
       String salesRate, String coefficient, Map<String,String> householdCalculation,
-      List<Map<String,String>> manufacturing) {
+      List<Map<String,String>> manufacturing, Map<String,String> separateCalculation) {
     public Row {
+      separateCalculation=separateCalculation==null?Map.of():Map.copyOf(separateCalculation);
       manufacturing=manufacturing==null?List.of():manufacturing.stream().map(Map::copyOf).toList();
       householdCalculation=householdCalculation==null?Map.of():Map.copyOf(householdCalculation);
       sources = sources == null ? List.of() : List.copyOf(sources);

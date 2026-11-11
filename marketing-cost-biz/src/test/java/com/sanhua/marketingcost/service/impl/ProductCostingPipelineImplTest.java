@@ -481,6 +481,39 @@ class ProductCostingPipelineImplTest {
   }
 
   @Test
+  void pendingCostingWithUnchangedSuccessfulInputsReusesInBothPreparationAndExecution() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
+    var pending = item(88L); pending.setCalcStatus("待核算");
+    when(itemMapper.selectById(11L)).thenReturn(pending);
+    var saved=version(); saved.setInputFingerprint("FULL-FP");
+    when(versionMapper.selectById(88L)).thenReturn(saved);
+    var prepared=pipeline.prepare(request(false));
+    assertThat(prepared.isReusedSuccess()).isTrue();
+    assertThat(prepared.getCostVersionId()).isEqualTo(88L);
+    var executed=pipeline.execute(request(false));
+    assertThat(executed.isReusedSuccess()).isTrue();
+    assertThat(executed.getCostVersionId()).isEqualTo(88L);
+    verify(workbenchService,never()).launchWorkbench(anyString(),anyLong());
+    verify(priceService,never()).checkPriceSources(anyString(),anyLong(),any());
+    verify(priceService,never()).generate(anyString(),anyLong(),any());
+    verify(costService,never()).runToSuccess(anyString(),anyLong(),any(),anyString());
+  }
+
+  @Test
+  void monthlyCostWriterAndCurrentRuntimeUseTheSameAlgorithmIdentityForReuse() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
+    when(itemMapper.selectById(11L)).thenReturn(item(88L));
+    var saved=version(); saved.setInputFingerprint("FULL-FP");
+    saved.setAlgorithmVersion(com.sanhua.marketingcost.service.costing.MonthlyProductCost.ALGORITHM_VERSION);
+    assertThat(saved.getAlgorithmVersion()).isEqualTo(new CostingAlgorithmVersionProvider("MONTHLY_PRODUCT_COST_V3").currentVersion());
+    when(versionMapper.selectById(88L)).thenReturn(saved);
+    assertThat(pipeline.execute(request(false)).isReusedSuccess()).isTrue();
+    verify(costService,never()).runToSuccess(anyString(),anyLong(),any(),anyString());
+  }
+
+  @Test
   @DisplayName("算法版本变化时相同业务输入也必须重新核算")
   void changedAlgorithmDoesNotReuseSuccess() {
     QuoteCostingWorkspace workspace = workspace();

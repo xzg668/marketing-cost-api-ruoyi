@@ -34,14 +34,23 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
   private final PackageComponentIdentifyService packageComponentIdentifyService;
   private final MaterialMasterMapper materialMasterMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
+  private final com.sanhua.marketingcost.service.costing.ProductPartCostRuleStore partCostRules;
 
   public PricePrepareItemClassifierImpl(
       PackageComponentIdentifyService packageComponentIdentifyService,
       MaterialMasterMapper materialMasterMapper,
       MaterialMasterRawMapper materialMasterRawMapper) {
+    this(packageComponentIdentifyService, materialMasterMapper, materialMasterRawMapper, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public PricePrepareItemClassifierImpl(PackageComponentIdentifyService packageComponentIdentifyService,
+      MaterialMasterMapper materialMasterMapper, MaterialMasterRawMapper materialMasterRawMapper,
+      com.sanhua.marketingcost.service.costing.ProductPartCostRuleStore partCostRules) {
     this.packageComponentIdentifyService = packageComponentIdentifyService;
     this.materialMasterMapper = materialMasterMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
+    this.partCostRules = partCostRules;
   }
 
   @Override
@@ -56,9 +65,25 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
     Map<String, MaterialMasterRaw> rawMasters = loadRawMasters(codesByOrganization);
 
     List<PricePreparePlanItem> result = new ArrayList<>(rows.size());
+    var configured = new java.util.HashMap<String, List<com.sanhua.marketingcost.service.costing.ProductPartCostRule>>();
     for (BomCostingRow row : rows) {
       QuoteDataOrganization organization = requiredOrganization(row);
-      result.add(classifyOne(row, organization, packageFlags, masters, rawMasters));
+      var item = classifyOne(row, organization, packageFlags, masters, rawMasters);
+      if (partCostRules != null) {
+        String key = row.getBusinessUnitType() + "|" + row.getTopProductCode();
+        var rules = configured.computeIfAbsent(key, ignored ->
+            partCostRules.forProduct(row.getBusinessUnitType(), row.getTopProductCode()));
+        var master = rawMasters.get(scopedKey(organization.materialOrganizationCode(), row.getMaterialCode()));
+        var rule = com.sanhua.marketingcost.service.costing.ProductPartCostRule.match(rules,
+            row.getMaterialCode(), master == null ? null : master.getMaterialModel());
+        if (rule != null) {
+          item.setSeparateRule(rule);
+          item.setStatus(STATUS_READY);
+          item.setItemType("制造件".equals(rule.shape()) ? ITEM_TYPE_MAKE_PART : ITEM_TYPE_NORMAL);
+          item.setMessage("按成品零件成本配置取基础价格");
+        }
+      }
+      result.add(item);
     }
     return result;
   }

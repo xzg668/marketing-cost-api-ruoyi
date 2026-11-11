@@ -110,7 +110,7 @@ public final class MonthlyQuotationCosting {
           oa.getAmount(), fin.getInputSnapshotJson(), oa.getInputSnapshotJson()));
       boolean household = inputs.uses().stream().anyMatch(use ->
           inputs.plan().selections().get(use.request()).fact().type() == PricingType.HOUSEHOLD_INQUIRY);
-      if (household) {
+      if (household && inputs.separateRule() == null) {
         if (inputs.uses().size() != 1 || !inputs.uses().getFirst().path().equals(inputs.rootPath()))
           throw new IllegalArgumentException("家用整体计价必须先从普通母件范围独立");
         if (!MonthlyPreparationPrice.KIND.equals(oa.getResultRefType()))
@@ -127,7 +127,7 @@ public final class MonthlyQuotationCosting {
           throw new IllegalArgumentException("同一家用月价包含不同客户单价");
       } else materials.add(new MaterialLine(inputs.rootPath(), oa.getMaterialCode(), oa.getQuantity(),
           inputs.prices().stream().map(price -> price.selection().monthlyPriceId()).distinct().toList(),
-          fin.getAmount(), oa.getAmount(), null));
+          fin.getAmount(), oa.getAmount(), null, inputs.separateRule()));
     }
     var plan = new MonthlyAdoptionPlan(prices, uses, suppressed);
     return new MaterialInputs(plan, materials, bindings, preparations, householdCustomerPrices);
@@ -154,7 +154,7 @@ public final class MonthlyQuotationCosting {
     var independent = rows.stream().filter(row -> row.getCostCode().startsWith("OTHER_EXP_")
         && !"OTHER_EXP_PACKAGE".equals(row.getCostCode()) && !fees.contains(row.getCostCode()))
         .map(CostRunCostItemDto::getAmount).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
-    var nonBom = amount(costs, "MATERIAL").subtract(materials.stream().map(MaterialLine::financeAmount)
+    var nonBom = amount(costs, "MATERIAL").subtract(materials.stream().filter(line -> line.separateRule() == null).map(MaterialLine::financeAmount)
         .map(OrdinaryCostAmounts::money).reduce(BigDecimal.ZERO, BigDecimal::add));
     return new Ordinary(materials, nonBom, amount(costs, "DIRECT_LABOR"), amount(costs, "INDIRECT_LABOR"),
         rate(costs, "LOSS"), rate(costs, "MANUFACTURE"), rate(costs, "ADJUSTED_MANUFACTURE_COST"),
@@ -193,7 +193,13 @@ public final class MonthlyQuotationCosting {
       row.setFinanceUnitPrice(line.financeAmount().divide(line.quantity(), 8, java.math.RoundingMode.HALF_UP));
       row.setOaUnitPrice(line.customerAmount().divide(line.quantity(), 8, java.math.RoundingMode.HALF_UP));
       row.setFinanceAmount(line.financeAmount()); row.setOaAmount(line.customerAmount());
-      row.setDiffAmount(line.customerAmount().subtract(line.financeAmount()));
+      if (line.separateRule() != null) {
+        row.setFinanceAmount(SeparatePartCost.amount(line, snapshot.calculation().ordinaryInputs(), false));
+        row.setOaAmount(SeparatePartCost.amount(line, snapshot.calculation().ordinaryInputs(), true));
+        row.setFinanceUnitPrice(row.getFinanceAmount().divide(line.quantity(), 8, java.math.RoundingMode.HALF_UP));
+        row.setOaUnitPrice(row.getOaAmount().divide(line.quantity(), 8, java.math.RoundingMode.HALF_UP));
+      }
+      row.setDiffAmount(row.getOaAmount().subtract(row.getFinanceAmount()));
       row.setCuAffected(affected(exposure, line.monthlyPriceIds()) ? 1 : 0);
       row.setPriceFormulaRefType(MonthlyPreparationPrice.KIND);
       snapshot.calculation().adoptedPrices().stream().filter(price ->
@@ -203,10 +209,16 @@ public final class MonthlyQuotationCosting {
       var children = componentRows(version, binding, line.path(), line.materialCode(), saved, exposure);
       var trace = new LinkedHashMap<String, Object>();
       trace.put("path", line.path()); trace.put("monthlyPriceIds", line.monthlyPriceIds());
+      if (line.separateRule() != null) {
+        trace.put("separateCostRule", line.separateRule());
+        trace.put("baseFinanceAmount", line.financeAmount()); trace.put("baseCustomerAmount", line.customerAmount());
+        trace.put("separateFinanceUplift", row.getFinanceAmount().subtract(line.financeAmount()));
+        trace.put("separateCustomerUplift", row.getOaAmount().subtract(line.customerAmount()));
+      }
       if (!children.isEmpty()) {
-        trace.put("financeRoundingAdjustment", row.getFinanceAmount().subtract(children.stream()
+        trace.put("financeRoundingAdjustment", line.financeAmount().subtract(children.stream()
             .map(QuoteCuMaterialDiffItemResult::getFinanceAmount).reduce(BigDecimal.ZERO, BigDecimal::add)));
-        trace.put("customerRoundingAdjustment", row.getOaAmount().subtract(children.stream()
+        trace.put("customerRoundingAdjustment", line.customerAmount().subtract(children.stream()
             .map(QuoteCuMaterialDiffItemResult::getOaAmount).reduce(BigDecimal.ZERO, BigDecimal::add)));
       }
       row.setTraceJson(codec.unwrap(codec.encode(trace)));

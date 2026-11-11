@@ -191,6 +191,11 @@ public class MonthlyCostVersionService {
         requireDecimal(customer.getQuantity(), line.quantity(), 16, "Settlement customer Q");
         requireDecimal(finance.getAmount(), line.financeAmount(), 8, "Settlement financial amount");
         requireDecimal(customer.getAmount(), line.customerAmount(), 8, "Settlement customer amount");
+        var financialInputs = monthlyEvidence.read(finance);
+        var customerInputs = monthlyEvidence.read(customer);
+        if (!Objects.equals(line.separateRule(), financialInputs == null ? null : financialInputs.separateRule())
+            || !Objects.equals(line.separateRule(), customerInputs == null ? null : customerInputs.separateRule()))
+          throw new IllegalArgumentException("零件成本配置与本次保存的价格准备依据不一致");
         bound.put(line.path(), finance);
       }
       var resolved = MonthlyProductCost.resolve(plan, ordinary, technical,
@@ -458,6 +463,10 @@ public class MonthlyCostVersionService {
     values.put("MGMT_EXP", r.ordinary().management()); values.put("SALES_EXP", r.ordinary().sales()); values.put("FIN_EXP", r.ordinary().finance());
     values.put("HOUSEHOLD_SUBTOTAL", r.householdSubtotal()); values.put("HOUSEHOLD_CONTRIBUTION", r.householdContribution());
     values.put("OTHER_INDEPENDENT", r.ordinaryInputs().otherIndependentFees());
+    if (r.ordinaryInputs().materials().stream().anyMatch(line -> line.separateRule() != null))
+      values.put("SEPARATE_PART_SUBTOTAL", r.ordinaryInputs().materials().stream()
+          .filter(line -> line.separateRule() != null)
+          .map(line -> SeparatePartCost.amount(line, r.ordinaryInputs(), false)).reduce(BigDecimal.ZERO, BigDecimal::add));
     r.fees().forEach(fee -> values.put(fee.code().costCode(), fee.amount()));
     for (var detail : r.ordinaryInputs().details()) {
       if (values.containsKey(detail.costCode()) && !Objects.equals(values.get(detail.costCode()), detail.amount())

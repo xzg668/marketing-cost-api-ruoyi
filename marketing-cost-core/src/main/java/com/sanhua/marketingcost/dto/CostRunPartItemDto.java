@@ -28,6 +28,10 @@ public class CostRunPartItemDto {
   private BigDecimal unitPrice;
   private BigDecimal amount;
   private String technicalModuleType;
+  private com.sanhua.marketingcost.service.costing.ProductPartCostRule separateCostRule;
+
+  public com.sanhua.marketingcost.service.costing.ProductPartCostRule getSeparateCostRule() { return separateCostRule; }
+  public void setSeparateCostRule(com.sanhua.marketingcost.service.costing.ProductPartCostRule value) { separateCostRule = value; }
 
   public String getTechnicalModuleType() { return technicalModuleType; }
   public void setTechnicalModuleType(String value) { technicalModuleType = value; }

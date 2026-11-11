@@ -62,6 +62,14 @@ class WholeQuoteCostingBrowserSession extends OriginalPricingIntegrationTestBase
       if(n<105) sources.comparisonFixedPrice(material,"2",date);
       else for(String supplier:List.of("A","B")) jdbc.update("INSERT INTO lp_price_fixed_item(org_code,supplier_code,supplier_name,material_code,material_name,unit,fixed_price,tax_included,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) VALUES('210',?,?,?,?,'件',?,0,?,'2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())",supplier,"供应商"+supplier,material,material,new BigDecimal(supplier.equals("A")?"10":"30"),date.toLocalDate());
     }
+    jdbc.update("""
+        INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,
+          parent_material_no,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,
+          child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to,child_type)
+        SELECT source_import_batch_id,'U9',NOW(),price_org_code,parent_code,material_code,material_name,
+          '件',bom_purpose,bom_version,sort_seq,qty_per_parent,1,effective_from,effective_to,'NORMAL'
+        FROM lp_bom_raw_hierarchy WHERE top_product_code LIKE ? AND level>0
+        """,prefix+"-%");
     String actor="whole_"+UUID.randomUUID().toString().substring(0,8),password=UUID.randomUUID().toString();
     jdbc.update("INSERT INTO sys_user(user_name,nick_name,password,business_unit_type,status,del_flag,create_by,create_time,update_by,update_time) VALUES(?,'整单107产品验收',?,'COMMERCIAL','0','0','TEST',NOW(),'TEST',NOW())",actor,new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder().encode(password));
     long user=jdbc.queryForObject("SELECT user_id FROM sys_user WHERE user_name=?",Long.class,actor);
@@ -73,6 +81,7 @@ class WholeQuoteCostingBrowserSession extends OriginalPricingIntegrationTestBase
       var first=costing.prepareQueuedProduct(new ProductCostingRequest(prefix,ids.get(0),month,actor,false));
       assertThat(first.getPipelineStatus()).isEqualTo("SUCCESS");firstVersion=first.getCostVersionId();
       assertThat(costing.prepareQueuedProduct(new ProductCostingRequest(prefix,ids.get(1),month,actor,false)).getPipelineStatus()).isEqualTo("SUCCESS");
+      jdbc.update("UPDATE oa_form_item SET calc_status='待核算' WHERE id=?",ids.get(0));
       var reused=costing.prepareQueuedProduct(new ProductCostingRequest(prefix,ids.get(0),month,actor,false));
       assertThat(reused.isReusedSuccess()).isTrue();assertThat(reused.getCostVersionId()).isEqualTo(firstVersion);
     } finally {SecurityContextHolder.clearContext();}
@@ -92,6 +101,8 @@ class WholeQuoteCostingBrowserSession extends OriginalPricingIntegrationTestBase
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?",Integer.class,ids.get(106))).isZero();
     var versions=jdbc.queryForList("SELECT oa_form_item_id,COUNT(*) n FROM lp_quote_cost_run_version WHERE oa_form_item_id IN (SELECT id FROM oa_form_item WHERE oa_form_id=?) GROUP BY oa_form_item_id",form);
     assertThat(versions).hasSize(106);
+    var counts=jdbc.queryForList("SELECT v.oa_form_item_id,COUNT(DISTINCT v.id) version_count,COUNT(DISTINCT p.id) part_count,COUNT(DISTINCT c.id) cost_count FROM lp_quote_cost_run_version v LEFT JOIN lp_cost_run_part_item p ON p.cost_run_version_id=v.id LEFT JOIN lp_cost_run_cost_item c ON c.cost_run_version_id=v.id WHERE v.oa_no=? GROUP BY v.oa_form_item_id",prefix);
+    Files.writeString(Path.of(state+".cost-counts"),json.writeValueAsString(counts));
     Files.writeString(Path.of(state+".db-verified"),json.writeValueAsString(Map.of("passed",true,"unchangedVersionPreserved",true,"changedProductRecalculatedOnce",true,"repairedRatioProductCalculated",true,"remainingGapHasNoCost",true,"productsWithCost",106)));
   }
 }

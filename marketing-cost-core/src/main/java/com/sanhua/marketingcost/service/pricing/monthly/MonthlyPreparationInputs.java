@@ -4,8 +4,18 @@ import java.util.*;
 
 /** Actual base-price uses captured with one preparation row, including its dependency closure. */
 public record MonthlyPreparationInputs(int schemaVersion, String rootPath,
-    List<Price> prices, List<MonthlyAdoptionPlan.Use> uses, Set<String> suppressedPaths) {
+    List<Price> prices, List<MonthlyAdoptionPlan.Use> uses, Set<String> suppressedPaths,
+    com.sanhua.marketingcost.service.costing.ProductPartCostRule separateRule) {
   public record Price(MonthlyPriceRequest request, MonthlyAdoptionPlan.Selection selection) {}
+
+  public MonthlyPreparationInputs(int version, String path, List<Price> prices,
+      List<MonthlyAdoptionPlan.Use> uses, Set<String> suppressed) {
+    this(version, path, prices, uses, suppressed, null);
+  }
+
+  public MonthlyPreparationInputs withSeparateRule(com.sanhua.marketingcost.service.costing.ProductPartCostRule rule) {
+    return new MonthlyPreparationInputs(schemaVersion, rootPath, prices, uses, suppressedPaths, rule);
+  }
 
   public MonthlyPreparationInputs {
     if (schemaVersion != 1) throw new IllegalArgumentException("未知月价准备依据版本");

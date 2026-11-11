@@ -11,7 +11,8 @@ import java.util.*;
 
 /** Pure versioned computation. MAKE/PACK amounts and non-BOM material retain their existing rules. */
 public final class MonthlyProductCost {
-  // V3 selects one U9 standard/alternative subtree before material costing.
+  // Configured parts are captured in the product's source revision. Keep the running V3
+  // identity so unchanged products remain reusable and new saved costs match the worker.
   public static final String ALGORITHM_VERSION = "MONTHLY_PRODUCT_COST_V3";
   public static final int SNAPSHOT_VERSION = 1;
   public static boolean isMonthlyVersion(String version) {
@@ -23,7 +24,11 @@ public final class MonthlyProductCost {
   /** A settlement contributes once; its raw-component explanation rows do not contribute. */
   public record MaterialLine(String path, String materialCode, BigDecimal quantity,
       List<Long> monthlyPriceIds, BigDecimal financeAmount,
-      BigDecimal customerAmount, String explanationOf) {
+      BigDecimal customerAmount, String explanationOf, ProductPartCostRule separateRule) {
+    public MaterialLine(String path, String code, BigDecimal quantity, List<Long> ids,
+        BigDecimal finance, BigDecimal customer, String explanation) {
+      this(path, code, quantity, ids, finance, customer, explanation, null);
+    }
     public MaterialLine {
       path = MonthlyBomPricingScope.pathKey(path);
       materialCode = materialCode == null ? "" : materialCode.trim();
@@ -34,6 +39,8 @@ public final class MonthlyProductCost {
         throw new IllegalArgumentException("Material amounts require adopted price evidence");
       Objects.requireNonNull(financeAmount); Objects.requireNonNull(customerAmount);
       if (explanationOf != null) explanationOf = MonthlyBomPricingScope.pathKey(explanationOf);
+      if (separateRule != null && explanationOf != null)
+        throw new IllegalArgumentException("说明行不能作为独立零件重复计价");
     }
   }
 
@@ -112,7 +119,9 @@ public final class MonthlyProductCost {
 
   /** Public monthly price coordinates are shareable; private PROFILE/source coordinates are not. */
   public record MaterialAmounts(String code, BigDecimal quantity, List<Long> monthlyPriceIds,
-      BigDecimal financeAmount, BigDecimal customerAmount, boolean contributes) {
+      BigDecimal financeAmount, BigDecimal customerAmount, boolean contributes, BigDecimal separateManufactureRate) {
+    public MaterialAmounts(String code, BigDecimal quantity, List<Long> ids, BigDecimal finance,
+        BigDecimal customer, boolean contributes) { this(code, quantity, ids, finance, customer, contributes, null); }
     public MaterialAmounts { monthlyPriceIds = monthlyPriceIds.stream().sorted().toList(); }
   }
   public record DetailAmounts(String code, String category, BigDecimal base, BigDecimal rate, BigDecimal amount) {}
@@ -148,7 +157,8 @@ public final class MonthlyProductCost {
   private static final Comparator<MaterialAmounts> MATERIAL_AMOUNTS_ORDER = Comparator
       .comparing(MaterialAmounts::code).thenComparing(line -> line.monthlyPriceIds().toString())
       .thenComparing(MaterialAmounts::quantity).thenComparing(MaterialAmounts::financeAmount)
-      .thenComparing(MaterialAmounts::customerAmount).thenComparing(MaterialAmounts::contributes);
+      .thenComparing(MaterialAmounts::customerAmount).thenComparing(MaterialAmounts::contributes)
+      .thenComparing(MaterialAmounts::separateManufactureRate, Comparator.nullsFirst(Comparator.naturalOrder()));
 
   /** Validated immutable customer binding. Creating it does not execute the cost formula. */
   public static final class Resolved {
@@ -162,7 +172,8 @@ public final class MonthlyProductCost {
       this.plan = plan; this.ordinary = ordinary; this.technical = technical; this.fees = List.copyOf(fees);
       inputs = new NumericInputs(ordinary.materials().stream().map(line -> new MaterialAmounts(
           line.materialCode(), line.quantity(), line.monthlyPriceIds(), line.financeAmount(),
-          line.customerAmount(), line.explanationOf() == null)).sorted(MATERIAL_AMOUNTS_ORDER).toList(), ordinary.nonBomMaterial(),
+          line.customerAmount(), line.explanationOf() == null,
+          line.separateRule() == null ? null : line.separateRule().manufactureRate())).sorted(MATERIAL_AMOUNTS_ORDER).toList(), ordinary.nonBomMaterial(),
           ordinary.directLabor(), ordinary.indirectLabor(), ordinary.lossRate(), ordinary.manufactureRate(),
           ordinary.coefficient(), ordinary.managementRate(), ordinary.salesRate(), ordinary.financeRate(),
           ordinary.otherIndependentFees(), ordinary.details().stream().map(row -> new DetailAmounts(
@@ -173,9 +184,11 @@ public final class MonthlyProductCost {
     private List<HouseholdLine> bindHousehold(List<HouseholdAmount> numbers) {
       if (numbers.size() != inputs.household().size()) throw new IllegalArgumentException("Shared household scope differs");
       var pathsByPrice = new HashMap<Long, List<String>>();
+      var separatePaths = ordinary.materials().stream().filter(line -> line.separateRule() != null)
+          .map(MaterialLine::path).collect(java.util.stream.Collectors.toSet());
       for (var use : plan.uses()) {
         var selected = plan.selections().get(use.request());
-        if (selected.fact().type() == PricingType.HOUSEHOLD_INQUIRY)
+        if (selected.fact().type() == PricingType.HOUSEHOLD_INQUIRY && !separatePaths.contains(MonthlyBomPricingScope.pathKey(use.path())))
           pathsByPrice.computeIfAbsent(selected.monthlyPriceId(), ignored -> new ArrayList<>()).add(use.path());
       }
       var result = new ArrayList<HouseholdLine>();
@@ -223,10 +236,12 @@ public final class MonthlyProductCost {
     Objects.requireNonNull(plan); Objects.requireNonNull(input);
     validateScope(plan, input.materials());
     var fees = fees(technical);
+    var separatePaths = input.materials().stream().filter(line -> line.separateRule() != null)
+        .map(MaterialLine::path).collect(java.util.stream.Collectors.toSet());
     var groups = new TreeMap<Long, List<Use>>();
     for (var use : plan.uses()) {
       var price = plan.selections().get(use.request());
-      if (price.fact().type() == PricingType.HOUSEHOLD_INQUIRY)
+      if (price.fact().type() == PricingType.HOUSEHOLD_INQUIRY && !separatePaths.contains(MonthlyBomPricingScope.pathKey(use.path())))
         groups.computeIfAbsent(price.monthlyPriceId(), ignored -> new ArrayList<>()).add(use);
     }
     var household = new ArrayList<HouseholdInput>();
@@ -244,7 +259,17 @@ public final class MonthlyProductCost {
   public static Numbers calculate(NumericInputs input) {
     BigDecimal material = input.nonBomMaterial();
     BigDecimal difference = BigDecimal.ZERO;
+    BigDecimal separateTotal = BigDecimal.ZERO;
     for (var line : input.materials()) if (line.contributes()) {
+      if (line.separateManufactureRate() != null) {
+        var financial = SeparatePartCost.amount(line.financeAmount(), input.lossRate(), line.separateManufactureRate(),
+            input.managementRate(), input.salesRate(), input.financeRate());
+        var customer = SeparatePartCost.amount(line.customerAmount(), input.lossRate(), line.separateManufactureRate(),
+            input.managementRate(), input.salesRate(), input.financeRate());
+        separateTotal = separateTotal.add(financial);
+        difference = difference.add(customer.subtract(financial));
+        continue;
+      }
       material = material.add(OrdinaryCostAmounts.money(line.financeAmount()));
       difference = difference.add(line.customerAmount().subtract(line.financeAmount()));
     }
@@ -268,7 +293,7 @@ public final class MonthlyProductCost {
     BigDecimal feeTotal = input.fees().stream().map(FeeAmounts::amount).filter(Objects::nonNull)
         .reduce(BigDecimal.ZERO, BigDecimal::add);
     feeTotal = OrdinaryCostAmounts.money(feeTotal);
-    BigDecimal total = OrdinaryCostAmounts.money(amounts.total().add(contribution).add(feeTotal));
+    BigDecimal total = OrdinaryCostAmounts.money(amounts.total().add(contribution).add(feeTotal).add(separateTotal));
     difference = OrdinaryCostAmounts.money(difference);
     return new Numbers(input, amounts, household, material, subtotal, contribution, feeTotal, total, difference,
         OrdinaryCostAmounts.money(total.add(difference)));
@@ -345,10 +370,12 @@ public final class MonthlyProductCost {
     for (var row : materials) {
       if (rows.putIfAbsent(row.path(), row) != null) throw new IllegalArgumentException("Duplicate material path");
       for (String path = row.path(); path != null; path = parent(path)) {
-        if (householdPaths.contains(path)) throw new IllegalArgumentException("Household scope must be excluded before ordinary costing");
+        if (householdPaths.contains(path) && !(row.separateRule() != null && row.path().equals(path)))
+          throw new IllegalArgumentException("Household scope must be excluded before ordinary costing");
         if (suppressedPaths.contains(path)) throw new IllegalArgumentException("Household scope includes a suppressed path");
       }
-      for (long id : row.monthlyPriceIds()) if (!ids.containsKey(id) || ids.get(id).fact().type() != PricingType.NORMAL)
+      for (long id : row.monthlyPriceIds()) if (!ids.containsKey(id)
+          || row.separateRule() == null && ids.get(id).fact().type() != PricingType.NORMAL)
         throw new IllegalArgumentException("Ordinary amounts must reference adopted NORMAL facts");
     }
     var contributing = new HashMap<String, MaterialLine>();

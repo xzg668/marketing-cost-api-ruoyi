@@ -22,8 +22,11 @@ public final class MonthlyPreparationValidation {
   public void validate(PricePrepareItem row, boolean financial, MonthlyAdoptionPlan plan,
       Map<Long, MonthlyPriceScenarios.Pair> scenarios, String root) {
     var inputs = evidence.read(row);
-    if (inputs == null || !inputs.equals(evidence.capture(row, plan, root)))
+    if (inputs == null || !inputs.equals(evidence.capture(row, plan, root).withSeparateRule(inputs.separateRule())))
       throw new IllegalArgumentException("准备底稿与本次月价范围不一致");
+    if (inputs.separateRule() != null && (!Objects.equals(row.getBusinessUnitType(), inputs.separateRule().businessUnitType())
+        || !Objects.equals(row.getTopProductCode(), inputs.separateRule().productCode())))
+      throw new IllegalArgumentException("零件成本配置不属于本次成品和业务单元");
     var expected = new HashMap<MonthlyPriceRequest, BigDecimal>();
     BigDecimal calculationUnitPrice = row.getUnitPrice();
     if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType())) {

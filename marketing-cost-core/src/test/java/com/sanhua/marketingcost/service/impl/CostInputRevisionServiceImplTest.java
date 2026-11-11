@@ -20,6 +20,24 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 class CostInputRevisionServiceImplTest {
 
+  @Test void configuredPartChangesOnlyItsProductRevisionAndDeletionRestoresOrdinaryInputs() {
+    var jdbc=mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service=new CostInputRevisionServiceImpl(jdbc,(form,item,month)->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved",java.util.Set.of(),java.util.Set.of(),true));
+    String sql="SELECT id,revision,product_code,part_code,part_model,shape,manufacture_rate FROM lp_product_part_cost_rule"
+        +" WHERE business_unit_type=? AND product_code=? ORDER BY id";
+    var a=item(11L,"P-1");var b=item(12L,"P-2");
+    var before=service.currentRevision(form(),a,"2026-11");var other=service.currentRevision(form(),b,"2026-11");
+    when(jdbc.queryForList(sql,"COMMERCIAL","P-1")).thenReturn(List.of(Map.of("id",1,"revision",1,"manufacture_rate",new BigDecimal(".2"))));
+    var configured=service.currentRevision(form(),a,"2026-11");assertThat(configured).isNotEqualTo(before);
+    assertThat(service.currentRevision(form(),b,"2026-11")).isEqualTo(other);
+    when(jdbc.queryForList(sql,"COMMERCIAL","P-1")).thenReturn(List.of(Map.of("id",1,"revision",2,"manufacture_rate",new BigDecimal(".4"))));
+    assertThat(service.currentRevision(form(),a,"2026-11")).isNotEqualTo(configured);
+    when(jdbc.queryForList(sql,"COMMERCIAL","P-1")).thenReturn(List.of());
+    assertThat(service.currentRevision(form(),a,"2026-11")).isEqualTo(before);
+  }
+
   @Test
   void settlementRuleChangePreventsWholeQuoteFromReusingPreRuleCost() {
     var jdbc = mock(JdbcTemplate.class);
