@@ -53,14 +53,16 @@ class BomAlternativeMissingMetadataTest {
     assertThat(quantity(alternative, "301340017")).isEqualByComparingTo("0.000040");
   }
 
-  @Test void cannotUseSameMaterialFromAnotherVersion() throws Exception {
+  @Test void currentSourceVersionChangeRestoresTypeWithoutChangingTheFirstMonthlyBom() throws Exception {
     var sample = sample();
+    var before=quantitiesAndPaths(sample.rows());
+    var versions=sample.rows().stream().map(BomRawHierarchy::getBomVersion).toList();
     sample.sources().stream().filter(row -> "201850528".equals(row.getChildMaterialNo()))
         .forEach(row -> row.setBomVersion("F999"));
-    assertThatThrownBy(() -> sample.resolver().resolve(sample.rows()))
-        .isInstanceOf(QuoteBomAlternativeSelectionException.class)
-        .hasMessageContaining("同版本来源").hasMessageContaining("201850528");
-    assertThat(sample.rows()).allSatisfy(row -> assertThat(row.getChildType()).isNull());
+    var result=sample.resolver().resolve(sample.rows());
+    assertThat(result.groups()).hasSize(1);
+    assertThat(quantitiesAndPaths(sample.rows())).isEqualTo(before);
+    assertThat(sample.rows().stream().map(BomRawHierarchy::getBomVersion).toList()).isEqualTo(versions);
   }
 
   @Test void commercialMakeExpansionKeepsTheOriginalPlateBomChoicePosition() throws Exception {
@@ -100,16 +102,16 @@ class BomAlternativeMissingMetadataTest {
     verifyNoInteractions(sample.mapper());
   }
 
-  @Test void cannotUseAnotherOrganizationOrDifferentEffectiveDates() throws Exception {
+  @Test void cannotUseAnotherOrganizationOrNotYetEffectiveSources() throws Exception {
     for (boolean changeOrganization : List.of(true, false)) {
       var sample = sample();
       sample.sources().stream().filter(row -> "201850528".equals(row.getChildMaterialNo()))
           .forEach(row -> {
             if (changeOrganization) row.setPriceOrgCode("220");
-            else row.setEffectiveFrom(row.getEffectiveFrom().plusDays(1));
+            else row.setEffectiveFrom(com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingDate().plusDays(1));
           });
       assertThatThrownBy(() -> sample.resolver().resolve(sample.rows()))
-          .isInstanceOf(QuoteBomAlternativeSelectionException.class).hasMessageContaining("没有找到同版本来源");
+          .isInstanceOf(QuoteBomAlternativeSelectionException.class).hasMessageContaining("有效来源");
     }
   }
 

@@ -208,6 +208,7 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
   }
 
   private AdoptionResult persist(Context context,MonthlyAdoptionPlan planned) {
+    storage.lockAndCheckSupplierRatios(context,planned);
     lockAndCheckScope(planned);
     var existing=lookup(planned.selections().keySet());var resolved=new LinkedHashMap<MonthlyPriceRequest,Selection>();
     var rows=new ArrayList<>(storage.readFamilies(planned.selections().keySet().stream().map(MonthlyPriceRequest::family).toList()));

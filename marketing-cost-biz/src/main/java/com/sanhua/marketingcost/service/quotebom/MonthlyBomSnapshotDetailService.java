@@ -23,6 +23,8 @@ import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Owns the immutable hierarchy rows belonging to one product/organization/accounting month. */
 @Service
@@ -53,7 +55,32 @@ public class MonthlyBomSnapshotDetailService {
     if (snapshotId == null) return List.of();
     var loaded = prepared.get();
     if (loaded != null && loaded.containsKey(snapshotId)) return detached(loaded.get(snapshotId));
-    return loadBatch(List.of(snapshotId)).get(snapshotId);
+    var transaction = transactionReads();
+    if (transaction != null && transaction.rows.containsKey(snapshotId))
+      return detached(transaction.rows.get(snapshotId));
+    var rows = loadBatch(List.of(snapshotId)).get(snapshotId);
+    // Only completed, immutable details can be reused. An empty drawing may be filled later
+    // in this transaction; rollback/REQUIRES_NEW must get their own read scope.
+    if (transaction != null && !rows.isEmpty() && transaction.rows.size() < READ_CHUNK)
+      transaction.rows.put(snapshotId, detached(rows));
+    return rows;
+  }
+
+  private TransactionReads transactionReads() {
+    if (!TransactionSynchronizationManager.isActualTransactionActive()
+        || !TransactionSynchronizationManager.isSynchronizationActive()) return null;
+    for (var synchronization : TransactionSynchronizationManager.getSynchronizations())
+      if (synchronization instanceof TransactionReads reads && reads.owner == this) return reads;
+    var reads = new TransactionReads(this);
+    TransactionSynchronizationManager.registerSynchronization(reads);
+    return reads;
+  }
+
+  private static final class TransactionReads implements TransactionSynchronization {
+    private final MonthlyBomSnapshotDetailService owner;
+    private final Map<Long, List<BomRawHierarchy>> rows = new LinkedHashMap<>();
+    private TransactionReads(MonthlyBomSnapshotDetailService owner) { this.owner = owner; }
+    @Override public void afterCompletion(int status) { rows.clear(); }
   }
 
   /** Scoped immutable snapshot reads; shared input cannot be changed by a consumer's BOM merger. */

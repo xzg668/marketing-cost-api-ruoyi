@@ -28,7 +28,7 @@ public class SupplierPriceImportRetry {
   public void imported(SupplierRatiosImported event) {
     var month = YearMonth.now(CostPricingPeriodUtils.BUSINESS_ZONE).toString();
     var retried = new HashSet<String>();
-    for (var decision : decisions.waiting(event.businessUnitType(), month)) {
+    for (var decision : decisions.afterRatioImport(event.businessUnitType(), month)) {
       if (!event.materialCodes().contains(decision.getMaterialCode())) continue;
       String product = decision.getOaFormItemId() + ":" + decision.getPricingDate();
       if (!retried.add(product)) continue;

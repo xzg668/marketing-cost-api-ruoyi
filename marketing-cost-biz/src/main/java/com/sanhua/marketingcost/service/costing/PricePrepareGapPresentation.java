@@ -32,11 +32,11 @@ public final class PricePrepareGapPresentation {
                 : "已有多个供应商报价，供货比率无法确定取价；请财务维护供货比率或确认取价方式",
             "维护供货比率或确认取价方式");
       } else if ("MISSING_RAW_PRICE".equals(gap.getReasonCode())) {
-        view(gap, "MISSING_RAW_PRICE", "缺少原料价格", "未找到本次适用的原料价格，请补齐对应价格来源", "维护原料价格");
+        view(gap, "MISSING_RAW_PRICE", "原料价格待核对", priceMessage(gap, "材料" + code + "本次未取得可用价格，请核对各价格来源"), "核对原料价格来源");
       } else if ("MISSING_SCRAP_PRICE".equals(gap.getReasonCode())) {
-        view(gap, "MISSING_SCRAP_PRICE", "缺少废料价格", "未找到本次适用的废料价格，请补齐对应价格来源", "维护废料价格");
+        view(gap, "MISSING_SCRAP_PRICE", "废料价格待核对", priceMessage(gap, "废料" + code + "本次未取得可用价格，请核对各价格来源"), "核对废料价格来源");
       } else if ("MISSING_PRICE".equals(gap.getGapType()) && !"WAITING".equals(gap.getReasonCode())) {
-        view(gap, text(gap.getReasonCode()), "缺少可用价格", "本次取价范围内未找到可用价格，请核实对应价格来源", "维护价格来源或补价");
+        view(gap, text(gap.getReasonCode()), "价格待核对", priceMessage(gap, "材料" + code + "本次未取得可用价格，请核对各价格来源"), "核对价格来源");
       } else if ("PRICE_SOURCE_ERROR".equals(gap.getGapType())) {
         view(gap, text(gap.getReasonCode()), "取价异常", text(gap.getMessage()), "核对取价来源及异常原因");
       } else {
@@ -72,5 +72,11 @@ public final class PricePrepareGapPresentation {
     gap.setDisplayReasonCode(reason); gap.setDisplayGapType(type); gap.setDisplayMessage(message); gap.setDisplayAction(action);
   }
   private static String material(PricePrepareGap gap) { return !text(gap.getGapMaterialCode()).isBlank() ? gap.getGapMaterialCode() : !text(gap.getMaterialCode()).isBlank() ? gap.getMaterialCode() : "未标识物料"; }
+  private static String priceMessage(PricePrepareGap gap, String fallback) {
+    String message = text(gap.getMessage());
+    if (message.contains("parent_material_no") || message.contains("child_material_no") || message.contains("gross_weight_g") || message.contains("技术补录办理来源")) return fallback;
+    return Set.of("财务指定", "年用量", "币种", "税口径", "税价口径", "行情档位", "主供", "指定供应商",
+        "未发布", "未生效", "规格不匹配", "数量未命中", "适用档位").stream().anyMatch(message::contains) ? message : fallback;
+  }
   private static String text(String value) { return value == null ? "" : value; }
 }

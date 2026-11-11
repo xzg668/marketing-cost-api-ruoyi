@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * Restores missing U9 type/group facts on caller-owned hierarchy copies, using the exact source line.
+ * Restores missing U9 type/group facts on caller-owned hierarchy copies.
  * Never changes quantities, paths, versions or database rows. New monthly snapshots freeze these facts.
  */
 @Component
@@ -33,11 +33,18 @@ public class U9BomAlternativeMetadata {
     List<BomRawHierarchy> missing = rows.stream().filter(Objects::nonNull)
         .filter(this::u9Child).filter(row -> !StringUtils.hasText(row.getChildType())).toList();
     Map<SourceLine, List<BomU9Source>> sources = readSources(missing);
+    Map<Position, List<BomU9Source>> currentPositions = new LinkedHashMap<>();
+    sources.values().stream().flatMap(List::stream).forEach(source ->
+        currentPositions.computeIfAbsent(Position.of(SourceLine.of(source)), ignored -> new ArrayList<>()).add(source));
     Map<BomRawHierarchy, String> types = new LinkedHashMap<>();
     for (BomRawHierarchy row : missing) {
       var matches = sources.getOrDefault(SourceLine.of(row), List.of());
+      if (matches.isEmpty()) {
+        types.put(row, currentType(row, currentPositions));
+        continue;
+      }
       if (matches.size() != 1) {
-        throw unavailable(row, matches.isEmpty() ? "没有找到同版本来源" : "同版本来源不唯一");
+        throw unavailable(row, "原始父子来源不唯一");
       }
       var type = BomChildType.fromSource(matches.getFirst().getChildType(), true);
       if (type != BomChildType.STANDARD && type != BomChildType.ALTERNATIVE && type != BomChildType.NORMAL) {
@@ -63,6 +70,30 @@ public class U9BomAlternativeMetadata {
       String key = existing.isEmpty() ? keys.generate(position.getKey()) : existing.iterator().next();
       members.stream().filter(row -> !StringUtils.hasText(row.getAlternativeGroupKey()))
           .forEach(row -> row.setAlternativeGroupKey(key));
+    }
+  }
+
+  /** Only recover the missing role of this frozen occurrence; never replace its material or quantity. */
+  private String currentType(BomRawHierarchy row, Map<Position, List<BomU9Source>> sources) {
+    LocalDate date = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingDate();
+    var types = new LinkedHashSet<BomChildType>();
+    for (var source : sources.getOrDefault(Position.of(SourceLine.of(row)), List.of())) {
+      if (source.getEffectiveFrom() != null && source.getEffectiveFrom().isAfter(date)
+          || source.getEffectiveTo() != null && source.getEffectiveTo().isBefore(date)) continue;
+      var type = BomChildType.fromSource(source.getChildType(), true);
+      if (type != BomChildType.STANDARD && type != BomChildType.ALTERNATIVE && type != BomChildType.NORMAL)
+        throw unavailable(row, "有效来源没有明确的标准／替代类型");
+      types.add(type);
+    }
+    if (types.isEmpty()) throw unavailable(row, "没有找到对应父子料号的有效来源");
+    if (types.size() != 1) throw unavailable(row, "有效父子来源的标准／替代类型冲突");
+    return types.iterator().next().name();
+  }
+
+  private record Position(String organization, String parent, String material, String purpose,
+      Integer sequence, String process) {
+    static Position of(SourceLine line) {
+      return new Position(line.organization(), line.parent(), line.material(), line.purpose(), line.sequence(), line.process());
     }
   }
 
@@ -130,7 +161,7 @@ public class U9BomAlternativeMetadata {
   private static QuoteBomAlternativeSelectionException unavailable(BomRawHierarchy row, String reason) {
     return new QuoteBomAlternativeSelectionException("ALT_SOURCE_METADATA_MISSING",
         "BOM标准／替代关系无法确认：父件=" + row.getParentCode() + "，料号=" + row.getMaterialCode()
-            + "，版本=" + row.getBomVersion() + "；" + reason + "，请同步完整的U9 BOM来源后重试");
+            + "；" + reason + "，请核实U9父子来源资料后重试");
   }
 
   private record SourceLine(String organization, String parent, String material, String purpose,

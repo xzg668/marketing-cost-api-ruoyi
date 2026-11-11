@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareDifferenceResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareDifferenceSummary;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
@@ -112,11 +113,45 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   @Override
   @Transactional(readOnly = true)
+  public QuotePricePrepareWorkbenchResponse currentForCosting(
+      String oaNo, Long oaFormItemId, String periodMonth) {
+    Scope scope = resolveScope(oaNo, oaFormItemId, periodMonth);
+    var readiness = pricePrepareReadinessService.check(oaNo, oaFormItemId, scope.topProductCode(), scope.periodMonth());
+    if (readiness == null || !"READY".equals(readiness.getStatus())
+        || readiness.getSourceRevision() == null) return null;
+    try {
+      if (!inputRevisions.isCurrent(scope.oaNo(), scope.oaFormItemId(), scope.periodMonth(), readiness.getSourceRevision()))
+        return null;
+    } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException pendingApproval) {
+      return null;
+    }
+    var batches = loadBatches(scope);
+    var pair = selectScenarioPair(batches == null ? List.of() : batches.getRecords(), readiness.getPrepareNo());
+    if (!isCompletedScenarioPair(pair)
+        || !java.util.Objects.equals(readiness.getPrepareNo(), pair.oaBatch().getPrepareNo())) return null;
+    var asOf = pair.oaBatch().getPriceAsOfTime();
+    if (asOf == null || !asOf.toLocalDate().equals(CostPricingPeriodUtils.currentPricingDate())) return null;
+    verifyPriceRecognition(scope);
+    // 核算只需已验证的批次与修订；供应商展示、两侧明细和差额仍由页面查询加载。
+    var response = baseResponse(scope);
+    response.setReadiness(readiness);
+    response.setSourceRevision(readiness.getSourceRevision());
+    return response;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public QuotePricePrepareWorkbenchResponse checkPriceSources(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
     Scope scope =
         resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
     verifyPriceRecognition(scope);
+    if (request != null && request.isRefreshCandidates()) {
+      var response = baseResponse(scope);
+      response.setBatches(loadBatches(scope));
+      return previewResponse(scope,
+          pricePrepareService.calculate(buildOaGenerateRequest(scope, request, true)), response);
+    }
     QuotePricePrepareWorkbenchResponse persisted = queryResponse(scope);
     if (hasCompletedScenarioPair(persisted)
         && (request == null || !request.isRefreshCandidates())
@@ -129,7 +164,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     }
     PricePrepareCalculationResult calculation =
         pricePrepareService.calculate(buildOaGenerateRequest(scope, request, true));
-    return previewResponse(scope, calculation);
+    return previewResponse(scope, calculation, persisted);
   }
 
   @Override
@@ -215,8 +250,8 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   }
 
   private QuotePricePrepareWorkbenchResponse previewResponse(
-      Scope scope, PricePrepareCalculationResult calculation) {
-    QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
+      Scope scope, PricePrepareCalculationResult calculation,
+      QuotePricePrepareWorkbenchResponse response) {
     List<PricePrepareItem> items =
         calculation == null || calculation.getItems() == null ? List.of() : calculation.getItems();
     List<PricePrepareGap> gapRecords =
@@ -318,6 +353,11 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   }
 
   private QuotePricePrepareWorkbenchResponse queryResponse(Scope scope) {
+    return queryResponse(scope, pricePrepareReadinessService.check(
+        scope.oaNo(), scope.oaFormItemId(), scope.topProductCode(), scope.periodMonth()));
+  }
+
+  private QuotePricePrepareWorkbenchResponse baseResponse(Scope scope) {
     QuotePricePrepareWorkbenchResponse response = new QuotePricePrepareWorkbenchResponse();
     response.setTechnicalPriceCorrection(
         technicalCorrections.get(scope.oaNo(), scope.oaFormItemId(), scope.periodMonth()));
@@ -325,9 +365,10 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     response.setOaFormItemId(scope.oaFormItemId());
     response.setTopProductCode(scope.topProductCode());
     response.setPeriodMonth(scope.periodMonth());
-    response.setReadiness(
-        pricePrepareReadinessService.check(
-            scope.oaNo(), scope.oaFormItemId(), scope.topProductCode(), scope.periodMonth()));
+    return response;
+  }
+
+  private PricePrepareBatchPageResponse loadBatches(Scope scope) {
     PricePrepareBatchQueryRequest batchQuery = new PricePrepareBatchQueryRequest();
     batchQuery.setOaNo(scope.oaNo());
     batchQuery.setOaFormItemId(scope.oaFormItemId());
@@ -335,7 +376,13 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     batchQuery.setPeriodMonth(scope.periodMonth());
     batchQuery.setPage(DEFAULT_PAGE);
     batchQuery.setPageSize(DEFAULT_PAGE_SIZE);
-    PricePrepareBatchPageResponse batches = pricePrepareQueryService.pageBatches(batchQuery);
+    return pricePrepareQueryService.pageBatches(batchQuery);
+  }
+
+  private QuotePricePrepareWorkbenchResponse queryResponse(Scope scope, PricePrepareReadinessResult readiness) {
+    QuotePricePrepareWorkbenchResponse response = baseResponse(scope);
+    response.setReadiness(readiness);
+    PricePrepareBatchPageResponse batches = loadBatches(scope);
     response.setBatches(batches);
     PricePrepareItemQueryRequest itemQuery = new PricePrepareItemQueryRequest();
     itemQuery.setOaNo(scope.oaNo());

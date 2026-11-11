@@ -6,6 +6,9 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteProductCostRunTaskResponse
 
 public interface QuoteBatchCostRunService {
 
+  QuoteBatchCostRunResponse submitForPreparation(
+      String oaNo, QuoteBatchCostRunRequest request, String submittedBy);
+
   QuoteBatchCostRunResponse submit(
       String oaNo, QuoteBatchCostRunRequest request, String submittedBy);
 

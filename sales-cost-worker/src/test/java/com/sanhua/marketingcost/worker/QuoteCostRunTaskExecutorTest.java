@@ -18,6 +18,20 @@ import org.junit.jupiter.api.Test;
 class QuoteCostRunTaskExecutorTest {
   private final com.sanhua.marketingcost.service.SysUserService users = org.mockito.Mockito.mock(com.sanhua.marketingcost.service.SysUserService.class);
 
+  @Test void queuedPreparationUsesSingleProductApprovalAndCostingInsteadOfSkippingItsChecks() {
+    var pipeline = org.mockito.Mockito.mock(ProductCostingPipeline.class);
+    var preparation = org.mockito.Mockito.mock(com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService.class);
+    org.mockito.Mockito.when(preparation.prepareQueuedProduct(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(result("SUCCESS","已沿用当前成本"));
+    var executor = new QuoteCostRunTaskExecutor(pipeline,new ObjectMapper(),users);
+    executor.setPreparation(preparation);
+    var task = task(); task.setRequestSnapshotJson("{\"submittedBy\":\"finance\",\"prepareMaterials\":true}");
+    assertThat(executor.execute(task,"worker-1").costRunVersionId()).isEqualTo(88L);
+    org.mockito.Mockito.verify(preparation).prepareQueuedProduct(org.mockito.ArgumentMatchers.argThat(r ->
+        r.oaFormItemId().equals(11L) && r.initiatedBy().equals("finance")));
+    org.mockito.Mockito.verifyNoInteractions(pipeline);
+  }
+
   @org.junit.jupiter.api.BeforeEach void validSubmitter() {
     org.mockito.Mockito.when(users.findByUsername(org.mockito.ArgumentMatchers.anyString())).thenAnswer(call -> {
       var user = new com.sanhua.marketingcost.entity.SysUser();

@@ -8,6 +8,15 @@ public final class SupplierSupplyRatioNormalizeUtils {
 
   private SupplierSupplyRatioNormalizeUtils() {}
 
+  /** 同一显式规则既可填写在比率格，也可填写在独立取价规则列。 */
+  public static boolean isHighestPriceRule(String rule) {
+    if (rule == null) return false;
+    String normalized = rule.replaceAll("[\\s\\p{P}\u3000]+", "")
+        .replace("比率", "比例").replace("时", "");
+    return java.util.Set.of("无供货比例取最高价", "无比例取最高价", "取最高价", "最高价")
+        .contains(normalized);
+  }
+
   public static void validateRatio(java.math.BigDecimal ratio) {
     if (ratio == null) return;
     if (ratio.signum() < 0 || ratio.compareTo(java.math.BigDecimal.ONE) > 0)

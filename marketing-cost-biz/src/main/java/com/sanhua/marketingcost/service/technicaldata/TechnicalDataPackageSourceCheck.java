@@ -23,16 +23,19 @@ public class TechnicalDataPackageSourceCheck {
   private final TechnicalDataSharedModules shared;
   private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom;
   private final com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails;
+  private final com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper monthlySnapshots;
 
   public TechnicalDataPackageSourceCheck(TechnicalDataPackageSourceQuery sources,
       ElectronicDrawingWorkflowContextPort drawings, QuoteBomSupplementDetailMapper details,
       MaterialMasterRawMapper materials, OaMessageCodec json, TechnicalDataSharedModules shared,
       com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
-      com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails) {
+      com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails,
+      com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper monthlySnapshots) {
     this.sources = sources; this.drawings = drawings;
     this.details = details; this.materials = materials; this.json = json; this.shared = shared;
     this.repriceBom = repriceBom;
     this.monthlyDetails = monthlyDetails;
+    this.monthlySnapshots = monthlySnapshots;
   }
 
   public TechnicalDataSourceFact check(QuoteBomReadContext context, TechnicalDataAvailability original) {
@@ -40,6 +43,12 @@ public class TechnicalDataPackageSourceCheck {
       if (original == TechnicalDataAvailability.ERROR) return fact(context, TechnicalDataAvailability.ERROR, "U9 原始资料查询失败，请重查", null);
       if (original == TechnicalDataAvailability.AVAILABLE) {
         Long snapshotId = repriceBom.snapshotId(context);
+        if (snapshotId == null) {
+          var saved = monthlySnapshots.selectU9MonthlyByIdentity(
+              com.sanhua.marketingcost.service.quotebom.U9MonthlySnapshotIdentity.from(context).identityKey());
+          if (saved != null && "SUCCESS".equals(saved.getSyncStatus())
+              && Objects.equals(saved.getActiveFlag(), 1)) snapshotId = saved.getId();
+        }
         if (snapshotId != null) return checkSavedPackage(context, snapshotId);
         var packaging = sources.inspectProduct(context.productCode(), context.accountingMonth(), context.businessUnitType(), context.priceOrgCode());
         boolean available = !packaging.sources().isEmpty() && packaging.missingParents().isEmpty();

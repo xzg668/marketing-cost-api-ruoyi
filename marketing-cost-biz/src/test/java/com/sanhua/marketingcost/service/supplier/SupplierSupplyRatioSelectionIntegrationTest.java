@@ -53,6 +53,9 @@ class SupplierSupplyRatioSelectionIntegrationTest {
   static MonthlyMaterialPriceService monthly;
   static final com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService workbench = mock(com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService.class);
   @Configuration @EnableTransactionManagement static class Config {
+    @Bean SupplierRatioMonthlyPriceRefresh monthlyRatioRefresh() {
+      return new SupplierRatioMonthlyPriceRefresh(jdbc,new MonthlyPriceDocumentCodec(new ObjectMapper()));
+    }
     @Bean SupplierPriceImportRetry retry() {
       return new SupplierPriceImportRetry(sql.getMapper(SupplierPriceDecisionMapper.class),
           new SupplierPriceReviewWorkflow(workbench,sql.getMapper(SupplierPriceDecisionMapper.class),null, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth()));
@@ -232,6 +235,44 @@ class SupplierSupplyRatioSelectionIntegrationTest {
     assertThat(jdbc.queryForMap("SELECT * FROM lp_material_monthly_price WHERE id=?",adopted.monthlyPriceId())).isEqualTo(before);
     assertThat(jdbc.queryForList("SELECT * FROM lp_price_fixed_item WHERE material_code=? ORDER BY id",code)).isEqualTo(sourceBefore);
     var next=request(code,"210","2026-11"); assertThat(monthly.resolveCandidates(context("2026-11"),Set.of(next)).values().get(next).selection().fact().price()).isEqualByComparingTo("30");
+  }
+  @Test void confirmedHighestCanBeReplacedByImportedRatiosInTheSameMonth() {
+    String code=code(); String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    price(code,"000A","10"); price(code,"000B","30");
+    var req=request(code,"210",month); var c=context(month);
+    fixed.read(c,Set.of(req));
+    var pending=c.supplierReviews().reviews().getFirst();
+    jdbc.update("INSERT INTO lp_supplier_price_decision(scope_key,fingerprint,business_unit_type,oa_no,oa_form_item_id,period_month,pricing_date,org_code,material_code,price_type,decision,confirmed_by,confirmed_at) VALUES(?,?,'COMMERCIAL','MRP03',1,?,?,'210',?,'FIXED','FALLBACK_HIGH','finance',NOW())",
+        pending.scopeKey(),pending.fingerprint(),month,c.priceAsOfTime().toLocalDate(),code);
+    var highest=monthly.resolveCandidates(c,Set.of(req)).values().get(req).selection();
+    assertThat(highest.fact().price()).isEqualByComparingTo("30");
+    var receipt=monthly.adopt(c,new MonthlyAdoptionPlan(Map.of(req,highest),List.of(new MonthlyAdoptionPlan.Use("root",req,BigDecimal.ONE)),Set.of()));
+    var saved=receipt.plan().selections().get(req);
+    save("COMMERCIAL",row(code,"000A",null),row(code,"000B",null));
+    assertThat(monthly.resolveCandidates(context(month),Set.of(req)).values().get(req).selection().monthlyPriceId()).isEqualTo(saved.monthlyPriceId());
+    reset(workbench);
+    when(workbench.generate(eq("MRP03"),eq(1L),any())).thenReturn(new com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse());
+    save("COMMERCIAL",row(code,"000A","0.8"),row(code,"000B","0.2"));
+    verify(workbench,times(1)).generate(eq("MRP03"),eq(1L),any());
+    var actual=monthly.resolveCandidates(context(month),Set.of(req)).values().get(req).selection();
+    assertThat(actual.fact().price()).as("imported ratios must replace provisional highest price").isEqualByComparingTo("10");
+    assertThat(actual.monthlyPriceId()).isNull();
+    var replacement=monthly.adopt(context(month),new MonthlyAdoptionPlan(Map.of(req,actual),List.of(new MonthlyAdoptionPlan.Use("root",req,BigDecimal.ONE)),Set.of()));
+    assertThat(replacement.plan().selections().get(req).monthlyPriceId()).isNotEqualTo(saved.monthlyPriceId());
+    assertThat(monthly.readByIds("COMMERCIAL",Set.of(saved.monthlyPriceId())).get(saved.monthlyPriceId()).fact()).isEqualTo(saved.fact());
+  }
+  @Test void ratioImportBetweenPriceSelectionAndAdoptionCannotSaveAnObsoleteHighestPrice() {
+    String code=code(); String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    var a=row(code,"000A",null);a.setSelectionRule("无供货比例取最高价");
+    save("COMMERCIAL",a,row(code,"000B",null));price(code,"000A","10");price(code,"000B","30");
+    var req=request(code,"210",month); var c=context(month);
+    var stale=monthly.resolveCandidates(c,Set.of(req)).values().get(req).selection();
+    assertThat(stale.fact().price()).isEqualByComparingTo("30");
+    save("COMMERCIAL",row(code,"000A","0.8"),row(code,"000B","0.2"));
+    assertThatThrownBy(() -> monthly.adopt(c,new MonthlyAdoptionPlan(Map.of(req,stale),List.of(new MonthlyAdoptionPlan.Use("root",req,BigDecimal.ONE)),Set.of())))
+        .isInstanceOf(MonthlyPriceProblem.class).hasMessageContaining("供货比率");
+    assertThat(monthly.lookup(Set.of(req)).missing()).contains(req);
+    assertThat(monthly.resolveCandidates(context(month),Set.of(req)).values().get(req).selection().fact().price()).isEqualByComparingTo("10");
   }
   @Test void committedImportRetriesOnlyItsWaitingProductAndKeepsWithdrawnPricesRetryable() {
     String code=code(); String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();

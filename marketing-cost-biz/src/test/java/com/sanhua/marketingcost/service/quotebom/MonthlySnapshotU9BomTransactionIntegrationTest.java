@@ -310,6 +310,37 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     assertThatThrownBy(() -> reader.loadBatch(java.util.List.of(id))).isInstanceOf(org.springframework.dao.DataAccessException.class);
   }
 
+  @Test void repeatedSnapshotReadsWithinTransactionAreDetachedAndQueryOnce() {
+    long id=costing.execute(tx -> gateway.read(context("2026-09")).monthlySnapshotId());
+    var row=new com.sanhua.marketingcost.entity.BomRawHierarchy();row.setMaterialCode("ORIGINAL");
+    costing.executeWithoutResult(tx -> details.save(id,java.util.List.of(row)));
+    var counted=org.mockito.Mockito.spy(jdbc);
+    var reader=new MonthlyBomSnapshotDetailService(counted,new com.fasterxml.jackson.databind.ObjectMapper(),null,null,
+        mock(com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata.class));
+    costing.executeWithoutResult(tx -> {
+      reader.load(id).getFirst().setMaterialCode("CONSUMER-MUTATION");
+      assertThat(reader.load(id).getFirst().getMaterialCode()).isEqualTo("ORIGINAL");
+      org.mockito.Mockito.verify(counted,org.mockito.Mockito.times(1)).query(
+          org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowCallbackHandler.class),
+          org.mockito.ArgumentMatchers.any(Object[].class));
+      var inner=new TransactionTemplate(costing.getTransactionManager());
+      inner.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+      inner.executeWithoutResult(nested -> {
+        reader.load(id).getFirst().setMaterialCode("INNER-MUTATION");
+        assertThat(reader.load(id).getFirst().getMaterialCode()).isEqualTo("ORIGINAL");
+      });
+      assertThat(reader.load(id).getFirst().getMaterialCode()).isEqualTo("ORIGINAL");
+      org.mockito.Mockito.verify(counted,org.mockito.Mockito.times(2)).query(
+          org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowCallbackHandler.class),
+          org.mockito.ArgumentMatchers.any(Object[].class));
+      tx.setRollbackOnly();
+    });
+    org.mockito.Mockito.clearInvocations(counted);
+    costing.executeWithoutResult(tx -> assertThat(reader.load(id).getFirst().getMaterialCode()).isEqualTo("ORIGINAL"));
+    org.mockito.Mockito.verify(counted).query(org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowCallbackHandler.class),org.mockito.ArgumentMatchers.any(Object[].class));
+  }
+
   @Test void preparedBomIsDetachedAndReleasedAfterFailureWhileEmptyDrawingSnapshotCanStillBeFilled() {
     long id=costing.execute(tx -> gateway.read(context("2026-09")).monthlySnapshotId());
     long drawing=costing.execute(tx -> gateway.read(context("2026-10")).monthlySnapshotId());
@@ -373,7 +404,7 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     jdbc.update("DELETE FROM lp_bom_u9_source");
     assertThat(resolver.resolve(realDetails.load(newId)).groups()).hasSize(1);
     assertThatThrownBy(() -> resolver.resolve(realDetails.load(oldId)))
-        .hasMessageContaining("没有找到同版本来源");
+        .hasMessageContaining("有效来源");
     assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_monthly_snapshot_detail WHERE monthly_snapshot_id=?", oldId)).isEqualTo(oldBefore);
   }
 

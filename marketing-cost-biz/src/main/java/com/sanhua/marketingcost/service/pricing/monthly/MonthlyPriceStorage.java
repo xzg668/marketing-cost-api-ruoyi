@@ -37,6 +37,28 @@ public class MonthlyPriceStorage {
     this.mapper=mapper;this.codec=codec;this.links=links;
   }
 
+  /** A concurrent import must not publish an old highest-price plan after the actual ratios. */
+  public void lockAndCheckSupplierRatios(MonthlyMaterialPrices.Context context, MonthlyAdoptionPlan planned) {
+    requireAdoptionTransaction();
+    var materials = new TreeSet<String>();
+    var expected = new HashSet<Long>();
+    planned.selections().forEach((request, selection) -> {
+      if (selection.monthlyPriceId() != null) return;
+      var source = codec.decode(codec.wrap(selection.fact().evidence().json()), JsonNode.class).path("source");
+      if (!source.hasNonNull("selectionRule") || !source.path("ratios").isArray()) return;
+      materials.add(request.family().materialCode());
+      source.path("ratios").forEach(ratio -> expected.add(ratio.path("id").asLong()));
+    });
+    var current = new HashSet<Long>();
+    var codes = new ArrayList<>(materials);
+    for (int start=0; start<codes.size(); start+=256)
+      current.addAll(mapper.lockSupplierRatioVersions(context.businessUnitType(), context.priceAsOfTime().toLocalDate(),
+          codes.subList(start, Math.min(start+256, codes.size()))));
+    if (!current.equals(expected))
+      throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,
+          "供货比率在取价期间已更新，请按实际比率重新取价");
+  }
+
   /** Publication takes the same catalog lock exclusively, before touching monthly selections. */
   public void lockAndCheckFinance(MonthlyAdoptionPlan planned) {
     requireAdoptionTransaction();

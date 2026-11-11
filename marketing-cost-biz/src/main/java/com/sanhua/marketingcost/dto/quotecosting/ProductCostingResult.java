@@ -25,5 +25,7 @@ public class ProductCostingResult {
   private BigDecimal totalCost;
   private boolean reusedSuccess;
   private boolean retryable;
+  /** 保存本次检查的完整缺口，整单导出无需再次逐产品取价。 */
+  private java.util.List<com.sanhua.marketingcost.entity.PricePrepareGap> priceGaps = java.util.List.of();
   private com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse technicalDataCheck;
 }

@@ -95,6 +95,19 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
   @Transactional
   public CostRunTaskSubmissionResult submitQuote(
       String oaNo, List<Long> oaFormItemIds, String requestedPricingMonth, String submittedBy) {
+    return submitQuote(oaNo, oaFormItemIds, requestedPricingMonth, submittedBy, false);
+  }
+
+  @Override
+  @Transactional
+  public CostRunTaskSubmissionResult submitQuoteForPreparation(
+      String oaNo, String requestedPricingMonth, String submittedBy) {
+    return submitQuote(oaNo, null, requestedPricingMonth, submittedBy, true);
+  }
+
+  private CostRunTaskSubmissionResult submitQuote(
+      String oaNo, List<Long> oaFormItemIds, String requestedPricingMonth, String submittedBy,
+      boolean prepareMaterials) {
     String normalizedOaNo = required("oaNo", oaNo);
     Set<Long> selectedIds = normalizeIds(oaFormItemIds);
     OaForm oaForm =
@@ -134,7 +147,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     if (!selectedIds.isEmpty() && selectedItems.size() != selectedIds.size()) {
       throw new IllegalArgumentException("存在不属于该 OA 的产品明细行");
     }
-    TaskBuildResult tasks = buildQuoteTasks(batch, oaForm, selectedItems, pricingMonth);
+    TaskBuildResult tasks = buildQuoteTasks(batch, oaForm, selectedItems, pricingMonth, prepareMaterials);
     if (tasks.tasks().isEmpty()) {
       throw new IllegalArgumentException("当前 OA 没有可核算的产品明细");
     }
@@ -147,7 +160,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       batch = insertOrLoadExisting(batch);
       if (!draftBatchNo.equals(batch.getBatchNo())) {
         existingBatch = true;
-        tasks = buildQuoteTasks(batch, oaForm, selectedItems, pricingMonth);
+        tasks = buildQuoteTasks(batch, oaForm, selectedItems, pricingMonth, prepareMaterials);
       }
     }
     if (existingBatch) {
@@ -326,18 +339,18 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       CostRunBatch batch,
       OaForm oaForm,
       List<OaFormItem> items,
-      String pricingMonth) {
+      String pricingMonth, boolean prepareMaterials) {
     List<Long> itemIds =
         (items == null ? List.<OaFormItem>of() : items).stream()
             .filter(java.util.Objects::nonNull)
             .map(OaFormItem::getId)
             .filter(java.util.Objects::nonNull)
             .toList();
-    Map<Long, QuoteCostingWorkspace> workspaces = loadWorkspaces(itemIds, pricingMonth);
+    Map<Long, QuoteCostingWorkspace> workspaces = prepareMaterials ? Map.of() : loadWorkspaces(itemIds, pricingMonth);
     Map<Long, QuoteCostRunVersion> versions = loadVersions(workspaces.values());
     Map<String, CostRunTask> tasksByKey = new LinkedHashMap<>();
     Map<Long, String> sourceRevisions =
-        inputRevisionService.currentRevisions(oaForm, items, pricingMonth);
+        prepareMaterials ? Map.of() : inputRevisionService.currentRevisions(oaForm, items, pricingMonth);
     int skipped = 0;
     for (OaFormItem item : items == null ? List.<OaFormItem>of() : items) {
       CostRunTask task = buildQuoteTask(batch, oaForm, item);
@@ -345,6 +358,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         skipped++;
         continue;
       }
+      if (prepareMaterials) task.setRequestSnapshotJson(task.getRequestSnapshotJson().replaceFirst("\\}$", ",\"prepareMaterials\":true}"));
       String sourceRevision = sourceRevisions.get(item.getId());
       task.setSourceRevision(sourceRevision);
       QuoteCostingWorkspace workspace = workspaces.get(item.getId());

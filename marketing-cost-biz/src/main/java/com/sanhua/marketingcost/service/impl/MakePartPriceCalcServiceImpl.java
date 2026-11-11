@@ -97,6 +97,7 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
             new Page<>(pageNo(safe.getPage()), pageSize(safe.getPageSize())),
             buildQuery(safe).orderByDesc(MakePartPriceCalcRow::getCreatedAt)
                 .orderByDesc(MakePartPriceCalcRow::getId));
+    page.getRecords().forEach(row -> row.setDisplayReason(com.sanhua.marketingcost.service.costing.FinanceCostingMessages.manufacturingGap(row)));
     return new MakePartPriceCalcPageResponse(page.getTotal(), page.getRecords());
   }
 
@@ -108,12 +109,15 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
             new Page<>(pageNo(safe.getPage()), pageSize(safe.getPageSize())),
             buildGapQuery(safe).orderByDesc(MakePartPriceGapItem::getGeneratedAt)
                 .orderByDesc(MakePartPriceGapItem::getId));
+    page.getRecords().forEach(row -> row.setDisplayReason(com.sanhua.marketingcost.service.costing.FinanceCostingMessages.priceGap(row)));
     return new MakePartPriceGapPageResponse(page.getTotal(), page.getRecords());
   }
 
   @Override
   public MakePartPriceCalcRow get(Long id) {
-    return id == null ? null : mapper.selectById(id);
+    var row = id == null ? null : mapper.selectById(id);
+    if (row != null) row.setDisplayReason(com.sanhua.marketingcost.service.costing.FinanceCostingMessages.manufacturingGap(row));
+    return row;
   }
 
   @Override
@@ -287,7 +291,7 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
       line.add(num(row.getOutsourceFee()));
       line.add(Boolean.TRUE.equals(row.getPriceComplete()) ? "是" : "否");
       line.add(nz(row.getStatus()));
-      line.add(nz(row.getRemark()));
+      line.add(com.sanhua.marketingcost.service.costing.FinanceCostingMessages.manufacturingGap(row));
       result.add(line);
     }
     return result;
@@ -314,7 +318,7 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
       line.add(nz(item.getMissingMaterialNo()));
       line.add(nz(item.getMissingMaterialName()));
       line.add(nz(item.getPriceType()));
-      line.add(nz(item.getReason()));
+      line.add(com.sanhua.marketingcost.service.costing.FinanceCostingMessages.priceGap(item));
       line.add(nz(item.getOaPushStatus()));
       result.add(line);
     }

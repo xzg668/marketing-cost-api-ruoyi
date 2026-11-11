@@ -20,4 +20,15 @@ public interface SupplierPriceDecisionMapper extends BaseMapper<SupplierPriceDec
       """)
   List<SupplierPriceDecision> waiting(@Param("businessUnit") String businessUnit,
       @Param("month") String month);
+
+  @Select("""
+      SELECT d.* FROM lp_supplier_price_decision d
+      WHERE d.business_unit_type=#{businessUnit} AND d.period_month=#{month}
+        AND (d.decision='FALLBACK_HIGH' OR (d.decision='WAIT_IMPORT' AND d.retry_status IN ('WAITING','FAILED')))
+        AND NOT EXISTS (SELECT 1 FROM lp_supplier_price_decision n
+                        WHERE n.scope_key=d.scope_key AND n.id>d.id)
+      ORDER BY d.id
+      """)
+  List<SupplierPriceDecision> afterRatioImport(@Param("businessUnit") String businessUnit,
+      @Param("month") String month);
 }

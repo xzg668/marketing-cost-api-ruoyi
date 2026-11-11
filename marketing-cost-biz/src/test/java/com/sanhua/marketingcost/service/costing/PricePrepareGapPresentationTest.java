@@ -12,12 +12,20 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class PricePrepareGapPresentationTest {
+  @Test void actualSupplierRestrictionSurvivesOrdinaryAndRawPricePresentation() {
+    var ordinary=gap("A","MISSING_PRICE","MISSING");
+    var raw=gap("B","MISSING_PRICE","MISSING_RAW_PRICE");
+    for(var item:List.of(ordinary,raw))item.setMessage("联动价有记录，但当前主供方没有适用价格");
+    PricePrepareGapPresentation.enrich(response(List.of(ordinary,raw),List.of()));
+    assertThat(ordinary.getDisplayMessage()).contains("主供方");
+    assertThat(raw.getDisplayMessage()).contains("主供方");
+  }
   @Test void mixedRealPriceAndManufacturingRatioGapsHaveOneConsistentMeaning() {
     var ratio = gap("301260158", "PRICE_SOURCE_ERROR", "RAW_PRICE_ERROR");
     var raw = gap("301070080", "MISSING_PRICE", "MISSING_RAW_PRICE");
     var response = response(List.of(ratio, raw, gap("301070080", "MISSING_PRICE", "MISSING_RAW_PRICE")), List.of(review("301260158")));
     String text = PricePrepareGapPresentation.summary(response, "旧的泛化提示");
-    assertThat(text).contains("缺少供货比率：301260158", "缺少原料价格：301070080").doesNotContain("取价异常");
+    assertThat(text).contains("缺少供货比率：301260158", "原料价格待核对：301070080").doesNotContain("取价异常");
     assertThat(text.indexOf("301070080")).isEqualTo(text.lastIndexOf("301070080"));
     assertThat(ratio.getDisplayReasonCode()).isEqualTo("SUPPLIER_RATIO_REVIEW_REQUIRED");
     assertThat(ratio.getDisplayGapType()).isEqualTo("缺少供货比率");
@@ -48,7 +56,7 @@ class PricePrepareGapPresentationTest {
   }
   @Test void missingScrapAndRawPriceRemainDistinct() {
     var r=response(List.of(gap("A","MISSING_PRICE","MISSING_RAW_PRICE"),gap("S","MISSING_PRICE","MISSING_SCRAP_PRICE")),List.of());
-    assertThat(PricePrepareGapPresentation.summary(r,"missing")).contains("缺少原料价格：A","缺少废料价格：S");
+    assertThat(PricePrepareGapPresentation.summary(r,"missing")).contains("原料价格待核对：A","废料价格待核对：S");
   }
   @Test void legacyResponsesRetainTheirActualFailureMessage() {
     assertThat(PricePrepareGapPresentation.summary(new QuotePricePrepareWorkbenchResponse(),"财务基价未发布")).isEqualTo("财务基价未发布");

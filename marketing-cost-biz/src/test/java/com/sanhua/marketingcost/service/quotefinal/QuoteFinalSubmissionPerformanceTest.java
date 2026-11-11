@@ -157,4 +157,27 @@ class QuoteFinalSubmissionPerformanceTest {
     assertThat(status.costs().getLast().totalCost()).isEqualTo("196.800000");
     assertThat(status.canConfirm()).isFalse();
   }
+
+  @Test void blockedRecalculationStillDisplaysLastConfirmedCostWithoutMakingItSubmittable() {
+    products(3, Set.of(1L, 2L));
+    var first = items.selectById(1L);
+    first.setConfirmedCostVersionId(44L);
+    var saved = new QuoteCostRunVersion();
+    saved.setId(44L); saved.setVersionNo("V1");
+    saved.setFinalQuoteAmount(new BigDecimal("7.11906600"));
+    saved.setSourceRevision("saved-revision");
+    // The workbench has a new price gap, while the successful version remains saved.
+    when(successes.findConfirmedForDisplay(form, first)).thenReturn(Optional.of(saved));
+
+    var status = service.status(form.getOaNo(), "2026-11", actor);
+    assertThat(status.costs().getFirst().totalCost()).isEqualTo("7.11906600");
+    assertThat(status.costs().getFirst().costVersionId()).isEqualTo(44L);
+    assertThat(status.costs().getFirst().status()).isEqualTo("STALE");
+    assertThat(status.costs().get(1).totalCost()).isNull();
+    assertThat(status.costs().get(2).status()).isEqualTo("READY");
+    assertThat(status.readyProducts()).isEqualTo(1);
+    assertThat(status.canConfirm()).isFalse();
+    assertThat(publicScans.get()).isZero();
+    verifyNoInteractions(monthly);
+  }
 }

@@ -27,6 +27,24 @@ class CostRunTaskSubmissionServiceImplTest {
 
   private static final String CURRENT_PERIOD = CostPricingPeriodUtils.currentPricingMonth();
 
+  @Test void preparationQueueRegisters107ProductsWithoutReadingTheirCostInputs() {
+    var batches = new FakeBatchMapper(null);
+    var tasks = new FakeTaskMapper();
+    var rows = java.util.stream.LongStream.rangeClosed(1,107).mapToObj(id -> item(id,"P-"+id,"BOX")).toList();
+    var revisions = org.mockito.Mockito.mock(com.sanhua.marketingcost.service.CostInputRevisionService.class);
+    var service = new CostRunTaskSubmissionServiceImpl(batches.proxy(),tasks.proxy(),
+        new FakeOaFormMapper(oaForm()).proxy(),new FakeOaFormItemMapper(rows).proxy(),
+        emptyWorkspaceMapper(),emptyVersionMapper(),algorithmVersion(),revisions,
+        unit -> CostPricingPeriodUtils.currentPricingMonth());
+    var result = service.submitQuoteForPreparation("OA-001",CURRENT_PERIOD,"finance");
+    assertThat(result.getTotalCount()).isEqualTo(107);
+    assertThat(tasks.inserted).hasSize(107).allSatisfy(task -> {
+      assertThat(task.getRequestSnapshotJson()).contains("\"prepareMaterials\":true");
+      assertThat(task.getSourceRevision()).isNull();
+    });
+    org.mockito.Mockito.verifyNoInteractions(revisions);
+  }
+
   @Test
   void submitQuoteCreatesBatchAndProductTasks() {
     FakeBatchMapper batchMapper = new FakeBatchMapper(null);

@@ -43,6 +43,7 @@ class CostingPerformanceIntegrationTest extends OriginalPricingIntegrationTestBa
   @Autowired BomRawHierarchyMapper rawHierarchy;
   @Autowired QuoteCostingPreparationService preparation;
   @Autowired ProductCostingPipeline pipeline;
+  @Autowired com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService preparedPrices;
   @Autowired com.sanhua.marketingcost.mapper.MaterialMasterRawMapper rawMaterials;
   @Autowired com.sanhua.marketingcost.service.MaterialMasterSyncService materialSync;
   private final ObjectMapper json=new ObjectMapper().findAndRegisterModules();
@@ -90,15 +91,22 @@ class CostingPerformanceIntegrationTest extends OriginalPricingIntegrationTestBa
       seedBackgroundMaterials();
       var single=seedQuote("PERF-SINGLE",1);
       var batch=seedQuote("PERF-WHOLE",3);
+      var confirmed=seedQuote("PERF-CONFIRMED",1);
       measure("single-first",() -> requireSuccess(preparation.prepareAndCost(single.oa(),new QuoteCostingPreparationService.Request(single.items().getFirst(),month,false),actor).product()));
       jdbc.update("UPDATE lp_quality_loss_rate SET loss_rate=0.02 WHERE bare_product_code=?",single.products().getFirst()+"-BARE");
       measure("single-recalculate",() -> requireSuccess(preparation.prepareAndCost(single.oa(),new QuoteCostingPreparationService.Request(single.items().getFirst(),month,false),actor).product()));
+      pipeline.prepare(new ProductCostingRequest(confirmed.oa(),confirmed.items().getFirst(),month,actor,false));
+      generatePrices(confirmed,confirmed.items().getFirst());
+      measure("single-confirmed-prices",() -> requireSuccess(preparation.prepareAndCost(confirmed.oa(),new QuoteCostingPreparationService.Request(confirmed.items().getFirst(),month,false),actor).product()));
       measure("whole-prepare",() -> {
         var result=preparation.prepareAndCost(batch.oa(),new QuoteCostingPreparationService.Request(null,month,false),actor);
         assertThat(result.checks()).allSatisfy(check -> assertThat(check.getPipelineStatus()).isEqualTo("READY"));
         assertThat(result.batch()).isNotNull();return result;
       });
-      for(long item:batch.items()) measure("whole-product-"+item,() -> requireSuccess(pipeline.execute(new ProductCostingRequest(batch.oa(),item,month,actor,false))));
+      for(long item:batch.items()) {
+        generatePrices(batch,item);
+        measure("whole-product-"+item,() -> requireSuccess(pipeline.execute(new ProductCostingRequest(batch.oa(),item,month,actor,false))));
+      }
       assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id IN ("+String.join(",",batch.items().stream().map(Object::toString).toList())+") AND status='SUCCESS'",Integer.class)).isEqualTo(3);
       Path output=Path.of(System.getProperty("cost.performance.output","target/costing-performance.json"));
       Files.createDirectories(output.toAbsolutePath().getParent());
@@ -124,6 +132,11 @@ class CostingPerformanceIntegrationTest extends OriginalPricingIntegrationTestBa
   private Object requireSuccess(com.sanhua.marketingcost.dto.quotecosting.ProductCostingResult result) {
     assertThat(result).isNotNull();assertThat(result.getPipelineStatus()).withFailMessage("%s: %s",result.getErrorCode(),result.getMessage()).isEqualTo("SUCCESS");return result;
   }
+  private void generatePrices(Quote quote,long item) {
+    var request=new com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest();
+    request.setPeriodMonth(month);
+    assertThat(preparedPrices.generate(quote.oa(),item,request).getReadiness().getStatus()).isEqualTo("READY");
+  }
   private void measure(String label,java.util.function.Supplier<Object> action) {
     CostingTimingSqlDriver.start();long started=System.nanoTime();Object result=action.get();
     double ms=(System.nanoTime()-started)/1_000_000.0;var statements=CostingTimingSqlDriver.finish();
@@ -145,6 +158,7 @@ class CostingPerformanceIntegrationTest extends OriginalPricingIntegrationTestBa
       items.add(jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=? AND material_no=?",Long.class,form,product));products.add(product);
       sources.ordinarySources(product,material,form,date);sources.comparisonFixedPrice(material,"2",date);
       addComponents(sources,product,material,date);
+      jdbc.update("UPDATE lp_bom_raw_hierarchy SET child_type='STANDARD' WHERE top_product_code=? AND level>0",product);
       jdbc.update("UPDATE lp_material_master_raw SET main_category_code='12',bare_code=? WHERE material_code=?",product+"-BARE",product);
       jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,organization_code,import_batch_id,active_flag,main_category_code,shape_attr,unit) VALUES(?,?,'COMMERCIAL',?,1,'11','制造件','件')",product+"-BARE",product+"-BARE",product);
       jdbc.update("UPDATE lp_quality_loss_rate SET bare_product_code=? WHERE bare_product_code=?",product+"-BARE",product);

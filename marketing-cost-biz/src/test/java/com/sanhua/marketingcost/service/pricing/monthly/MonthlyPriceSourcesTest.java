@@ -62,6 +62,27 @@ class MonthlyPriceSourcesTest {
     when(supplemental.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
   }
   Candidates read(Set<MonthlyPriceRequest> requests){return sources.resolve(context,requests,ignored->{throw new AssertionError("No formula dependency expected");});}
+  @Test void laterEmptySupplementalSourceCannotHideTheActualPrimarySupplierRestriction() {
+    var request=request("restricted");
+    when(linked.read(any(),anySet(),any())).thenReturn(new Candidates(Map.of(),Map.of(request,
+        new Problem(Failure.MISSING,"联动价有记录，但当前主供方没有适用价格"))));
+    when(supplemental.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,
+        new Problem(Failure.MISSING,"当前料号没有技术补录办理来源"))));
+    assertThat(read(Set.of(request)).problems().get(request).message()).contains("主供方").doesNotContain("技术补录办理来源");
+  }
+  @Test void noAvailableSourceDoesNotExposeTheLastSupplementalLookupAsTheBusinessCause() {
+    var request=request("missing");
+    when(supplemental.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,
+        new Problem(Failure.MISSING,"当前料号没有技术补录办理来源"))));
+    assertThat(read(Set.of(request)).problems().get(request).message()).contains("未取得可用价格").doesNotContain("技术补录办理来源");
+  }
+  @Test void aLaterSuccessfulSourceStillWinsAfterAnEarlierMissingSupplierPrice() {
+    var request=request("later-success");
+    when(linked.read(any(),anySet(),any())).thenReturn(new Candidates(Map.of(),Map.of(request,
+        new Problem(Failure.MISSING,"联动价有记录，但当前主供方没有适用价格"))));
+    when(fixed.read(any(),anySet())).thenReturn(found(request,"PURCHASE_FIXED"));
+    var result=read(Set.of(request));assertThat(result.values()).containsKey(request);assertThat(result.problems()).isEmpty();
+  }
   @Test void missingOrUnconfirmedCurrentSupplementalCanUseThePreviouslyCostedPriceOnlyAtTheLastStep() {
     var request=request("previous-supplemental");
     when(supplemental.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.WAITING,"original confirmation changed"))));

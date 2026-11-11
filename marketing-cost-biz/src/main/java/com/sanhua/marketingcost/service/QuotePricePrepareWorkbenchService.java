@@ -11,6 +11,10 @@ public interface QuotePricePrepareWorkbenchService {
   QuotePricePrepareWorkbenchResponse checkPriceSources(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request);
 
+  /** Returns only a complete, still-current preparation; null means use normal preparation. */
+  QuotePricePrepareWorkbenchResponse currentForCosting(
+      String oaNo, Long oaFormItemId, String periodMonth);
+
   QuotePricePrepareWorkbenchResponse generate(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request);
 }

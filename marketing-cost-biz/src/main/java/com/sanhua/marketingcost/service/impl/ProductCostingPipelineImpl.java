@@ -176,8 +176,14 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private ProductCostingResult executeStages(ProductCostingContext scope, boolean preparationOnly) {
     String stage = STEP_BOM;
     try {
+      // 财务确认刚生成的完整价格仍有效时，沿用它所属的计价行；重新启动工作台
+      // 会清空该指针并重复生成 BOM/两侧价格。资料变化时仍走完整准备链。
+      QuotePricePrepareWorkbenchResponse prices =
+          pricePrepareService.currentForCosting(scope.oaNo(), scope.itemId(), scope.periodMonth());
       QuoteCostingWorkbenchResponse workbench =
-          costingWorkbenchService.launchWorkbench(scope.oaNo(), scope.itemId());
+          prices == null
+              ? costingWorkbenchService.launchWorkbench(scope.oaNo(), scope.itemId())
+              : costingWorkbenchService.getWorkbench(scope.oaNo(), scope.itemId());
       ProductCostingResult bomBlocked = bomBlock(scope, workbench);
       if (bomBlocked != null) {
         return bomBlocked;
@@ -188,10 +194,11 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       stage = STEP_PRICE;
       QuotePricePrepareGenerateRequest priceRequest = new QuotePricePrepareGenerateRequest();
       priceRequest.setPeriodMonth(scope.periodMonth());
-      QuotePricePrepareWorkbenchResponse prices =
-          preparationOnly
-              ? pricePrepareService.checkPriceSources(scope.oaNo(), scope.itemId(), priceRequest)
-              : pricePrepareService.generate(scope.oaNo(), scope.itemId(), priceRequest);
+      if (prices == null) {
+        prices = preparationOnly
+            ? pricePrepareService.checkPriceSources(scope.oaNo(), scope.itemId(), priceRequest)
+            : pricePrepareService.generate(scope.oaNo(), scope.itemId(), priceRequest);
+      }
       ProductCostingResult priceBlocked = priceBlock(scope, prices, preparationOnly);
       if (priceBlocked != null) {
         return priceBlocked;
@@ -336,8 +343,11 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     String message =
         firstText(readiness == null ? null : readiness.getMessage(), "存在 " + gaps + " 项最终价格缺口");
     message = com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.summary(prices, message);
-    return blocked(scope, "WAIT_PRICE", STEP_PRICE,
+    var result = blocked(scope, "WAIT_PRICE", STEP_PRICE,
         com.sanhua.marketingcost.service.costing.PricePrepareGapPresentation.blockingCode(prices), message, gaps);
+    if (prices != null && prices.getGaps() != null && prices.getGaps().getRecords() != null)
+      result.setPriceGaps(java.util.List.copyOf(prices.getGaps().getRecords()));
+    return result;
   }
 
   private ProductCostingResult blocked(

@@ -25,6 +25,12 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
   private final ProductCostingPipeline productCostingPipeline;
   private final ObjectMapper objectMapper;
   private final SysUserService users;
+  private com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService preparation;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setPreparation(com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService preparation) {
+    this.preparation = preparation;
+  }
 
   public QuoteCostRunTaskExecutor(
       ProductCostingPipeline productCostingPipeline, ObjectMapper objectMapper, SysUserService users) {
@@ -53,14 +59,9 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
     ProductCostingResult result;
     try {
       SecurityContextHolder.setContext(taskContext);
-      result =
-          productCostingPipeline.execute(
-              new ProductCostingRequest(
-                  oaNo,
-                  task.getOaFormItemId(),
-                  task.getPricingMonth(),
-                  initiatedBy,
-                  false));
+      var request = new ProductCostingRequest(oaNo, task.getOaFormItemId(), task.getPricingMonth(), initiatedBy, false);
+      result = preparesMaterials(task) ? preparation.prepareQueuedProduct(request)
+          : productCostingPipeline.execute(request);
     } catch (com.sanhua.marketingcost.service.reprice.MonthlyQuotationControl.QuotationBlocked blocked) {
       throw new CostRunTaskWaitingInputException(blocked.getMessage(),
           "{\"pipelineStatus\":\"BLOCKED\",\"errorCode\":\"MONTHLY_REPRICE_BLOCKED\"}");
@@ -124,6 +125,12 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
     } catch (JsonProcessingException exception) {
       return null;
     }
+  }
+
+  private boolean preparesMaterials(CostRunTask task) {
+    if (!StringUtils.hasText(task.getRequestSnapshotJson())) return false;
+    try { return objectMapper.readTree(task.getRequestSnapshotJson()).path("prepareMaterials").asBoolean(false); }
+    catch (JsonProcessingException invalid) { throw new IllegalArgumentException("核算任务请求格式不正确", invalid); }
   }
 
   private String required(String field, String value) {

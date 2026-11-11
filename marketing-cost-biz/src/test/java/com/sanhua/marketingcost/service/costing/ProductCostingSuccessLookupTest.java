@@ -25,12 +25,14 @@ class ProductCostingSuccessLookupTest {
 
   @BeforeEach void savedFormalPattern() {
     form.setId(23L);form.setOaNo("FI-SC-006-20261107-006");
+    form.setBusinessUnitType("COMMERCIAL");
     item.setId(155L);item.setOaFormId(23L);item.setConfirmedCostVersionId(20L);
     workspace.setWorkspaceStatus("SUCCESS");workspace.setCurrentCostVersionId(20L);
     workspace.setInputFingerprint("SAVED-INPUT");workspace.setLastSuccessInputFingerprint("SAVED-INPUT");
     workspace.setSourceRevision("SAVED-SOURCE");workspace.setLastSuccessSourceRevision("SAVED-SOURCE");
     version.setId(20L);version.setOaNo(form.getOaNo());version.setOaFormItemId(item.getId());
     version.setPricingMonth("2026-11");version.setStatus("SUCCESS");
+    version.setBusinessUnitType("COMMERCIAL");
     version.setInputFingerprint("SAVED-INPUT");version.setSourceRevision("SAVED-SOURCE");
     version.setAlgorithmVersion("MONTHLY_PRODUCT_COST_V1");version.setFinalQuoteAmount(new BigDecimal("32.93162700"));
     context=new ProductCostingContext(form,item,"1145900000048","2026-11","报价员","CURRENT-SOURCES-CHANGED");
@@ -63,5 +65,34 @@ class ProductCostingSuccessLookupTest {
     assertThat(lookup.findSaved(context)).hasValueSatisfying(saved ->
         assertThat(saved.version().getFinalQuoteAmount()).isEqualByComparingTo("33.5"));
     assertThat(version.getFinalQuoteAmount()).isEqualByComparingTo("32.93162700");
+  }
+
+  @Test void displayKeepsConfirmedCostWhenRecalculationIsBlockedOrRunning() {
+    for (String status : java.util.List.of("WAIT_PRICE", "SYSTEM_FAILED", "RUNNING", "STALE")) {
+      workspace.setWorkspaceStatus(status);workspace.setInputFingerprint("CHANGED-INPUT");
+      assertThat(lookup.findSaved(context)).isEmpty();
+      assertThat(lookup.findConfirmedForDisplay(form, item)).contains(version);
+    }
+    assertThat(version.getFinalQuoteAmount()).isEqualByComparingTo("32.93162700");
+  }
+
+  @Test void displayRejectsForeignIncompleteAndInvalidConfirmedVersions() {
+    version.setOaNo("ANOTHER-QUOTE");assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
+    version.setOaNo(form.getOaNo());version.setOaFormItemId(156L);
+    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
+    version.setOaFormItemId(item.getId());version.setBusinessUnitType("HOUSEHOLD");
+    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
+    version.setBusinessUnitType("COMMERCIAL");
+    for (String status : java.util.List.of("RUNNING", "TRIAL", "VOIDED")) {
+      version.setStatus(status);assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
+    }
+    version.setStatus("SUCCESS");version.setFinalQuoteAmount(null);
+    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
+    version.setFinalQuoteAmount(new BigDecimal("-0.01"));
+    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
+    version.setFinalQuoteAmount(BigDecimal.ZERO);
+    assertThat(lookup.findConfirmedForDisplay(form, item)).contains(version);
+    item.setConfirmedCostVersionId(null);
+    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
   }
 }

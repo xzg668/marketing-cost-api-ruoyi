@@ -348,6 +348,46 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   }
 
   @Test
+  void costingReusesOnlyTodaysCompletePairWithUnchangedInputs() {
+    prepareConfirmedScope();
+    var oa = batch("PPR-OA-WORKBENCH", "OA_LOCKED", null);
+    oa.setPriceAsOfTime(CostPricingPeriodUtils.currentPricingDate().atStartOfDay());
+    var finance = batch("PPR-FIN-WORKBENCH", "FINANCE_QUOTE_BASE", oa.getPrepareNo());
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(2, List.of(finance, oa)));
+    var readiness = PricePrepareReadinessResult.ready(oa.getPrepareNo(), CURRENT_MONTH, "SUCCESS");
+    readiness.setSourceRevision("UNCHANGED");
+    when(pricePrepareReadinessService.check(any(), any(), any(), any())).thenReturn(readiness);
+    preparedFinanceCopper("90", 9L, null);
+    when(inputRevisions.isCurrent(any(), any(), any(), any())).thenReturn(true);
+    var result = service.currentForCosting("OA-WORKBENCH", 101L, CURRENT_MONTH);
+    org.assertj.core.api.Assertions.assertThat(result).isNotNull();
+    org.assertj.core.api.Assertions.assertThat(result.getSourceRevision()).isEqualTo("UNCHANGED");
+    verify(pricePrepareQueryService, org.mockito.Mockito.never()).pageItems(any());
+    verify(pricePrepareQueryService, org.mockito.Mockito.never()).pageGaps(any());
+    verify(pricePrepareService, org.mockito.Mockito.never()).calculate(any());
+    verify(pricePrepareService, org.mockito.Mockito.never()).generate(any());
+    when(inputRevisions.isCurrent(any(), any(), any(), any())).thenReturn(false);
+    org.assertj.core.api.Assertions.assertThat(service.currentForCosting("OA-WORKBENCH", 101L, CURRENT_MONTH)).isNull();
+    when(inputRevisions.isCurrent(any(), any(), any(), any())).thenReturn(true);
+    oa.setPriceAsOfTime(oa.getPriceAsOfTime().minusDays(1));
+    org.assertj.core.api.Assertions.assertThat(service.currentForCosting("OA-WORKBENCH", 101L, CURRENT_MONTH)).isNull();
+    oa.setPriceAsOfTime(CostPricingPeriodUtils.currentPricingDate().atStartOfDay());
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(1, List.of(oa)));
+    org.assertj.core.api.Assertions.assertThat(service.currentForCosting("OA-WORKBENCH", 101L, CURRENT_MONTH)).isNull();
+    oa.setPrepareNo("OTHER-OA");
+    finance.setSourcePrepareNo("OTHER-OA");
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(2, List.of(finance, oa)));
+    org.assertj.core.api.Assertions.assertThat(service.currentForCosting("OA-WORKBENCH", 101L, CURRENT_MONTH)).isNull();
+    when(inputRevisions.isCurrent(any(), any(), any(), any())).thenThrow(
+        new com.sanhua.marketingcost.service.EffectiveTechnicalDataException(
+            "PENDING", 101L, CURRENT_MONTH, List.of("PROFILE"), "补录尚未批准"));
+    org.assertj.core.api.Assertions.assertThat(service.currentForCosting("OA-WORKBENCH", 101L, CURRENT_MONTH)).isNull();
+  }
+
+  @Test
   void explicitSourceRecheckDoesNotPresentOldFinalPricesAsTheNewCalculation() {
     prepareConfirmedScope();
     var oa = batch("PPR-OA-WORKBENCH", "OA_LOCKED", null);
@@ -366,6 +406,10 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     request.setPeriodMonth(CURRENT_MONTH);
     request.setRefreshCandidates(true);
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
+    verify(pricePrepareReadinessService, org.mockito.Mockito.never()).check(any(), any(), any(), any());
+    verify(pricePrepareQueryService, org.mockito.Mockito.times(1)).pageBatches(any());
+    verify(pricePrepareQueryService, org.mockito.Mockito.never()).pageItems(any());
+    verify(pricePrepareQueryService, org.mockito.Mockito.never()).pageGaps(any());
     org.assertj.core.api.Assertions.assertThat(
             response.getItems().getRecords().getFirst().getUnitPrice())
         .isEqualByComparingTo("2");

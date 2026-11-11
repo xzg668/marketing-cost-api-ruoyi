@@ -21,6 +21,10 @@ import lombok.Setter;
 @TableName("lp_make_part_price_calc_row")
 public class MakePartPriceCalcRow {
 
+  @TableField(exist = false)
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private String displayReason;
+
   @TableId(type = IdType.AUTO)
   private Long id;
 

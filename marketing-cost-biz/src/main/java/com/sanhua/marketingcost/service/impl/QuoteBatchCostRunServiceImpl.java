@@ -55,6 +55,18 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public QuoteBatchCostRunResponse submit(
       String oaNo, QuoteBatchCostRunRequest request, String submittedBy) {
+    return submit(oaNo, request, submittedBy, false);
+  }
+
+  @Override
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
+  public QuoteBatchCostRunResponse submitForPreparation(
+      String oaNo, QuoteBatchCostRunRequest request, String submittedBy) {
+    return submit(oaNo, request, submittedBy, true);
+  }
+
+  private QuoteBatchCostRunResponse submit(
+      String oaNo, QuoteBatchCostRunRequest request, String submittedBy, boolean prepareMaterials) {
     String normalizedOaNo = required(oaNo, "OA单号");
     if (request != null
         && StringUtils.hasText(request.getMode())
@@ -62,10 +74,13 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
       throw new IllegalArgumentException("整单核算仅支持 ALL 模式");
     }
     String periodMonth = currentMonth(request == null ? null : request.getPeriodMonth());
-    oaWorkflowAccess.requireCostPublication(normalizedOaNo);
+    if (prepareMaterials) oaWorkflowAccess.requireCosting(loadForm(normalizedOaNo).getId());
+    else oaWorkflowAccess.requireCostPublication(normalizedOaNo);
     repriceLockGuard.assertCostRunAllowed(normalizedOaNo);
     CostRunTaskSubmissionResult submitted =
-        submissionService.submitQuote(normalizedOaNo, null, periodMonth, submittedBy);
+        prepareMaterials
+            ? submissionService.submitQuoteForPreparation(normalizedOaNo, periodMonth, submittedBy)
+            : submissionService.submitQuote(normalizedOaNo, null, periodMonth, submittedBy);
     CostRunBatchProgressSnapshot progress =
         progressService.refreshBatchProgress(submitted.getBatchNo());
     CostRunBatch batch = loadBatch(submitted.getBatchNo());

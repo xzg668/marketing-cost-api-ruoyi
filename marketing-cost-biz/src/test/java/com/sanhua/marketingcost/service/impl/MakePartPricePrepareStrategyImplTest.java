@@ -72,6 +72,17 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(service.prepare("OA","COMMERCIAL","2026-09",item()).getStatus()).isEqualTo("MISSING_PRICE");
   }
 
+  @Test void financialGapListsOnlyTheMissingPriceAndKeepsNormalWeightTraceOut() {
+    var row = row("MISSING_RAW_PRICE", "301210119", "301990444");
+    row.setGrossWeightG(new BigDecimal("0.701")); row.setNetWeightG(new BigDecimal("0.4"));
+    row.setRemark("副产品反算失败(parent_material_no=201560042)；单子料：净重取 parent 理论净重；当前料号没有技术补录办理来源；缺原材料价格(child_material_no=301210119)");
+    when(generation.calculateForBomRow(any(), any(), any(), anyBoolean())).thenReturn(List.of(row));
+    var gap = service.calculate("OA", "COMMERCIAL", "2026-09", null, null, item()).getGaps().getFirst();
+    assertThat(gap.getGapMaterialCode()).isEqualTo("301210119");
+    assertThat(gap.getMessage()).contains("301210119", "价格")
+        .doesNotContain("副产品", "技术补录", "parent", "child_material_no", "缺少净重", "缺少毛重");
+  }
+
   @Test void rejectsDifferentQuoteMonthBeforeCalculation() {
     var item = item(); item.getBomRow().setPeriodMonth("2026-10");
     assertThatThrownBy(() -> service.prepare("OA","COMMERCIAL","2026-09",item)).hasMessageContaining("不一致");

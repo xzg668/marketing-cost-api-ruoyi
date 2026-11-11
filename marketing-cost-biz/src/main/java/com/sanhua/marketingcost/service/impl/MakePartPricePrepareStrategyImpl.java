@@ -224,9 +224,7 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
   private MakePartPricePrepareResult.Gap gapFromRow(
       String parentMaterialNo, MakePartPriceCalcRow row) {
     String status = trimToNull(row.getStatus());
-    String message = StringUtils.hasText(row.getRemark())
-        ? row.getRemark().trim()
-        : "制造件价格生成异常(status=" + status + ")";
+    String message = com.sanhua.marketingcost.service.costing.FinanceCostingMessages.manufacturingGap(row);
     if ("RAW_PRICE_ERROR".equals(status) || "SCRAP_PRICE_ERROR".equals(status)) {
       boolean raw = "RAW_PRICE_ERROR".equals(status);
       var gap = new MakePartPricePrepareResult.Gap("PRICE_SOURCE_ERROR",

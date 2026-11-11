@@ -86,9 +86,9 @@ public class QuoteCostingPreparationService {
     var items = activeItems(formId);
     if (itemId != null && !items.contains(itemId)) throw new IllegalArgumentException("所选产品不属于当前报价单");
     var view = access.view(formId);
-    boolean pending = technicalSubmissions.hasPendingSubmissions(formId, itemId);
+    boolean pending = itemId != null && technicalSubmissions.hasPendingSubmissions(formId, itemId);
     boolean allowed = (view == null || view.canCost()) && !pending;
-    String message = itemId == null ? "点击核算检查整单资料，资料齐全后开始计算"
+    String message = itemId == null ? "整单按产品处理：资料齐全的核算，已有最新结果的沿用，缺资料的单独提示"
         : "点击核算检查本产品资料，资料齐全后开始计算";
     if (pending) message = "等待技术员提交补录资料，可查看已提交内容及任务进度";
     else if (view != null && !view.canCost()) {
@@ -131,6 +131,12 @@ public class QuoteCostingPreparationService {
     Long itemId = request.itemId();
     var selectedItems = itemId == null ? items : List.of(itemId);
     access.requireCosting(formId);
+    if (itemId == null) {
+      repriceLock.assertCostRunAllowed(oaNo);
+      var batchRequest = new QuoteBatchCostRunRequest();
+      batchRequest.setPeriodMonth(month);
+      return new Outcome(state(oaNo), List.of(), batches.submitForPreparation(oaNo, batchRequest, operatorName), null);
+    }
     technicalSubmissions.requireSubmitted(formId, itemId);
     repriceLock.assertCostRunAllowed(oaNo);
     var scope = access.costingScope(formId);
@@ -189,11 +195,22 @@ public class QuoteCostingPreparationService {
       technicalSubmissions.accept(formId, actorId, itemId);
     });
     access.requireCostPublication(formId, itemId);
-    if (itemId != null) return new Outcome(state(oaNo, itemId), checks, null,
+    return new Outcome(state(oaNo, itemId), checks, null,
         pipeline.execute(new ProductCostingRequest(oaNo, itemId, month, operatorName, request.force())));
-    var batchRequest = new QuoteBatchCostRunRequest();
-    batchRequest.setPeriodMonth(month);
-    return new Outcome(state(oaNo), checks, batches.submit(oaNo, batchRequest, operatorName), null);
+  }
+
+  /** 队列沿用单品完整审核链；其他产品待提交不阻断本产品。 */
+  public ProductCostingResult prepareQueuedProduct(ProductCostingRequest request) {
+    State current = state(request.oaNo(), request.oaFormItemId());
+    if (!current.canCost()) {
+      var blocked = new ProductCostingResult();
+      blocked.setOaNo(request.oaNo()); blocked.setOaFormItemId(request.oaFormItemId());
+      blocked.setPipelineStatus("BLOCKED"); blocked.setBlockingStatus("WAIT_TECH_DATA");
+      blocked.setCurrentStep("TECHNICAL_DATA"); blocked.setMessage(current.message());
+      return blocked;
+    }
+    var outcome = prepareAndCost(request.oaNo(), new Request(request.oaFormItemId(), request.periodMonth(), false), request.initiatedBy());
+    return outcome.product() != null ? outcome.product() : outcome.checks().getFirst();
   }
 
   private List<Long> activeItems(long formId) {

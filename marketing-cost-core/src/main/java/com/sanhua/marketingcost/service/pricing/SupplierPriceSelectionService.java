@@ -108,7 +108,7 @@ public class SupplierPriceSelectionService {
       return new Selection(
           chosen, SupplierRatioPricePolicy.match(bySupplier, chosen), "RATIO_MAX", "按最大供货比率取价，比率并列时取最高价", null);
     }
-    if (active.stream().anyMatch(r -> configuredHighest(r.getSelectionRule()))) {
+    if (active.stream().anyMatch(r -> com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.isHighestPriceRule(r.getSelectionRule()))) {
       chosen = SupplierRatioPricePolicy.highest(candidates);
       return new Selection(chosen, SupplierRatioPricePolicy.match(bySupplier, chosen),
           "CONFIGURED_HIGH", "供货比率无法确定供应商，按供货比率表配置取最高有效单价", null);
@@ -156,14 +156,6 @@ public class SupplierPriceSelectionService {
         status,
         message,
         review);
-  }
-
-  private static boolean configuredHighest(String rule) {
-    if (rule == null) return false;
-    String normalized = rule.replaceAll("[\\s\\p{P}\u3000]+", "")
-        .replace("比率", "比例").replace("时", "");
-    return java.util.Set.of("无供货比例取最高价", "无比例取最高价", "取最高价", "最高价")
-        .contains(normalized);
   }
 
   private static List<SupplierPriceCandidate> highestPerSupplier(List<SupplierPriceCandidate> candidates) {

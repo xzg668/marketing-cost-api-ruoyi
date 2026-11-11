@@ -164,8 +164,10 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     String specModel = text(row, columns.get(HEADER_SPEC_MODEL), formatter);
     String supplierName = text(row, columns.get(HEADER_SUPPLIER_NAME), formatter);
     String supplierCode = text(row, columns.get(HEADER_SUPPLIER_CODE), formatter);
+    String ratioText = text(row, columns.get(HEADER_SUPPLY_RATIO), formatter);
+    boolean highestRule = SupplierSupplyRatioNormalizeUtils.isHighestPriceRule(ratioText);
     int errorsBefore = result.getErrors().size();
-    BigDecimal supplyRatio = decimal(row, columns.get(HEADER_SUPPLY_RATIO), formatter, result, rowNo);
+    BigDecimal supplyRatio = highestRule ? null : decimal(row, columns.get(HEADER_SUPPLY_RATIO), formatter, result, rowNo);
     if (result.getErrors().size() > errorsBefore) return null;
     if (!StringUtils.hasText(SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(materialCode))) {
       result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(rowNo, HEADER_MATERIAL_CODE,
@@ -187,7 +189,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     parsed.setSupplierName(supplierName);
     parsed.setSupplierCode(supplierCode);
     parsed.setSupplyRatio(supplyRatio);
-    parsed.setSelectionRule(text(row, columns.get(HEADER_RULE), formatter));
+    parsed.setSelectionRule(highestRule ? ratioText : text(row, columns.get(HEADER_RULE), formatter));
     return parsed;
   }
 

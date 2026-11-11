@@ -19,6 +19,10 @@ import lombok.Setter;
 @TableName("lp_make_part_price_gap_item")
 public class MakePartPriceGapItem {
 
+  @TableField(exist = false)
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private String displayReason;
+
   @TableId(type = IdType.AUTO)
   private Long id;
 

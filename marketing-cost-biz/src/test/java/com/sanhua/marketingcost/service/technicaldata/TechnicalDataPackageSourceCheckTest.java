@@ -22,10 +22,11 @@ class TechnicalDataPackageSourceCheckTest {
   private final MaterialMasterRawMapper materials = mock(MaterialMasterRawMapper.class);
   private final TechnicalDataSharedModules shared = mock(TechnicalDataSharedModules.class);
   private final com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails = mock(com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService.class);
+  private final com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper monthlySnapshots = mock(com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper.class);
   private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom = new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope(mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper.class), details, mock(com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.class));
   private final TechnicalDataPackageSourceCheck check = new TechnicalDataPackageSourceCheck(sources,
       drawings, details, materials, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), shared,
-      repriceBom, monthlyDetails);
+      repriceBom, monthlyDetails, monthlySnapshots);
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L, 2L, "OA", "2026-09", "COMMERCIAL",
       "PRODUCT", "产品", null, null, "210", "COMMERCIAL", LocalDate.of(2026, 9, 1), LocalDateTime.now());
 
@@ -60,6 +61,23 @@ class TechnicalDataPackageSourceCheckTest {
     assertThat(check.check(context, TechnicalDataAvailability.AVAILABLE).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
     when(sources.inspectProduct(anyString(), anyString(), anyString(), anyString())).thenThrow(new IllegalStateException("timeout"));
     assertThat(check.check(context, TechnicalDataAvailability.AVAILABLE).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
+  }
+
+  @Test void ordinaryCostingChecksTheFirstMonthlyBomInsteadOfTodaysReplacement() {
+    var snapshot=new com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot();snapshot.setId(61L);
+    snapshot.setSyncStatus("SUCCESS");snapshot.setActiveFlag(1);
+    when(monthlySnapshots.selectU9MonthlyByIdentity(anyString())).thenReturn(snapshot);
+    var parent=new com.sanhua.marketingcost.entity.BomRawHierarchy();parent.setMaterialCode("PK");
+    parent.setPriceOrgCode("210");parent.setPath("/PRODUCT/PK/");parent.setLevel(1);
+    var child=new com.sanhua.marketingcost.entity.BomRawHierarchy();child.setMaterialCode("OLD-BOX");
+    child.setParentCode("PK");child.setPriceOrgCode("210");child.setPath("/PRODUCT/PK/OLD-BOX/");child.setLevel(2);
+    when(monthlyDetails.load(61L)).thenReturn(List.of(parent,child));
+    var master=new com.sanhua.marketingcost.entity.MaterialMasterRaw();master.setMaterialCode("PK");master.setMainCategoryName("包装组件");
+    when(materials.selectByLatestBatchAndCodes(anyCollection(),isNull(),eq("COMMERCIAL"))).thenReturn(List.of(master));
+    var result=check.check(context,TechnicalDataAvailability.AVAILABLE);
+    assertThat(result.availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
+    assertThat(result.sourceReference()).isEqualTo("MONTHLY_BOM:61");
+    verifyNoInteractions(sources,drawings);
   }
 
   @Test void noU9BomCanSupplementPackagingWithoutRootTypeOrDrawing() {

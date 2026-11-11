@@ -103,6 +103,8 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
             call -> check(((ProductCostingRequest) call.getArgument(0)).oaFormItemId(), "SUCCESS"));
     when(batches.submit(anyString(), any(), anyString()))
         .thenReturn(new QuoteBatchCostRunResponse());
+    when(batches.submitForPreparation(anyString(), any(), anyString()))
+        .thenReturn(new QuoteBatchCostRunResponse());
   }
 
   @AfterEach
@@ -150,9 +152,17 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     var second=service.prepareAndCost(oaNo,request(items.getFirst()),"admin");
     assertThat(second.product().getPipelineStatus()).isEqualTo("SUCCESS");
     verifyNoInteractions(oa);
-    verify(pipeline,times(3)).prepare(any());
+    verify(pipeline,times(1)).prepare(any());
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_material_confirmation WHERE oa_form_id=?",Long.class,formId)).isZero();
     assertThat(jdbc.queryForObject("SELECT state FROM lp_oa_workflow_state WHERE workflow_request_id=?",String.class,requestId)).isEqualTo("COSTING");
+  }
+
+  @Test void wholeOrderQueues107ProductsWithoutSynchronouslyCheckingTheirSources() {
+    for (int n=3;n<=107;n++) jdbc.update(
+        "INSERT INTO oa_form_item(oa_form_id,seq,material_no) VALUES(?,?,?)",formId,n,"P"+n);
+    service.prepareAndCost(oaNo,request(null),"admin");
+    verify(pipeline,never()).prepare(any());
+    verify(pipeline,never()).execute(any());
   }
   @Test void anotherProductsMissingInputsDoNotBlockSingleProduct() {
     doReturn(check(items.getLast(),"BLOCKED")).when(pipeline).prepare(argThat(r->r != null && r.oaFormItemId().equals(items.getLast())));
@@ -160,9 +170,9 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     assertThat(single.product().getPipelineStatus()).isEqualTo("SUCCESS");
     assertThat(single.checks()).hasSize(1);
     var whole=service.prepareAndCost(oaNo,request(null),"admin");
-    assertThat(whole.preparation().status()).isEqualTo("WAITING_INPUT");
-    assertThat(whole.checks()).hasSize(2);
-    verifyNoInteractions(oa,batches);
+    assertThat(whole.batch()).isNotNull();
+    assertThat(whole.checks()).isEmpty();
+    verifyNoInteractions(oa);
     verify(pipeline,times(1)).execute(any());
   }
 
@@ -171,7 +181,7 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     doReturn(check(items.getLast(), "FAILED"))
         .when(pipeline)
         .prepare(argThat(r -> r != null && r.oaFormItemId().equals(items.getLast())));
-    var outcome = service.prepareAndCost(oaNo, request(null), "admin");
+    var outcome = service.prepareAndCost(oaNo, request(items.getLast()), "admin");
     assertThat(outcome.preparation().status()).isEqualTo("FAILED");
     assertThat(outcome.preparation().message()).contains("系统错误", "重试核算").doesNotContain("尚未齐全");
     verifyNoInteractions(oa, batches);
@@ -190,11 +200,12 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
         month,
         otherItem,
         "ITEM:" + otherItem + ":MONTH:" + month);
-    assertThat(service.state(oaNo).canCost()).isFalse();
+    assertThat(service.state(oaNo).canCost()).isTrue();
     assertThat(service.state(oaNo,items.getFirst()).canCost()).isTrue();
     var single=service.prepareAndCost(oaNo,request(items.getFirst()),"admin");
     assertThat(single.product().getPipelineStatus()).isEqualTo("SUCCESS");
-    assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("尚未全部成功提交");
+    assertThat(service.prepareAndCost(oaNo,request(null),"admin").batch()).isNotNull();
+    assertThat(service.prepareQueuedProduct(new ProductCostingRequest(oaNo,otherItem,month,"admin",false)).getPipelineStatus()).isEqualTo("BLOCKED");
   }
 
   @Test
@@ -209,14 +220,14 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
         month,
         items.getFirst(),
         "ITEM:" + items.getFirst() + ":MONTH:" + month);
-    assertThat(service.state(oaNo).canCost()).isFalse();
-    assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("尚未全部成功提交");
+    assertThat(service.state(oaNo).canCost()).isTrue();
+    assertThatThrownBy(()->service.prepareAndCost(oaNo,request(items.getFirst()),"admin")).hasMessageContaining("尚未全部成功提交");
     assertThatThrownBy(()->access.requireCostPublication(formId)).hasMessageContaining("尚未全部成功提交");
     verifyNoInteractions(oa,batches);
   }
   @Test void materialChangeAfterPreparationDoesNotStartCosting() {
     doReturn(java.util.Map.of()).when(contexts).resolveRevisions(any());
-    assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("资料已变化");
+    assertThatThrownBy(()->service.prepareAndCost(oaNo,request(items.getFirst()),"admin")).hasMessageContaining("资料已变化");
     verifyNoInteractions(oa,batches);verify(pipeline,never()).execute(any());
   }
   @ParameterizedTest
@@ -256,7 +267,7 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     } finally { jdbc.update("UPDATE sys_user SET status='0' WHERE user_id=1"); }
   }
   @Test void costingFailureCanRetryLocallyWithoutAnyOaSubmission() {
-    when(batches.submit(anyString(),any(),anyString())).thenThrow(new IllegalStateException("队列暂不可用"))
+    when(batches.submitForPreparation(anyString(),any(),anyString())).thenThrow(new IllegalStateException("队列暂不可用"))
         .thenReturn(new QuoteBatchCostRunResponse());
     assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("队列暂不可用");
     assertThat(service.prepareAndCost(oaNo,request(null),"admin").batch()).isNotNull();

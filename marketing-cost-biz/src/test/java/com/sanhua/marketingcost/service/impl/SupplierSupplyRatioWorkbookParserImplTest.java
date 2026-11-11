@@ -98,6 +98,20 @@ class SupplierSupplyRatioWorkbookParserImplTest {
     assertThat(result.getRows()).isEmpty();
   }
 
+  @Test void ratioColumnAcceptsExplicitHighestRuleAlongsideActualPercentages() throws Exception {
+    for (String rule : List.of("无供货比率，取最高价", "无供货比例,取最高价", "无供货比率时，取最高价")) {
+      var result = parser.parse(workbook("外壳", false, List.of(
+          List.of("供应商A", "S1", "外壳", "M1", "型号", "5%"),
+          List.of("供应商B", "S2", "外壳", "M2", "型号", rule))), "外壳.xlsx", null);
+      assertThat(result.getErrors()).isEmpty();
+      assertThat(result.getRows()).hasSize(2);
+      assertThat(result.getRows().getFirst().getSupplyRatio()).isEqualByComparingTo("0.05");
+      assertThat(result.getRows().getFirst().getSelectionRule()).isNull();
+      assertThat(result.getRows().getLast().getSupplyRatio()).isNull();
+      assertThat(result.getRows().getLast().getSelectionRule()).isEqualTo(rule);
+    }
+  }
+
   @Test void missingSupplierCodeIsAllowedAndMissingNameStillRejects() throws Exception {
     var result = parser.parse(workbook("供货比例", false, List.of(
         List.of("供应商甲", "", "物料", "M1", "规格", "0.6"),

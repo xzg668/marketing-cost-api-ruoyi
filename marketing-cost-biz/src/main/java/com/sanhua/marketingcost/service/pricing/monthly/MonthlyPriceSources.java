@@ -107,7 +107,9 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       var currentSupplemental=supplemental.read(context,Set.copyOf(pending));requireComplete(pending,currentSupplemental);
       var found=historicalSupplemental.fill(context,currentSupplemental);
       accept(found,pending,values,problems);
-      pending.forEach(request->problems.put(request,found.problems().get(request)));
+      // A last, empty supplemental lookup says nothing about earlier source restrictions.
+      pending.forEach(request->problems.computeIfAbsent(request,ignored->
+          new Problem(Failure.MISSING,"未取得可用价格，请核对各价格来源")));
     }
     return new Candidates(values,problems);
   }
@@ -173,8 +175,12 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     var missing=new LinkedHashSet<MonthlyPriceRequest>();
     requests.forEach(request->{var issue=problems.get(request);if(issue!=null && issue.reason()==Failure.MISSING)missing.add(request);});
     if(!missing.isEmpty()) {
-      var rest=next.apply(missing);requireComplete(missing,rest);missing.forEach(problems::remove);
-      values.putAll(rest.values());problems.putAll(rest.problems());
+      var rest=next.apply(missing);requireComplete(missing,rest);
+      rest.values().forEach((request,value)->{values.put(request,value);problems.remove(request);});
+      rest.problems().forEach((request,problem)->{
+        var previous=problems.get(request);
+        if(problem.reason()!=Failure.MISSING || !hasRestriction(previous))problems.put(request,problem);
+      });
     }
     return new Candidates(values,problems);
   }
@@ -188,7 +194,14 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     });
     found.problems().forEach((request,problem)->{
       if(problem.reason()!=Failure.MISSING){problems.put(request,problem);pending.remove(request);}
+      else if(hasRestriction(problem))problems.putIfAbsent(request,problem);
     });
+  }
+  private static boolean hasRestriction(Problem problem) {
+    if(problem==null || problem.message()==null)return false;
+    String message=problem.message();
+    return java.util.stream.Stream.of("主供","指定供应商","币种","税价口径","含税口径","规格不匹配",
+        "数量未命中","没有适用档位","未发布","未生效","尚未生效").anyMatch(message::contains);
   }
   private static void requireComplete(Set<MonthlyPriceRequest> requests,Candidates found) {
     if(requests.stream().anyMatch(request->!found.values().containsKey(request) && !found.problems().containsKey(request)))

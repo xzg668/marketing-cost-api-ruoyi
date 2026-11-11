@@ -8,6 +8,17 @@ import org.apache.ibatis.annotations.*;
 /** Single-table storage; range locks also serialize first use when no price exists yet. */
 @Mapper
 public interface MonthlyPriceStorageMapper {
+  @Select("""
+      <script>SELECT id FROM lp_supplier_supply_ratio
+      WHERE business_unit_type=#{unit} AND is_active=1 AND deleted=0 AND material_code IN
+      <foreach collection="codes" item="code" open="(" separator="," close=")">#{code}</foreach>
+        AND (effective_from IS NULL OR effective_from&lt;=#{date})
+        AND (effective_to IS NULL OR effective_to&gt;=#{date})
+      ORDER BY material_code,id FOR SHARE</script>
+      """)
+  List<Long> lockSupplierRatioVersions(@Param("unit") String unit,
+      @Param("date") java.time.LocalDate date,@Param("codes") Collection<String> codes);
+
   // Higher-priority adopted facts remain stable. Invoice imports invalidate only invoice and later fallbacks.
   String CURRENT = "disabled=0 AND superseded_by_finance_batch_id IS NULL AND (source_type NOT IN ('INVOICE','ODS_ORDER','INQUIRY','TECH_FIXED') OR invoice_revision=COALESCE((SELECT MAX(i.batch_id) FROM lp_invoice_price i WHERE i.business_unit_type=lp_material_monthly_price.business_unit_type AND i.material_code=lp_material_monthly_price.material_code AND (lp_material_monthly_price.organization_mask &amp; IF(i.org_code='210',1,2))!=0),0)) AND (source_type != 'HOUSEHOLD_INQUIRY' OR (household_revision>0 AND household_source_id=(SELECT h.id FROM lp_household_inquiry_price h JOIN lp_household_inquiry_import_batch hb ON hb.id=h.import_batch_id WHERE h.business_unit_type=lp_material_monthly_price.business_unit_type AND h.match_key=(SELECT original.match_key FROM lp_household_inquiry_price original WHERE original.id=lp_material_monthly_price.household_source_id) AND hb.status='PUBLISHED' AND hb.source_month &lt;= lp_material_monthly_price.pricing_month AND (h.material_code IS NOT NULL OR NOT EXISTS (SELECT 1 FROM lp_household_inquiry_price exact_source JOIN lp_household_inquiry_import_batch exact_batch ON exact_batch.id=exact_source.import_batch_id WHERE exact_source.business_unit_type=lp_material_monthly_price.business_unit_type AND exact_source.material_code=lp_material_monthly_price.material_code AND exact_batch.status='PUBLISHED' AND exact_batch.source_month &lt;= lp_material_monthly_price.pricing_month)) ORDER BY hb.source_month DESC,h.revision_no DESC LIMIT 1)))";
   @Select("SELECT id FROM lp_household_inquiry_price FORCE INDEX (uk_household_current_match) WHERE business_unit_type=#{unit} AND current_match=#{matchKey} FOR SHARE")

@@ -1,12 +1,16 @@
 package com.sanhua.marketingcost.service.costing;
 
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.entity.OaForm;
+import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteCurrentSuccessMatcher;
 import java.util.Optional;
+import java.util.Objects;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -40,6 +44,23 @@ public class ProductCostingSuccessLookup {
     if (!QuoteCurrentSuccessMatcher.matchesSaved(context.oaNo(), context.itemId(), context.periodMonth(),
         context.item(), workspace, version)) return Optional.empty();
     return Optional.of(reusable(version, workspace));
+  }
+
+  /** 仅展示产品上次确认的成本；本次重算未完成时仍可读，不用于复用或提交。 */
+  public Optional<QuoteCostRunVersion> findConfirmedForDisplay(OaForm form, OaFormItem item) {
+    if (form == null || item == null || item.getConfirmedCostVersionId() == null
+        || !Objects.equals(form.getId(), item.getOaFormId())
+        || !StringUtils.hasText(form.getBusinessUnitType())) return Optional.empty();
+    var version = versionMapper.selectById(item.getConfirmedCostVersionId());
+    if (version == null || !Objects.equals(item.getConfirmedCostVersionId(), version.getId())
+        || !Objects.equals(form.getOaNo(), version.getOaNo())
+        || !Objects.equals(item.getId(), version.getOaFormItemId())
+        || !Objects.equals(form.getBusinessUnitType(), version.getBusinessUnitType())
+        || !QuoteCostRunStatus.isCurrentSuccess(version.getStatus())
+        || version.getFinalQuoteAmount() == null || version.getFinalQuoteAmount().signum() < 0) {
+      return Optional.empty();
+    }
+    return Optional.of(version);
   }
 
   public Optional<ReusableCost> find(ProductCostingContext context) {

@@ -207,6 +207,22 @@ class ProductCostingPipelineImplTest {
   }
 
   @Test
+  void confirmedCurrentPricesContinueWithoutRebuildingBomOrGeneratingPricesAgain() {
+    stubReadyStages(0);
+    var prices = new QuotePricePrepareWorkbenchResponse();
+    prices.setSourceRevision("SOURCE-1");
+    prices.setReadiness(PricePrepareReadinessResult.ready("PPR-OA-1", MONTH, "SUCCESS"));
+    when(priceService.currentForCosting("OA-1", 11L, MONTH)).thenReturn(prices);
+    when(workbenchService.getWorkbench("OA-1", 11L)).thenReturn(workbench("DONE", "DONE", 0));
+    assertThat(pipeline.execute(request(false)).getPipelineStatus()).isEqualTo("SUCCESS");
+    verify(workbenchService, never()).launchWorkbench(anyString(), anyLong());
+    verify(priceService, never()).generate(anyString(), anyLong(), any());
+    verify(syncService).syncProduct("OA-1", 11L, MONTH);
+    verify(technicalSources, org.mockito.Mockito.atLeastOnce()).afterCosting(any());
+    verify(costService).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test
   @DisplayName("缺 BOM 停在 BOM 步骤且不进入取价")
   void missingBomStopsAtBom() {
     when(workbenchService.launchWorkbench("OA-1", 11L))
