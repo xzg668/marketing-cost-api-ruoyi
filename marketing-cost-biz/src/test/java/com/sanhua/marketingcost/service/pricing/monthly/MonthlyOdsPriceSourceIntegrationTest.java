@@ -171,11 +171,87 @@ class MonthlyOdsPriceSourceIntegrationTest {
     var base=request(code,"30000");var r=new MonthlyPriceRequest(base.family(),"210",base.conditions(),new BigDecimal("999"),base.annualUsagePieces());
     assertThat(selected(source.tiers(context("3","TEN_THOUSAND_PIECES"),Set.of(r)),r).fact().price()).isEqualByComparingTo("20");
   }
-  @Test void supplyRatioCannotSelectASupplierWhoseQuantityBandDoesNotMatch() {
+  @Test void primarySupplierUsesItsLowestTierWhenDemandIsBelowItsMinimum() {
     String code=code();tier(code,"S1","2026-01-01","2026-12-31","1","50000","10");tier(code,"S2","2026-01-01","2026-12-31","50000",null,"20");ratio(code,"S1","0.1");ratio(code,"S2","0.9");var r=request(code,"360000");
     var result=source.tiers(context("360000","PIECES"),Set.of(r));
+    assertThat(selected(result,r).fact().price()).isEqualByComparingTo("20");
+  }
+  @Test void smallAnnualDemandUsesTheLowestTierAndRetainsItsOriginalSourceBand() throws Exception {
+    String material=code();tier(material,"S1","2026-01-01","2026-12-31","9000","10000","0.06");
+    tier(material,"S1","2026-01-01","2026-12-31","10000",null,"0.05");
+    for(String annual:List.of("100","108000","119999.999999","120000")) {
+      var r=request(material,annual);var picked=selected(source.tiers(context(annual,"PIECES"),Set.of(r)),r);
+      assertThat(picked.fact().price()).isEqualByComparingTo("120000".equals(annual)?"0.05":"0.06");
+      if("100".equals(annual)) {
+        var evidence=new ObjectMapper().readTree(picked.fact().evidence().json());
+        assertThat(evidence.at("/source/selected/jietiDown").decimalValue()).isEqualByComparingTo("9000");
+      }
+    }
+  }
+  @Test void belowMinimumTierConvertsWanPiecesOnceAndUsesTheActualBomQuantity() {
+    String material=code();tier(material,"S1","2026-01-01","2026-12-31","9000",null,"0.06");
+    var base=request(material,"100");
+    var r=new MonthlyPriceRequest(base.family(),"210",base.conditions(),new BigDecimal("9"),base.annualUsagePieces());
+    var c=context("0.010","TEN_THOUSAND_PIECES");
+    var picked=selected(source.tiers(c,Set.of(r)),r);
+    assertThat(picked.fact().price()).isEqualByComparingTo("0.06");
+    assertThat(r.priceBasisQuantity()).isEqualByComparingTo("9");
+    assertThat(c.annualUsage().piecesIfKnown()).isEqualByComparingTo("100");
+  }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "201060082,9000,0.0593", "201308818,1000,2.88", "206800114,1000,6.003",
+      "206800115,1000,4.032", "206850008,1000,4.1865", "206850010,1000,0.4441"})
+  void reportedSmallDemandMaterialsUseTheirLowestRecordedBand(String referenceCode,String minimum,String price) {
+    String material=referenceCode+"-"+code();
+    tier(material,"S1","2026-01-01","2026-12-31",minimum,null,price);
+    var r=request(material,"100");
+    var picked=selected(source.tiers(context("0.010","TEN_THOUSAND_PIECES"),Set.of(r)),r);
+    assertThat(picked.fact().price()).isEqualByComparingTo(price);
+  }
+  @Test void lowestTierDoesNotFillAnInternalQuantityGap() {
+    String material=code();tier(material,"S1","2026-01-01","2026-12-31","9000","10000","0.06");
+    tier(material,"S1","2026-01-01","2026-12-31","20000",null,"0.05");
+    var r=request(material,"180000");var result=source.tiers(context("180000","PIECES"),Set.of(r));
     assertThat(result.values()).isEmpty();
-    assertThat(result.problems().get(r).reason()).isEqualTo(Failure.MISSING);
+    assertThat(result.problems().get(r).message()).isEqualTo("数量未命中阶梯");
+  }
+  @Test void adoptedLowestTierReusesSmallDemandAndKeepsTheNextTierSeparate() {
+    useTiers=true;String material=code();tier(material,"S1","2026-01-01","2026-12-31","9000","10000","0.06");
+    tier(material,"S1","2026-01-01","2026-12-31","10000",null,"0.05");
+    var r=request(material,"100");var c=context("0.010","TEN_THOUSAND_PIECES");
+    var picked=selected(operation.resolveCandidates(c,Set.of(r)),r);
+    var saved=operation.adopt(c,plan(r,picked)).plan().selections().get(r);
+    sourceCalls.set(0);
+    for(String annual:List.of("1","108000","119999.999999")) {
+      var next=request(material,annual);
+      var reused=selected(operation.resolveCandidates(context(annual,"PIECES"),Set.of(next)),next);
+      assertThat(reused.monthlyPriceId()).isEqualTo(saved.monthlyPriceId());
+    }
+    assertThat(sourceCalls.get()).isZero();
+    assertThat(operation.lookup(Set.of(request(material,"120000")))).satisfies(result ->
+        assertThat(result.missing()).hasSize(1));
+    assertThat(operation.readByIds("COMMERCIAL",Set.of(saved.monthlyPriceId())).get(saved.monthlyPriceId())).isEqualTo(saved);
+  }
+  @Test void extendingTheLowestTierPreservesAnAlreadyAdoptedOriginalBand() throws Exception {
+    useTiers=true;String material=code();tier(material,"S1","2026-01-01","2026-12-31","9000","10000","0.06");
+    var originalRequest=request(material,"108000");var originalContext=context("108000","PIECES");
+    var originalBand=new QuantityInterval(new BigDecimal("108000"),true,new BigDecimal("120000"),false);
+    var candidate=selected(source.tiers(originalContext,Set.of(originalRequest)),originalRequest);
+    var mapper=new ObjectMapper();var evidence=mapper.readTree(candidate.fact().evidence().json());
+    ((com.fasterxml.jackson.databind.node.ObjectNode)evidence.path("source"))
+        .set("annualDecisionRegions",mapper.valueToTree(List.of(originalBand)));
+    var previous=new Selection(null,MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of("210"),
+        QuantityInterval.all(),ConditionDomain.any(),AnnualUsageDomain.known(originalBand))),
+        PriceFact.normal(candidate.fact().price(),SourceEvidence.ofJson(mapper.writeValueAsString(evidence)),Set.of()));
+    var saved=operation.adopt(originalContext,plan(originalRequest,previous)).plan().selections().get(originalRequest);
+    var small=request(material,"100");var smallContext=context("100","PIECES");
+    var extended=selected(operation.resolveCandidates(smallContext,Set.of(small)),small);
+    var newlySaved=operation.adopt(smallContext,plan(small,extended)).plan().selections().get(small);
+    assertThat(newlySaved.monthlyPriceId()).isNotEqualTo(saved.monthlyPriceId());
+    assertThat(newlySaved.fact().price()).isEqualByComparingTo("0.06");
+    assertThat(operation.lookup(Set.of(originalRequest)).values().get(originalRequest)).isEqualTo(saved);
+    assertThat(operation.readByIds("COMMERCIAL",Set.of(saved.monthlyPriceId())).get(saved.monthlyPriceId())).isEqualTo(saved);
   }
   @Test void adoptedTierSurvivesSourceReplacementAndReusesOnlyItsApplicableDemand() {
     useTiers=true;String code=code();tier(code,"S1","2026-01-01","2026-12-31","1","20000","10");tier(code,"S1","2026-01-01","2026-12-31","20000",null,"20");

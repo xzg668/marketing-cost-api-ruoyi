@@ -126,11 +126,18 @@ public final class MonthlyOdsPriceSource {
       throw new IllegalArgumentException("阶梯数量未绑定当前报价成品明细的年用量");
     var latest=versions.values().stream().flatMap(List::stream).toList();
     var intervals=new IdentityHashMap<OdsMaterialPriceRow,QuantityInterval>();var bounds=new TreeSet<BigDecimal>();
+    var lowestBySupplier=new HashMap<String,BigDecimal>();
     for(var row:latest) {
       if(row.getJietiDown()==null || row.getJietiDown().signum()<0 || row.getPrice()==null || row.getPrice().signum()<0)
         throw new IllegalArgumentException("阶梯数量下限或价格无效");
+      lowestBySupplier.merge(row.getSupplierCode().strip(),row.getJietiDown(),BigDecimal::min);
+    }
+    for(var row:latest) {
+      // 最低档向下覆盖正数用量，选价依据继续保存原始数量档位。
+      var lower=row.getJietiDown().compareTo(lowestBySupplier.get(row.getSupplierCode().strip()))==0
+          ? BigDecimal.ZERO : row.getJietiDown();
       var interval=OdsTierAnnualUsage.annualBand(new QuantityInterval(
-          row.getJietiDown(),true,row.getJietiUp(),false));
+          lower,true,row.getJietiUp(),false));
       intervals.put(row,interval);bounds.add(interval.lower());if(interval.upper()!=null)bounds.add(interval.upper());
     }
     var decisions=new ArrayList<Decision>();
