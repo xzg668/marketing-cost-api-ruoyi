@@ -68,6 +68,14 @@ class SavedCostGapExportBrowserSession extends OriginalPricingIntegrationTestBas
       jdbc.update("UPDATE lp_quality_loss_rate SET bare_product_code=? WHERE bare_product_code=?",product+"-BARE",product);
       sources.comparisonFixedPrice(product+"-PART","2",date);
     }
+    jdbc.update("""
+        INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,
+          parent_material_no,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,
+          child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to,child_type)
+        SELECT source_import_batch_id,'U9',NOW(),price_org_code,parent_code,material_code,material_name,
+          '件',bom_purpose,bom_version,sort_seq,qty_per_parent,1,effective_from,effective_to,'NORMAL'
+        FROM lp_bom_raw_hierarchy WHERE top_product_code LIKE ? AND level>0
+        """,prefix+"-%");
     String actor="gap_"+UUID.randomUUID().toString().substring(0,8),password=UUID.randomUUID().toString();
     jdbc.update("INSERT INTO sys_user(user_name,nick_name,password,business_unit_type,status,del_flag,create_by,create_time,update_by,update_time) VALUES(?,'缺口导出验收',?,'COMMERCIAL','0','0','TEST',NOW(),'TEST',NOW())",actor,new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder().encode(password));
     long user=jdbc.queryForObject("SELECT user_id FROM sys_user WHERE user_name=?",Long.class,actor);
@@ -95,7 +103,7 @@ class SavedCostGapExportBrowserSession extends OriginalPricingIntegrationTestBas
       jdbc.update("UPDATE lp_quote_costing_workspace SET workspace_status='WAIT_PRICE',input_fingerprint='CHANGED-INPUT',last_error_code='PRICE_MISSING',last_error_message=?,gap_count=1 WHERE oa_form_item_id=? AND period_month=?",messages[0],ids.getFirst(),month);
       for(int n=2;n<7;n++) jdbc.update("INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,business_unit_type,workspace_status,current_step,gap_count,last_error_code,last_error_message) VALUES(?,?,?,?,'COMMERCIAL',?,'PRICE_PREPARE',1,'PRICE_MISSING',?)",prefix,ids.get(n),products.get(n),month,n==5?"SYSTEM_FAILED":"WAIT_PRICE",messages[n]);
       var status=finalCosts.status(prefix,month,new TechnicalDataActor(user,actor,Set.of("*:*:*")));
-      assertThat(status.costs().getFirst().totalCost()).isNotNull();assertThat(status.costs().getFirst().status()).isEqualTo("STALE");
+      assertThat(status.costs().getFirst().totalCost()).isNull();assertThat(status.costs().getFirst().status()).isEqualTo("STALE");
       assertThat(status.costs().get(1).status()).isEqualTo("READY");assertThat(status.readyProducts()).isEqualTo(1);
       assertThat(status.canConfirm()).isFalse();
       byte[] workbook=exports.export(prefix,QuoteCostingGapExportService.Category.RATIO);
@@ -121,7 +129,11 @@ class SavedCostGapExportBrowserSession extends OriginalPricingIntegrationTestBas
       });
       var values=new LinkedHashMap<String,Object>();values.put("apiPort",port);values.put("username",actor);values.put("password",password);
       values.put("oaNo",prefix);values.put("month",month);values.put("items",ids);values.put("products",products);values.put("versions",versions);values.put("ratioCode",ratio);
-      values.put("savedAmount",status.costs().getFirst().totalCost());
+      values.put("savedAmount",jdbc.queryForObject("SELECT final_quote_amount FROM lp_quote_cost_run_version WHERE id=?",java.math.BigDecimal.class,versions.getFirst()).toPlainString());
+      if(Boolean.getBoolean("gap.browser.realMissingPrice")) {
+        jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",products.getFirst()+"-PART");
+        jdbc.update("UPDATE lp_material_monthly_price SET disabled=1 WHERE material_code=?",products.getFirst()+"-PART");
+      }
       values.put("weightCode",weightCode);values.put("priceCode",price);
       var ds=(com.zaxxer.hikari.HikariDataSource)dataSource;
       values.put("jdbcUrl",ds.getJdbcUrl());values.put("dbUsername",ds.getUsername());values.put("dbPassword",ds.getPassword());

@@ -410,6 +410,24 @@ class QuoteRequestQueryServiceImplTest {
     });
   }
 
+  @Test void latestAttemptOutcomeIsNotOverwrittenByDifferenceFromPreviousSuccess() {
+    var form=form("OA-ATTEMPT", "FI-SC-020", "CONFIRMED");var product=item(41L,"MAT");product.setConfirmedCostVersionId(301L);
+    when(oaFormMapper.selectOne(any())).thenReturn(form);when(oaFormItemMapper.selectList(any())).thenReturn(List.of(product));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(List.of());when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    for(String state:List.of("WAIT_PRICE","WAIT_TECH_DATA","SYSTEM_FAILED","RUNNING","QUEUED")) {
+      var workspace=new QuoteCostingWorkspace();workspace.setOaFormItemId(41L);workspace.setWorkspaceStatus(state);
+      workspace.setPeriodMonth(CostPricingPeriodUtils.currentPricingMonth());workspace.setInputFingerprint("NEW");workspace.setLastSuccessInputFingerprint("OLD");
+      workspace.setLastErrorCode("PRICE_MISSING");workspace.setLastErrorMessage("原料价格待核对：301110039");
+      when(quoteCostingWorkspaceService.findAll(any(),any())).thenReturn(List.of(workspace));
+      var view=service.getRequestDetail("OA-ATTEMPT").getItems().getFirst().getCostingWorkspace();
+      assertThat(view.getWorkspaceStatus()).as(state).isEqualTo(state);
+      assertThat(view.getInputChanged()).as(state).isFalse();
+      assertThat(view.getLastErrorMessage()).isEqualTo(workspace.getLastErrorMessage());
+      assertThat(workspace.getWorkspaceStatus()).isEqualTo(state);
+    }
+  }
+
   @Test void completedProductDisplaysTheQuoterWhoSavedItsCost() {
     var form=form("OA-QUOTER", "FI-SC-006", "CONFIRMED");
     var product=item(155L,"1145900000048");product.setTechnicianName("技术员");

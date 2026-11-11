@@ -158,7 +158,7 @@ class QuoteFinalSubmissionPerformanceTest {
     assertThat(status.canConfirm()).isFalse();
   }
 
-  @Test void blockedRecalculationStillDisplaysLastConfirmedCostWithoutMakingItSubmittable() {
+  @Test void blockedRecalculationDoesNotExposeHistoricalAmountAsCurrentCost() {
     products(3, Set.of(1L, 2L));
     var first = items.selectById(1L);
     first.setConfirmedCostVersionId(44L);
@@ -167,11 +167,10 @@ class QuoteFinalSubmissionPerformanceTest {
     saved.setFinalQuoteAmount(new BigDecimal("7.11906600"));
     saved.setSourceRevision("saved-revision");
     // The workbench has a new price gap, while the successful version remains saved.
-    when(successes.findConfirmedForDisplay(form, first)).thenReturn(Optional.of(saved));
 
     var status = service.status(form.getOaNo(), "2026-11", actor);
-    assertThat(status.costs().getFirst().totalCost()).isEqualTo("7.11906600");
-    assertThat(status.costs().getFirst().costVersionId()).isEqualTo(44L);
+    assertThat(status.costs().getFirst().totalCost()).isNull();
+    assertThat(status.costs().getFirst().costVersionId()).isNull();
     assertThat(status.costs().getFirst().status()).isEqualTo("STALE");
     assertThat(status.costs().get(1).totalCost()).isNull();
     assertThat(status.costs().get(2).status()).isEqualTo("READY");

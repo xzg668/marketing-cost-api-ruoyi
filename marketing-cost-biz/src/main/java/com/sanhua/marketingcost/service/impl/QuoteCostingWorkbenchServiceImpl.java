@@ -292,7 +292,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   /** 读取时核对当前修订，只投影待重算状态；已确认版本和工作区原记录保持不变。 */
   private void reflectChangedInputs(OaForm form, OaFormItem item, String month,
       QuoteCostingWorkspace workspace, QuoteCostingWorkbenchResponse response) {
-    if (workspace == null) return;
+    if (workspace == null || com.sanhua.marketingcost.service.QuoteCostingStateProjection.hasCurrentAttemptState(workspace.getWorkspaceStatus())) return;
     String captured = firstText(workspace.getLastSuccessSourceRevision(), workspace.getSourceRevision());
     if (!StringUtils.hasText(captured)
         || captured.equals(inputRevisions.currentRevision(form, item, month))) return;
@@ -531,7 +531,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setWorkspaceStatus(workspace.getWorkspaceStatus());
     response.setCurrentStep(workspace.getCurrentStep());
     response.setInputChanged(
-        StringUtils.hasText(workspace.getInputFingerprint())
+        !com.sanhua.marketingcost.service.QuoteCostingStateProjection.hasCurrentAttemptState(workspace.getWorkspaceStatus())
+            && StringUtils.hasText(workspace.getInputFingerprint())
             && StringUtils.hasText(workspace.getLastSuccessInputFingerprint())
             && !workspace.getInputFingerprint().equals(workspace.getLastSuccessInputFingerprint()));
     response.setGapCount(workspace.getGapCount());

@@ -215,6 +215,24 @@ class QuoteCostingWorkbenchServiceImplTest {
     verifyNoInteractions(costRunVersionInvalidationService);
   }
 
+  @Test void latestAttemptStateSurvivesChangedSourceProjection() {
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L,"FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001",10L,"FIN-001",SAMPLE_PERIOD_MONTH)).thenReturn(List.of(row(10L,"FIN-001","MAT-1")));
+    when(inputRevisions.currentRevision(any(),any(),eq(SAMPLE_PERIOD_MONTH))).thenReturn("new-input");
+    for(String status:List.of("WAIT_PRICE","WAIT_TECH_DATA","SYSTEM_FAILED","RUNNING","QUEUED")) {
+      var workspace=new QuoteCostingWorkspace();workspace.setWorkspaceStatus(status);workspace.setSourceRevision("new-input");
+      workspace.setLastSuccessSourceRevision("old-input");workspace.setInputFingerprint("new-input");workspace.setLastSuccessInputFingerprint("old-input");workspace.setCurrentCostVersionId(77L);
+      when(workspaceService.find(10L,SAMPLE_PERIOD_MONTH)).thenReturn(Optional.of(workspace));
+      var result=service.getWorkbench("OA-001",10L);
+      assertThat(result.getCostingWorkspace().getWorkspaceStatus()).as(status).isEqualTo(status);
+      assertThat(result.getCostingWorkspace().getInputChanged()).isFalse();
+      assertThat(workspace.getCurrentCostVersionId()).isEqualTo(77L);
+    }
+    verify(workspaceService,never()).update(any(),anyInt());
+  }
+
   @Test
   void existingSnapshotDoesNotBuildAgain() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());

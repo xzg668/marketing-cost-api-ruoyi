@@ -67,32 +67,4 @@ class ProductCostingSuccessLookupTest {
     assertThat(version.getFinalQuoteAmount()).isEqualByComparingTo("32.93162700");
   }
 
-  @Test void displayKeepsConfirmedCostWhenRecalculationIsBlockedOrRunning() {
-    for (String status : java.util.List.of("WAIT_PRICE", "SYSTEM_FAILED", "RUNNING", "STALE")) {
-      workspace.setWorkspaceStatus(status);workspace.setInputFingerprint("CHANGED-INPUT");
-      assertThat(lookup.findSaved(context)).isEmpty();
-      assertThat(lookup.findConfirmedForDisplay(form, item)).contains(version);
-    }
-    assertThat(version.getFinalQuoteAmount()).isEqualByComparingTo("32.93162700");
-  }
-
-  @Test void displayRejectsForeignIncompleteAndInvalidConfirmedVersions() {
-    version.setOaNo("ANOTHER-QUOTE");assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
-    version.setOaNo(form.getOaNo());version.setOaFormItemId(156L);
-    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
-    version.setOaFormItemId(item.getId());version.setBusinessUnitType("HOUSEHOLD");
-    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
-    version.setBusinessUnitType("COMMERCIAL");
-    for (String status : java.util.List.of("RUNNING", "TRIAL", "VOIDED")) {
-      version.setStatus(status);assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
-    }
-    version.setStatus("SUCCESS");version.setFinalQuoteAmount(null);
-    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
-    version.setFinalQuoteAmount(new BigDecimal("-0.01"));
-    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
-    version.setFinalQuoteAmount(BigDecimal.ZERO);
-    assertThat(lookup.findConfirmedForDisplay(form, item)).contains(version);
-    item.setConfirmedCostVersionId(null);
-    assertThat(lookup.findConfirmedForDisplay(form, item)).isEmpty();
-  }
 }

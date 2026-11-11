@@ -173,12 +173,9 @@ public class QuoteFinalSubmissionService {
         result.add(new CostLine(item.getId(), product, version.getId(), version.getVersionNo(), version.getFinalQuoteAmount().toPlainString(),
             shipping, version.getSourceRevision(), version.getTechDataInputJson(), item.getBusinessType(), rowIds.get(item.getId()), item.getSeq(), "READY", null));
       } catch (IllegalArgumentException | IllegalStateException | QuoteIngestException failure) {
-        // 本次资料不齐不删除上次成功金额；STALE 仍不计入可提交成本。
-        var saved = successes.findConfirmedForDisplay(form, item).orElse(null);
-        result.add(new CostLine(item.getId(), product, saved == null ? null : saved.getId(),
-            saved == null ? null : saved.getVersionNo(),
-            saved == null ? null : saved.getFinalQuoteAmount().toPlainString(), shipping,
-            saved == null ? null : saved.getSourceRevision(), saved == null ? null : saved.getTechDataInputJson(), item.getBusinessType(),
+        // No valid current result: historical costs remain in their saved-version reader.
+        result.add(new CostLine(item.getId(), product, null, null, null, shipping,
+            null, null, item.getBusinessType(),
             rowIds.get(item.getId()), item.getSeq(), item.getConfirmedCostVersionId() != null ? "STALE" : "NOT_READY", failure.getMessage()));
       }
     }

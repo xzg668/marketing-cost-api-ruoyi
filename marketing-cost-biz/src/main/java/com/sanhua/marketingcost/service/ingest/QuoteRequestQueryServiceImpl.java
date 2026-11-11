@@ -615,7 +615,8 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     }
 
     boolean inputChanged =
-        StringUtils.hasText(workspace.getInputFingerprint())
+        !com.sanhua.marketingcost.service.QuoteCostingStateProjection.hasCurrentAttemptState(workspace.getWorkspaceStatus())
+            && StringUtils.hasText(workspace.getInputFingerprint())
             && StringUtils.hasText(workspace.getLastSuccessInputFingerprint())
             && !workspace.getInputFingerprint().equals(workspace.getLastSuccessInputFingerprint());
     response.setWorkspaceStatus(inputChanged ? "STALE" : workspace.getWorkspaceStatus());
