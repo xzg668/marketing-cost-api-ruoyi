@@ -98,6 +98,14 @@ class MonthlyFixedPriceSourceIntegrationTest {
       assertThat(c.supplierReviews().reviews()).as(material).isEmpty();
     }
   }
+  @Test void onlyCurrentSupplierIsUsedDespiteAnExpiredSupplierConfiguredAtOneHundredPercent() {
+    String code=code();price(code,"210","CURRENT","10","2026-10-01","2026-11-30");
+    price(code,"210","EXPIRED","99","2025-01-01","2025-12-31");
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_code,supplier_name,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC','EXPIRED','EXPIRED',1,1,0)",code);
+    var request=request(code,"210");var result=source.read(context(),Set.of(request));
+    assertThat(result.problems()).isEmpty();
+    assertThat(result.values().get(request).selection().fact().price()).isEqualByComparingTo("10");
+  }
   @Test void currentFixedVersionWinsOverFutureVersionOfSameSupplier() {
     String code=code();price(code,"210","S1","88","2026-10-01","2026-11-30");
     price(code,"210","S1","10","2026-12-01","2027-12-31");

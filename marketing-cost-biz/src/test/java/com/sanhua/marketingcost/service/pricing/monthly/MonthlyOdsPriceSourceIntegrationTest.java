@@ -84,6 +84,7 @@ class MonthlyOdsPriceSourceIntegrationTest {
   @Test void mainSupplierContinuesPastFixedToItsOrderPrice() {
     String material=code();var request=request(material,null);var c=context(null,null);
     MonthlyFixedPriceSourceIntegrationTest.price(material,"210","OTHER","1057.5221","2025-01-01","2025-12-31");
+    MonthlyFixedPriceSourceIntegrationTest.price(material,"210","SECOND","1050","2025-01-01","2025-12-31");
     ratio(material,"MAIN","1");order(material,"MAIN",null,"1094.6903");
     var fixed=MonthlyFixedPriceSourceIntegrationTest.source.read(c,Set.of(request));
     assertThat(fixed.values()).isEmpty();assertThat(fixed.problems().get(request).reason()).isEqualTo(Failure.MISSING);
@@ -104,6 +105,7 @@ class MonthlyOdsPriceSourceIntegrationTest {
     String code=code();order(code,"CURRENT","2026-01-01","10");
     order(code,"EXPIRED","2025-01-01","99");order(code,"FUTURE","2027-01-01","88");
     jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET exp_date='2025-12-31' WHERE material_code=? AND supply_code='EXPIRED'",code);
+    ratio(code,"EXPIRED","1");
     var r=request(code,null);var c=context(null,null);var result=source.orders(c,Set.of(r));
     assertThat(selected(result,r).fact().price()).isEqualByComparingTo("10");
     assertThat(c.supplierReviews().reviews()).isEmpty();
@@ -113,6 +115,7 @@ class MonthlyOdsPriceSourceIntegrationTest {
     tier(code,"CURRENT","2026-01-01","2026-12-31","20000",null,"10");
     tier(code,"CURRENT","2027-01-01","2027-12-31","1",null,"88");
     tier(code,"EXPIRED","2025-01-01","2025-12-31","1",null,"99");
+    ratio(code,"EXPIRED","1");
     var r=request(code,"360000");var c=context("360000","PIECES");var result=source.tiers(c,Set.of(r));
     assertThat(selected(result,r).fact().price()).isEqualByComparingTo("10");
     assertThat(c.supplierReviews().reviews()).isEmpty();

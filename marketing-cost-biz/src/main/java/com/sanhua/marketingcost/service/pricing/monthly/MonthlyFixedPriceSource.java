@@ -45,8 +45,8 @@ public final class MonthlyFixedPriceSource {
           try{
             String requested=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
             var scoped=requested==null?candidates:candidates.stream().filter(row->requested.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()))).toList();
-            scoped=SupplierRatioPricePolicy.forPrimarySupplier(scoped,ratios.getOrDefault(code,List.of()),PriceFixedItem::getSupplierCode,PriceFixedItem::getSupplierName);
             var preferred=SupplyPriceDatePolicy.preferCurrentOrLatestPeriod(scoped,context.priceAsOfTime().toLocalDate(),PriceFixedItem::getEffectiveFrom,PriceFixedItem::getEffectiveTo);
+            preferred=SupplierRatioPricePolicy.forPrimarySupplier(preferred,ratios.getOrDefault(code,List.of()),PriceFixedItem::getSupplierCode,PriceFixedItem::getSupplierName);
             var versions=versions(preferred);
             if(versions.isEmpty())continue;
             var active=List.copyOf(versions.values());for(var row:active)validateBasis(request,row);

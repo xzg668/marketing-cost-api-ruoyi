@@ -73,6 +73,11 @@ public class SupplierPriceSelectionService {
       List<SupplierSupplyRatio> active,java.util.function.Supplier<SupplierPriceDecision> readDecision,
       boolean packagingHighestFallback){
     int originalCount = candidates.size();
+    var perSupplier = highestPerSupplier(candidates);
+    // Count quoted suppliers before consulting ratios or excluding a configured supplier.
+    if (perSupplier.size() == 1) return new Selection(perSupplier.getFirst(), null,
+        originalCount > 1 ? "SAME_SUPPLIER_HIGH" : "SINGLE",
+        originalCount > 1 ? "同一供应商存在多条有效价格，取最高价" : "单一供应商，直接取价", null);
     var primary=SupplierRatioPricePolicy.primarySuppliers(active);
     if(!primary.isEmpty()) {
       candidates=SupplierRatioPricePolicy.forPrimarySupplier(candidates,active,
@@ -80,15 +85,10 @@ public class SupplierPriceSelectionService {
       if(candidates.isEmpty())return new Selection(null,null,NO_PRIMARY_SUPPLIER_PRICE,
           "本价格来源没有供货比率主供方的价格，继续查找后续来源",null);
       var chosen=SupplierRatioPricePolicy.highest(highestPerSupplier(candidates));
-      return new Selection(chosen,SupplierRatioPricePolicy.match(SupplierRatioPricePolicy.index(primary),chosen),
+      return new Selection(chosen,SupplierRatioPricePolicy.match(SupplierRatioPricePolicy.index(active),chosen),
           "RATIO_MAX","先按供货比率确定主供方，再采用该方价格；比率并列时取最高价",null);
     }
-    candidates = highestPerSupplier(candidates);
-    // A unique valid quotation is sufficient; a zero/missing ratio is not a price invalidation.
-    if (candidates.size() == 1 && originalCount > 1) return new Selection(candidates.getFirst(), null,
-        "SAME_SUPPLIER_HIGH", "同一供应商存在多条有效价格，取最高价", null);
-    if (candidates.size() == 1) return new Selection(candidates.getFirst(), null,
-        "SINGLE", "单一供应商，直接取价", null);
+    candidates = perSupplier;
     if (samePrice(candidates)) {
       // 同一有效取价范围内价格一致，不需要供货比率或人工确认；沿用稳定的供应商并列顺序。
       var same = SupplierRatioPricePolicy.highest(candidates);

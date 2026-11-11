@@ -46,6 +46,8 @@ public final class MonthlyInvoicePriceSource {
             .filter(row->family.currency().equals(row.get("currency")))
             .filter(row->family.requestedSupplierCode()==null || family.requestedSupplierCode().equals(row.get("supplier_code")))
             .filter(row->family.taxBasis()==TaxBasis.EXCLUDED).toList();
+        boolean singleSupplier=com.sanhua.marketingcost.service.pricing.SupplierRatioPricePolicy.hasSingleSupplier(applicable,
+            row->Objects.toString(row.get("supplier_code"),null),row->Objects.toString(row.get("supplier_name"),null));
         var actualRatios=ratios.getOrDefault(request.materialCode(),List.of());
         applicable=com.sanhua.marketingcost.service.pricing.SupplierRatioPricePolicy.forPrimarySupplier(applicable,actualRatios,
             row->Objects.toString(row.get("supplier_code"),null),row->Objects.toString(row.get("supplier_name"),null));
@@ -55,7 +57,7 @@ public final class MonthlyInvoicePriceSource {
         var selected=new LinkedHashMap<>(applicable.getFirst());
         selected.put("supplierCode",selected.get("supplier_code"));selected.put("supplierName",selected.get("supplier_name"));
         var snapshot=Map.of("snapshotSchema",1,"sourceKind","INVOICE","source",Map.of("selected",selected,
-            "candidates",applicable,"ratios",actualRatios,"selectionRule",com.sanhua.marketingcost.service.pricing.SupplierRatioPricePolicy.primarySuppliers(actualRatios).isEmpty()?"LATEST_IMPORT_THEN_HIGHEST":"RATIO_MAX"));
+            "candidates",applicable,"ratios",actualRatios,"selectionRule",singleSupplier || com.sanhua.marketingcost.service.pricing.SupplierRatioPricePolicy.primarySuppliers(actualRatios).isEmpty()?"LATEST_IMPORT_THEN_HIGHEST":"RATIO_MAX"));
         var fact=PriceFact.normal((BigDecimal)selected.get("unit_price"),SourceEvidence.ofJson(codec.unwrap(codec.encode(snapshot))),Set.of());
         var coverage=MonthlyPriceApplicability.of(new MonthlyPriceCoverage(Set.of(request.priceOrgCode()),QuantityInterval.all(),ConditionDomain.any()));
         values.put(request,new Candidate(new Selection(null,coverage,fact),null));

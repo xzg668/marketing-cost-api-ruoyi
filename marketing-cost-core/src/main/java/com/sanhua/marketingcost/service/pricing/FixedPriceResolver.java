@@ -79,9 +79,10 @@ public class FixedPriceResolver implements PriceResolver {
         context == null ? null : context.getPricingMonth(), priceDate, orgCode, code, "FIXED");
     var activeRatios=supplierPriceSelectionService.activeRatios(scope);
     List<PriceFixedItem> rows = SupplyPriceDatePolicy.preferCurrentOrLatestPeriod(
-        SupplierRatioPricePolicy.forPrimarySupplier(selectRows(code, orgCode, context),activeRatios,
-            PriceFixedItem::getSupplierCode,PriceFixedItem::getSupplierName), priceDate,
+        selectRows(code, orgCode, context), priceDate,
         PriceFixedItem::getEffectiveFrom, PriceFixedItem::getEffectiveTo);
+    rows = SupplierRatioPricePolicy.forPrimarySupplier(rows, activeRatios,
+        PriceFixedItem::getSupplierCode, PriceFixedItem::getSupplierName);
     var bySupplier = new LinkedHashMap<String, PriceFixedItem>();
     for (PriceFixedItem row : rows) {
       if (row.getFixedPrice() == null) continue;

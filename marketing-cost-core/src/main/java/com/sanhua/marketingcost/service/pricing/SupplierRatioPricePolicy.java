@@ -25,11 +25,27 @@ public final class SupplierRatioPricePolicy {
 
   public static <T> List<T> forPrimarySupplier(List<T> rows,List<SupplierSupplyRatio> ratios,
       Function<T,String> code,Function<T,String> name) {
+    // Source rows are already scoped to the requested material and price conditions.
+    // A sole quoted supplier is usable even when another supplier is configured as primary.
+    if (hasSingleSupplier(rows, code, name)) return rows;
     var primary=primarySuppliers(ratios);
     if(primary.isEmpty())return rows;
-    var bySupplier=index(primary);
-    return rows.stream().filter(row->match(bySupplier,new SupplierPriceCandidate("",code.apply(row),
-        name.apply(row),BigDecimal.ZERO,null,null))!=null).toList();
+    // Resolve names against the complete relation set before applying the primary constraint.
+    var bySupplier=index(ratios);
+    return rows.stream().filter(row->primary.contains(match(bySupplier,new SupplierPriceCandidate("",code.apply(row),
+        name.apply(row),BigDecimal.ZERO,null,null)))).toList();
+  }
+
+  public static <T> boolean hasSingleSupplier(List<T> rows, Function<T,String> code, Function<T,String> name) {
+    var identities = new java.util.HashSet<String>();
+    for (T row : rows) {
+      String supplierCode = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(code.apply(row));
+      String supplierName = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(name.apply(row));
+      if (supplierCode == null && supplierName == null) return false;
+      identities.add(com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.supplierIdentity(supplierCode, supplierName));
+      if (identities.size() > 1) return false;
+    }
+    return identities.size() == 1;
   }
 
   public static SupplierPriceCandidate choose(
@@ -96,6 +112,38 @@ public final class SupplierRatioPricePolicy {
     SupplierSupplyRatio exact = code == null ? null : ratios.get("CODE:" + code);
     if (exact != null) return exact;
     String name = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(candidate.supplierName());
-    return name == null ? null : ratios.get("NAME:" + name);
+    if (name == null) return null;
+    // Explicit, conflicting codes must never be replaced by a name match.
+    if (code != null) return ratios.get("NAME:" + name);
+    int highest=0;
+    var matches=new java.util.TreeMap<String,SupplierSupplyRatio>();
+    for (var row : ratios.values()) {
+      int score=nameScore(name,row.getSupplierName());
+      if(score>highest){highest=score;matches.clear();}
+      if(score>0 && score==highest)matches.put(
+          com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.supplierIdentity(row.getSupplierCode(),row.getSupplierName()),row);
+    }
+    if(matches.size()>1)throw new IllegalArgumentException("供应商名称无法唯一匹配，请补齐供应商编码："+name+"，候选="+String.join("、",matches.keySet()));
+    return matches.isEmpty()?null:matches.firstEntry().getValue();
+  }
+
+  private static int nameScore(String requested,String actual) {
+    String left=normalizedName(requested),right=normalizedName(actual);
+    if(left.isEmpty() || right.isEmpty())return 0;
+    if(left.equals(right))return 10000;
+    left=companyCore(left);right=companyCore(right);
+    if(left.isEmpty() || right.isEmpty())return 0;
+    if(left.equals(right))return 9000;
+    int shorter=Math.min(left.length(),right.length()),longer=Math.max(left.length(),right.length());
+    return shorter>=2 && (left.contains(right) || right.contains(left))?1000+shorter*1000/longer:0;
+  }
+  private static String normalizedName(String name) {
+    return name==null?"":java.text.Normalizer.normalize(name,java.text.Normalizer.Form.NFKC)
+        .toUpperCase(java.util.Locale.ROOT).replaceAll("[\\s\\p{P}\\u3000]+","");
+  }
+  private static String companyCore(String name) {
+    for(String suffix:List.of("股份有限公司","有限责任公司","有限公司","公司"))
+      if(name.endsWith(suffix))return name.substring(0,name.length()-suffix.length());
+    return name;
   }
 }

@@ -94,9 +94,9 @@ public final class MonthlyOdsPriceSource {
 
   private Candidate order(Context context,MonthlyPriceRequest request,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,SupplierPriceDecision decision,Map<MonthlyPriceRequest,Problem> problems) {
-    raw=SupplierRatioPricePolicy.forPrimarySupplier(raw,ratios,OdsMaterialPriceRow::getSupplierCode,OdsMaterialPriceRow::getSupplierName);
     raw=SupplyPriceDatePolicy.preferCurrent(raw,context.priceAsOfTime().toLocalDate(),
         row->date(row.getEffDate()),row->date(row.getExpDate()));
+    raw=SupplierRatioPricePolicy.forPrimarySupplier(raw,ratios,OdsMaterialPriceRow::getSupplierCode,OdsMaterialPriceRow::getSupplierName);
     var versions=OdsOrderPriceVersions.latestPerSupplier(raw.stream().map(row->
         new OdsOrderPriceVersions.Price(row.getSupplierCode(),date(row.getEffDate()),date(row.getExpDate()),row.getPrice(),row.getSource())).toList());
     var active=new TreeMap<String,OdsMaterialPriceRow>();
@@ -117,14 +117,15 @@ public final class MonthlyOdsPriceSource {
 
   private Candidate tier(Context context,MonthlyPriceRequest request,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,SupplierPriceDecision approval,Map<MonthlyPriceRequest,Problem> problems) {
-    raw=SupplierRatioPricePolicy.forPrimarySupplier(raw,ratios,OdsMaterialPriceRow::getSupplierCode,OdsMaterialPriceRow::getSupplierName);
     var versions=OdsTierPriceVersions.latestPerSupplier(raw,context.priceAsOfTime().toLocalDate());
     if(versions.isEmpty())return null; // No applicable tier rows: annual usage cannot block a later source.
+    var latest=SupplierRatioPricePolicy.forPrimarySupplier(versions.values().stream().flatMap(List::stream).toList(),
+        ratios,OdsMaterialPriceRow::getSupplierCode,OdsMaterialPriceRow::getSupplierName);
+    if(latest.isEmpty())return null;
     var usage=context.annualUsage();
     var demand=OdsTierAnnualUsage.require(usage==null?null:usage.value(),usage==null?null:usage.unit());
     if(request.annualUsagePieces()==null || demand.annualPieces().compareTo(request.annualUsagePieces())!=0)
       throw new IllegalArgumentException("阶梯数量未绑定当前报价成品明细的年用量");
-    var latest=versions.values().stream().flatMap(List::stream).toList();
     var intervals=new IdentityHashMap<OdsMaterialPriceRow,QuantityInterval>();var bounds=new TreeSet<BigDecimal>();
     var lowestBySupplier=new HashMap<String,BigDecimal>();
     for(var row:latest) {

@@ -67,10 +67,13 @@ class SupplierPriceSelectionServiceTest {
     assertThat(service.selectPrepared(scope, List.of(publicPrice), List.of(), null).candidate()).isEqualTo(publicPrice);
   }
 
-  @Test void absentMainSupplierContinuesToTheNextSourceEvenWithOneOrEqualPrices() {
+  @Test void soleSupplierBypassesMainConfigurationButMultipleSuppliersStillRequireIt() {
     var main=List.of(ratio("MAIN","1"));
-    for(var candidates:List.of(List.of(candidate("OTHER","1057.5221")),
-        List.of(candidate("OTHER","10"),candidate("ANOTHER","10")))) {
+    var single=service.selectPrepared(scope,List.of(candidate("OTHER","1057.5221")),main,null);
+    assertThat(single.candidate().supplierCode()).isEqualTo("OTHER");
+    assertThat(single.rule()).isEqualTo("SINGLE");
+    assertThat(single.ratio()).isNull();
+    for(var candidates:List.of(List.of(candidate("OTHER","10"),candidate("ANOTHER","10")))) {
       var selected=service.selectPrepared(scope,candidates,main,null);
       assertThat(selected.candidate()).isNull();
       assertThat(selected.rule()).isEqualTo(SupplierPriceSelectionService.NO_PRIMARY_SUPPLIER_PRICE);

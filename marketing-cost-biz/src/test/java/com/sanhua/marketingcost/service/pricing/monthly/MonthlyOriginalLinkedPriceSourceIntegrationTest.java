@@ -273,6 +273,31 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     String code=code();String month=unknownLegacyIdentity?"2026-11":"2026-02";publication("HOUSEHOLD",month,"210");rule(code,"HOUSEHOLD",month,"210","S1","[cu]+5",false);var other=new MaterialPriceRuleKey("HOUSEHOLD","210",code,"S1","S1","OTHER","KG");
     jdbc.update("INSERT INTO lp_price_linked_item(pricing_month,org_code,supplier_code,supplier_name,material_code,material_name,spec_model,unit,formula_expr,tax_included,effective_from,effective_to,business_unit_type,source_kind,rule_identity_key,rule_revision,rule_status,expression_version,created_at,updated_at) VALUES(?,'210','S1','S1',?,'legacy other identity','OTHER','KG','[old_variable]',0,?,?,'HOUSEHOLD','PUBLIC',?,1,'PUBLISHED','LEGACY',NOW(),NOW())",month,code,YearMonth.parse(month).atDay(1),LocalDate.of(2099,1,1),unknownLegacyIdentity?null:other.identityKey());publish("HOUSEHOLD","210");var r=request(code,"HOUSEHOLD",month,"210",NonCuConditions.empty());var result=operation.resolveCandidates(context("HOUSEHOLD",month,"210"),Set.of(r));assertThat(result.problems()).isEmpty();assertThat(result.values().get(r).selection().fact().price()).isEqualByComparingTo("105");
   }
+  @Test void soleQuotedSupplierCanBeAdoptedWhenAnotherSupplierIsConfiguredAtOneHundredPercent() {
+    String code=code(),month="2059-01";
+    publication("COMMERCIAL",month,"210");
+    var original=rule(code,"COMMERCIAL",month,"210","S000052","浙江科宇金属材料有限公司","58.384778761061946903",false);
+    publish("COMMERCIAL","210");
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'圆形黄铜棒','C3604BDS Φ11','丰山（连云港）新材料有限公司','S001315',1,1,0)",code);
+    var sourceBefore=jdbc.queryForList("SELECT * FROM lp_price_linked_item WHERE material_code=?",code);
+    var effectiveBefore=jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=?",code);
+    var ratioBefore=jdbc.queryForList("SELECT * FROM lp_supplier_supply_ratio WHERE material_code=?",code);
+    var request=request(code,"COMMERCIAL",month,"210",NonCuConditions.empty());var context=context("COMMERCIAL",month,"210");
+    var result=operation.resolveCandidates(context,Set.of(request));
+    assertThat(result.problems()).isEmpty();
+    var chosen=result.values().get(request).selection();
+    assertThat(chosen.fact().price()).isEqualByComparingTo("58.384778761061946903");
+    var captured=codec.decode(codec.wrap(chosen.fact().evidence().json()),MonthlyOriginalLinkedPriceSource.Snapshot.class);
+    assertThat(captured.source().selected().getId()).isEqualTo(original.getId());
+    assertThat(captured.source().selectionRule()).isEqualTo("SINGLE");
+    var adopted=operation.adopt(context,plan(request,chosen));
+    var id=adopted.plan().selections().get(request).monthlyPriceId();
+    assertThat(id).isNotNull();
+    assertThat(operation.resolveCandidates(context,Set.of(request)).values().get(request).selection().monthlyPriceId()).isEqualTo(id);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_price_linked_item WHERE material_code=?",code)).isEqualTo(sourceBefore);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=?",code)).isEqualTo(effectiveBefore);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_supplier_supply_ratio WHERE material_code=?",code)).isEqualTo(ratioBefore);
+  }
   @Test void singleSupplierWithZeroRatioUsesItsPublishedPriceWithoutRegeneration() {
     String code=code(),month="2040-01"; publication("COMMERCIAL",month,"210"); rule(code,"COMMERCIAL",month,"210","S1","100",false); publish("COMMERCIAL","210");
     var before=jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=? ORDER BY id",code);
@@ -294,6 +319,32 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     var included=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(request.family().month(),"COMMERCIAL",code,"SPEC","件","CNY",TaxBasis.INCLUDED,null),"210",NonCuConditions.empty(),BigDecimal.ONE);
     assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(included)).problems().get(included).reason())
         .isEqualTo(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+  }
+
+  @Test void originalWithoutSupplierCodeUsesTheCodedPrimaryRatioAndKeepsSavedEvidence() {
+    String material=code(),month="2055-02",name="杭州华光焊接新材料股份有限公司";
+    publication("COMMERCIAL",month,"210");
+    var original=rule(material,"COMMERCIAL",month,"210","",name,"[cu]+5",false);
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC',?,'S000332',1,1,0)",material,name);
+    publish("COMMERCIAL","210");
+    var before=jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=? ORDER BY id",material);
+    var request=request(material,"COMMERCIAL",month,"210",NonCuConditions.empty());
+    var ctx=context("COMMERCIAL",month,"210");
+    var candidates=operation.resolveCandidates(ctx,Set.of(request));
+    assertThat(candidates.problems()).isEmpty();
+    var selected=candidates.values().get(request).selection();
+    assertThat(selected.fact().price()).isEqualByComparingTo("105");
+    var captured=codec.decode(codec.wrap(selected.fact().evidence().json()),MonthlyOriginalLinkedPriceSource.Snapshot.class);
+    assertThat(captured.source().selectionRule()).isEqualTo("SINGLE");
+    assertThat(captured.source().ratios()).anyMatch(r->"S000332".equals(r.getSupplierCode()));
+    assertThat(captured.source().selected().getSupplierCode()).isEmpty();
+    long id=operation.adopt(ctx,plan(request,selected)).plan().selections().get(request).monthlyPriceId();
+    assertThat(operation.resolveCandidates(ctx,Set.of(request)).values().get(request).selection().monthlyPriceId()).isEqualTo(id);
+    var pair=MonthlyScenarioTestSupport.create(null).calculate(Map.of(request,operation.readByIds("COMMERCIAL",Set.of(id)).get(id)),new BigDecimal("120000")).get(id);
+    assertThat(pair.financialPrice()).isEqualByComparingTo("105");
+    assertThat(pair.customerPrice()).isEqualByComparingTo("125");
+    assertThat(rules.selectById(original.getId()).getSupplierCode()).isEmpty();
+    assertThat(jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=? ORDER BY id",material)).isEqualTo(before);
   }
 
 }

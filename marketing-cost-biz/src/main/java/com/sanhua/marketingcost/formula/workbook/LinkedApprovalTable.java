@@ -39,6 +39,10 @@ public final class LinkedApprovalTable {
         alias(mapped, columns, "物料名称", "物料名称");
         alias(mapped, columns, "规格型号", "规格");
         alias(mapped, columns, "供应商名称", "现供方名称");
+        if (!mapped.containsKey("供应商代码")) {
+          for(String name:List.of("现供方代码","现供方编码","供应商编码","供方代码","供方编码"))
+            if(columns.containsKey(name)){mapped.put("供应商代码",columns.get(name));break;}
+        }
         alias(mapped, columns, "联动公式", "现联动公式");
         alias(mapped, columns, "单位", "价格单位");
         Integer price = columns.get("价格");

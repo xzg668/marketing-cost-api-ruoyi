@@ -49,6 +49,21 @@ class InvoiceMonthlyPriceIntegrationTest {
     assertThat(MonthlyFixedPriceSourceIntegrationTest.jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?",Integer.class,code)).isEqualTo(2);
     assertThat(next.fact().evidence().json()).contains("INVOICE","LATEST_IMPORT_THEN_HIGHEST","invoiceRevision","D3");
   }
+  @Test void soleInvoiceSupplierIsNotBlockedOrLabeledAsChosenByAnotherPrimarySupplier() throws Exception {
+    String code="INV-"+UUID.randomUUID();var request=request(code);
+    publish(new String[][]{row(code,"D1","S000052","80")});
+    var input=new com.sanhua.marketingcost.entity.monthly.MonthlySupplierRatioInput();
+    input.setRequestedMaterialCode(code);input.setSupplierCode("S001315");input.setSupplierName("丰山");input.setSupplyRatio(BigDecimal.ONE);
+    var mapper=org.mockito.Mockito.mock(MonthlySupplierInputMapper.class);
+    org.mockito.Mockito.when(mapper.ratios(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any())).thenReturn(List.of(input));
+    var actual=new MonthlyInvoicePriceSource(MonthlyFixedPriceSourceIntegrationTest.jdbc,codec,mapper).read(context(),Set.of(request));
+    assertThat(actual.problems()).isEmpty();
+    var fact=actual.values().get(request).selection().fact();
+    assertThat(fact.price()).isEqualByComparingTo("80");
+    var evidence=new ObjectMapper().readTree(fact.evidence().json()).path("source");
+    assertThat(evidence.path("selected").path("supplierCode").asText()).isEqualTo("S000052");
+    assertThat(evidence.path("selectionRule").asText()).isEqualTo("LATEST_IMPORT_THEN_HIGHEST");
+  }
   @Test void unrelatedMaterialImportDoesNotInvalidateAnAdoptedInvoice() throws Exception {
     String code="INV-"+UUID.randomUUID();var r=request(code);publish(new String[][]{row(code,"D1","S1","80")});var saved=adopt(r);
     publish(new String[][]{row(code+"B","D2","S1","99")});assertThat(adopt(r)).isEqualTo(saved);

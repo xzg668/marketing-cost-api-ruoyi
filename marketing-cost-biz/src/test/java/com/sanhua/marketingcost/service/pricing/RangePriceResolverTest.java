@@ -420,7 +420,7 @@ class RangePriceResolverTest {
     assertThat(result.unitPrice()).isNull();
     assertThat(result.failureCode()).isEqualTo("RANGE_PRICE_MISSING");
     assertThat(result.remark()).contains("缺少不含税价");
-    verify(ratioService).resolve(any(), any(), any(), any(), any());
+    verifyNoInteractions(ratioService);
   }
 
   @Test
@@ -578,7 +578,7 @@ class RangePriceResolverTest {
     verify(items).selectList(query.capture());
     assertThat(query.getValue().getSqlSegment()).doesNotContain("effective_from <=");
     assertThat(paramValues(query.getValue())).contains(101L).doesNotContain(102L);
-    verify(ratio).resolve(any(), any(), any(), any(), any()); // 唯一报价也需检查主供配置。
+    verifyNoInteractions(ratio); // 单一有效供应商无需供货比率。
   }
 
   private static CostRunPartItemDto part(String code, String qty) {

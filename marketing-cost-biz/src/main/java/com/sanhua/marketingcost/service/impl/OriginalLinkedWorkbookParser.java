@@ -66,7 +66,7 @@ public final class OriginalLinkedWorkbookParser {
       var layouts = LinkedApprovalTable.layouts(workbook);
       Map<SourceRow, String> factorProblems = new LinkedHashMap<>();
       Map<Address, FactorCell> candidates = factorCells(workbook, factorProblems);
-      addApprovalFactors(layouts, candidates);
+      addApprovalFactors(layouts, candidates, catalog, context);
       Map<String, Bindings> byOrganization = new LinkedHashMap<>();
       for (var layout : layouts) {
         Header main = layout.header();
@@ -375,21 +375,20 @@ public final class OriginalLinkedWorkbookParser {
 
   /** 只在明确的加工费审批物料区右侧识别行情块，行加工费始终沿实际公式读取。 */
   private void addApprovalFactors(
-      List<LinkedApprovalTable.Layout> layouts, Map<Address, FactorCell> factors) {
+      List<LinkedApprovalTable.Layout> layouts, Map<Address, FactorCell> factors,
+      java.util.function.Function<String, Set<String>> catalog, ImportContext context) {
     for (var layout : layouts) {
       if (!layout.approval()) continue;
       Header main = layout.header();
+      Set<String> financialKeys=new LinkedHashSet<>(catalog.apply(context.orgCode()));
+      // Explicit standard base factors stay required even before finance has published a catalog.
+      financialKeys.addAll(Set.of("AVG|1#CU","AVG|1#SN","AVG|1#AG","AVG|1#ZN",
+          "AVG|1#MN","AVG|1#NI","AVG|黄金AU9999"));
       for (Row row : main.sheet()) {
         for (Cell label : row) {
           if (label.getColumnIndex() <= main.columns().get("单价")) continue;
-          String name = text(label).toUpperCase(java.util.Locale.ROOT).replace(" ", "");
-          String key = switch (name) {
-            case "CU", "1#CU" -> "AVG|1#CU";
-            case "SN", "1#SN" -> "AVG|1#SN";
-            case "黄金AU9999" -> "AVG|黄金AU9999";
-            default -> null;
-          };
-          if (key == null) continue;
+          String key = canonicalKeys.build("平均价", text(label));
+          if (!financialKeys.contains(key)) continue;
           var address = new Address(main.sheet().getSheetName(),
               new CellReference(row.getRowNum(), label.getColumnIndex() + 1).formatAsString());
           String unit = key.equals("AVG|黄金AU9999") ? "元/克" : "元/公斤";

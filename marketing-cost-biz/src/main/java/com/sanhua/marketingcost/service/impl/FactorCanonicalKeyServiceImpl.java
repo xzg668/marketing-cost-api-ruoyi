@@ -42,6 +42,10 @@ public class FactorCanonicalKeyServiceImpl implements FactorCanonicalKeyService 
     return switch (normalized) {
       case "CU" -> "1#CU";
       case "SN" -> "1#SN";
+      case "ZN" -> "1#ZN";
+      case "AG" -> "1#AG";
+      case "MN" -> "1#MN";
+      case "NI" -> "1#NI";
       default -> normalized;
     };
   }

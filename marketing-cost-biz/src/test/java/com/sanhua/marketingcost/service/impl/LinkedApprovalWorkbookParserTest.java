@@ -17,6 +17,72 @@ class LinkedApprovalWorkbookParserTest {
   private final OriginalLinkedWorkbookParser.ImportContext context =
       new OriginalLinkedWorkbookParser.ImportContext("210", Map.of("M1", "千克", "M2", "千克"));
 
+  @Test void everyReferencedFinancialFactorRefreshesBeforeActualMaterialDifferences() throws Exception {
+    try (var book=workbook()) {
+      var sheet=book.getSheetAt(0);
+      String[] labels={"CU","Sn","Ag","Zn","Mn","H65黄铜边料","美国柜装黄铜"};
+      for(int i=0;i<labels.length;i++) {
+        var row=sheet.getRow(i+2);if(row==null)row=sheet.createRow(i+2);
+        row.createCell(10).setCellValue(labels[i]);row.createCell(11).setCellValue(100+i);
+      }
+      sheet.getRow(2).getCell(9).setCellFormula("($L$3*0.372+$L$4*0.012+$L$5*0.26+$L$6*0.33+$L$7*0.013+$L$8*0.2+$L$9*0.3+H3)/1.13");
+      var parsed=parser.parseWithCatalog(bytes(book),"审批.xls","COMMERCIAL",
+          org->Set.of("AVG|美国柜装黄铜","AVG|H65黄铜边料"),context);
+      assertThat(parsed.errors()).isEmpty();
+      var rule=parsed.rules().getFirst();
+      assertThat(rule.factors().values()).extracting(OriginalLinkedWorkbookParser.FactorInput::canonicalKey)
+          .containsExactlyInAnyOrder("AVG|1#CU","AVG|1#SN","AVG|1#AG","AVG|1#ZN","AVG|1#MN","AVG|H65黄铜边料","AVG|美国柜装黄铜");
+      var finance=financialFactors();
+      var p0=new com.sanhua.marketingcost.service.pricing.PriceFactorContext("M1",
+          new com.sanhua.marketingcost.service.pricing.PriceMonthSelection("2026-11","2026-11"),finance,null);
+      var p1=p0.withCustomerMaterials(new com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices(
+          new BigDecimal("105000"),new BigDecimal("24000"),new BigDecimal("1100000"),null,null,null));
+      var calculator=new OriginalLinkedRuleCalculator();
+      var base=calculator.calculate(rule,p0);var actual=calculator.calculate(rule,p1);
+      assertThat(base.priceExcludingTax()).isEqualByComparingTo(
+          new BigDecimal("90").multiply(new BigDecimal(".372"))
+              .add(new BigDecimal(".12")).add(new BigDecimal("260")).add(new BigDecimal("6.6"))
+              .add(new BigDecimal(".39")).add(new BigDecimal("10.8")).add(new BigDecimal("15.6"))
+              .add(new BigDecimal("66")).divide(new BigDecimal("1.13"),MathContext.DECIMAL128));
+      BigDecimal difference=new BigDecimal("15").multiply(new BigDecimal(".372"))
+          .add(new BigDecimal("100").multiply(new BigDecimal(".26")))
+          .add(new BigDecimal("4").multiply(new BigDecimal(".33")))
+          .add(new BigDecimal("6").multiply(new BigDecimal(".2")))
+          .add(new BigDecimal("6").multiply(new BigDecimal(".3")))
+          .divide(new BigDecimal("1.13"),MathContext.DECIMAL128);
+      assertThat(actual.priceExcludingTax().subtract(base.priceExcludingTax())).isCloseTo(difference,within(new BigDecimal("1e-28")));
+      assertThat(p1.customerBand().schemeCode()).isEqualTo("CU_100000");
+      assertThat(p1.requiredPrice("AVG|1#ZN",com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("24");
+      assertThat(p1.financialOnly()).isEqualTo(p0);
+    }
+  }
+
+  @Test void suppliedSupplierCodeIsPreservedFromApprovalHeader() throws Exception {
+    try(var book=workbook()) {
+      var sheet=book.getSheetAt(0);sheet.getRow(1).createCell(12).setCellValue("现供方编码");
+      sheet.getRow(2).createCell(12).setCellValue("S000332");
+      var parsed=parse(book,context);assertThat(parsed.errors()).isEmpty();
+      assertThat(parsed.rules().getFirst().identity().supplierCode()).isEqualTo("S000332");
+    }
+  }
+
+  private com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot financialFactors() {
+    var bands=new ArrayList<com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot.CuBand>();
+    for(int band=0;band<2;band++) {
+      var factors=new LinkedHashMap<String,com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot.FactorValue>();
+      var amounts=Map.of("AVG|1#CU",band==0?"90":"100","AVG|1#SN","10","AVG|1#AG","1000",
+          "AVG|1#ZN",band==0?"20":"999","AVG|1#MN","30","AVG|H65黄铜边料",band==0?"54":"60","AVG|美国柜装黄铜",band==0?"52":"58");
+      amounts.forEach((key,value)->factors.put(key,new com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot.FactorValue(
+          1L,1L,key,key,new BigDecimal(value),"CNY/KG",true,List.of())));
+      bands.add(new com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot.CuBand(
+          band==0?"CU_90000":"CU_100000",new BigDecimal(band==0?"90000":"100000"),factors));
+    }
+    return new com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot(
+        new com.sanhua.marketingcost.service.pricing.FactorPriceScope("COMMERCIAL","210","2026-11","CU_90000",
+            com.sanhua.marketingcost.service.pricing.FactorPriceScope.Condition.GENERAL),58L,2,"财务.xlsx","hash","content",
+        bands.getFirst().factors(),List.of("CU_90000","CU_100000"),"finance",java.time.LocalDateTime.of(2026,11,1,0,0),null,bands);
+  }
+
   @Test
   void bothSheetsUseActualPriceFormulasAndPerRowProcessingFees() throws Exception {
     try (var book = workbook()) {
