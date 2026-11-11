@@ -156,12 +156,11 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
     for (int index = 0; index < rows.size(); index++) {
       var row = rows.get(index);
       String path = parentPath + "/make-" + index;
-      BigDecimal rawQuantity = com.sanhua.marketingcost.service.MakePartProcessTypePolicy.PROCESS_TYPE_RAW.equals(row.getItemProcessType())
-          ? row.getGrossWeightG().movePointLeft(3) : BigDecimal.ONE;
+      BigDecimal rawQuantity = com.sanhua.marketingcost.service.MakePartConsumption.rawQuantity(row);
       consumeBase(session, scenario, row.getRawInputSnapshotJson(), row.getRawUnitPrice(),
           path + "/raw", rawQuantity.multiply(parentQuantity));
       if (!Boolean.TRUE.equals(row.getNoScrapConfirmed())) {
-        BigDecimal scrapQuantity = row.getGrossWeightG().subtract(row.getNetWeightG()).movePointLeft(3);
+        BigDecimal scrapQuantity = com.sanhua.marketingcost.service.MakePartConsumption.scrapQuantityKg(row);
         consumeBase(session, scenario, row.getScrapInputSnapshotJson(), row.getScrapUnitPrice(),
             path + "/scrap", scrapQuantity.multiply(parentQuantity));
       }

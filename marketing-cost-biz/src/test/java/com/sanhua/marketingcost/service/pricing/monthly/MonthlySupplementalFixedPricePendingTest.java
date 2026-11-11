@@ -55,18 +55,18 @@ class MonthlySupplementalFixedPricePendingTest {
 
   @Test void anotherTasksPendingDispatchStillOwnsItsClaim() {
     item = 12L; taskStatus = "PENDING"; assignee = null;
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void unassignedLabelCannotHideAnAssignedModule() {
     item = 12L; taskStatus = "UNASSIGNED";
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void unassignedLabelCannotHideSavedContent() {
     item = 12L; taskStatus = "UNASSIGNED"; assignee = null;
     versionStatus = "DRAFT"; priceJson = "{\"items\":[]}";
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void newlyDispatchedOwnPriceGapRemainsMissingWithoutAnyCandidate() {
@@ -83,33 +83,33 @@ class MonthlySupplementalFixedPricePendingTest {
 
   @Test void anotherQuoteItemCannotTreatTheOwnersPendingPriceAsItsOwnEditableGap() {
     item = 12L;
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void anotherQuoteFormCannotTreatPendingPriceAsItsOwnEditableGap() {
     form = 12L;
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @ParameterizedTest @ValueSource(strings = {"FROZEN", "SUBMITTED", "RETURNED"})
   void aNonDraftVersionDoesNotBecomeAnEditableGap(String state) {
     moduleStatus = "READY"; productStatus = "EDITING"; versionStatus = state;
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void disabledEditingDoesNotBecomeMissing() {
     editable = 0;
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void inactiveSourceDoesNotBecomeMissing() {
     active = 0;
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void finalVersionWaitingDoesNotBecomeMissing() {
     effective = 51L;
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   @Test void financeConfirmationStillWaits() {
@@ -123,17 +123,17 @@ class MonthlySupplementalFixedPricePendingTest {
     assertProblem(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
   }
 
-  @Test void malformedOwnDraftRemainsAnError() {
+  @Test void unsubmittedDraftContentIsIgnored() {
     moduleStatus = "EDITING"; productStatus = "EDITING"; versionStatus = "DRAFT";
     priceJson = "{\"unknown\":true}";
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
-  @Test void anIllegallyPublishedDraftRemainsAnError() {
+  @Test void unsubmittedDraftCannotActivateAnOldPublishedRow() {
     moduleStatus = "READY"; productStatus = "EDITING"; versionStatus = "DRAFT";
     var fixed = new PriceFixedItem(); fixed.setMaterialCode("MISSING");
     when(rows.fixed(eq("COMMERCIAL"), anyCollection())).thenReturn(List.of(fixed));
-    assertProblem(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+    assertProblem(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }
 
   private void assertProblem(MonthlyAdoptionRetryPolicy.Failure expected) {

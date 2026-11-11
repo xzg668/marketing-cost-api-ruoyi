@@ -9,6 +9,9 @@ import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunFeeQuery;
 import com.sanhua.marketingcost.service.costing.CostRunPreparedInputs;
 import com.sanhua.marketingcost.service.costing.ResolvedOrdinaryCost;
+import com.sanhua.marketingcost.service.costing.CmsCostCompositions;
+import com.sanhua.marketingcost.service.costing.CmsCompositionReader;
+import com.sanhua.marketingcost.dto.CostAmountComposition;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
@@ -160,6 +163,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   /** T19：试算路径专用 cached lookup（5 个 rate + ProductProperty），避免重复 SQL */
   private final CostRunCacheLookupService cacheLookup;
   private final CostBusinessRuleProvider businessRuleProvider;
+  @Autowired private CmsCompositionReader cmsCompositionReader;
 
   @Autowired
   public CostRunCostItemServiceImpl(
@@ -572,6 +576,29 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         buildBucketItems(
             oaNoValue, productCodeValue, currentPartItems, costSourceContext, technicalData);
     items.addAll(bucketItems);
+    for (var item : items) {
+      if (DIRECT_LABOR.equals(item.getCostCode()) && !laborResult.directSources.isEmpty())
+        item.setComposition(CmsCostCompositions.labor(laborResult.directSources));
+      if (INDIRECT_LABOR.equals(item.getCostCode()) && !laborResult.indirectSources.isEmpty())
+        item.setComposition(CmsCostCompositions.labor(laborResult.indirectSources));
+      if (Set.of(OVERHAUL, TOOLING_REPAIR, WATER_POWER, DEPT_OTHER).contains(item.getCostCode())
+          && item.getComposition() != null) {
+        var evidence = item.getComposition();
+        var laborSources = new ArrayList<>(laborResult.directSources); laborSources.addAll(laborResult.indirectSources);
+        var parameters = new ArrayList<Map<String,String>>();
+        for (var savedRow : evidence.rows()) {
+          var parameter = new LinkedHashMap<>(savedRow);
+          parameter.put("directLabor", CmsCostCompositions.number(directTotal));
+          parameter.put("indirectLabor", CmsCostCompositions.number(indirectTotal));
+          parameter.put("baseAmount", CmsCostCompositions.number(item.getBaseAmount()));
+          parameter.put("rate", CmsCostCompositions.number(item.getRate()));
+          parameters.add(parameter);
+        }
+        item.setComposition(new CostAmountComposition(evidence.origin(), evidence.formula(), evidence.sourceAmount(),
+            evidence.excludedAmount(), evidence.note(), CmsCostCompositions.labor(laborSources).sources(), parameters));
+      }
+    }
+    if (cmsCompositionReader != null) cmsCompositionReader.complete(items, costSourceContext.businessUnitType);
     return new ResolvedOrdinaryCost(items, otherExpenseTotal, feeResult.hasRequiredAmounts());
   }
 
@@ -1198,7 +1225,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private CostRunCostItemDto buildDepartmentItem(
       String code, String name, DepartmentSubjectAmount subject) {
-    return buildItem(code, name, subject.baseAmount(), subject.rate(), subject.amount(), subject.remark());
+    var item = buildItem(code, name, subject.baseAmount(), subject.rate(), subject.amount(), subject.remark());
+    item.setComposition(subject.composition());
+    return item;
   }
 
   private DepartmentSubjectAmount calculateDepartmentSubjectAmount(
@@ -1234,7 +1263,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal effectiveRate = resolveDepartmentEffectiveRate(rate);
     BigDecimal manhourCost = divide(laborTotal, manhourRate);
     return new DepartmentSubjectAmount(
-        manhourCost, effectiveRate, multiplyAmount(manhourCost, effectiveRate), lookup.remark());
+        manhourCost, effectiveRate, multiplyAmount(manhourCost, effectiveRate), lookup.remark(),
+        CmsCostCompositions.department(rate, laborTotal));
   }
 
   static BigDecimal resolveDepartmentEffectiveRate(DepartmentFundRate rate) {
@@ -1996,6 +2026,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
       var item=buildItem(AUX_PREFIX + code, name, unitPrice, rateForDisplay, amount);
       if(subject.getExclusionEvidence()!=null)item.setRemark(subject.getExclusionEvidence());
+      if (isCmsEffectiveAuxSubject(subject)) item.setComposition(CmsCostCompositions.auxiliary(subject));
       items.add(item);
     }
     return items;
@@ -2054,6 +2085,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_INDIRECT, materialCode));
 
       if (directEffective != null) {
+        result.directSources.add(directEffective);
         BigDecimal amount = nullToZero(directEffective.getAmountYuan());
         result.directTotal = result.directTotal.add(amount);
       } else {
@@ -2061,6 +2093,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
 
       if (indirectEffective != null) {
+        result.indirectSources.add(indirectEffective);
         BigDecimal amount = nullToZero(indirectEffective.getAmountYuan());
         result.indirectTotal = result.indirectTotal.add(amount);
       } else {
@@ -2586,24 +2619,29 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return new ProductCoefficientLookup(BigDecimal.ONE, "产品料号为空，产品属性系数回落=1", null);
     }
     String code = productCode.trim();
+    String bareCode = null;
+    String rawAttr = null;
     if (StringUtils.hasText(organizationCode)) {
       String organization = MaterialOrganization.fromCode(organizationCode).getCode();
       var raw = prepared == null ? null : prepared.fees().one(new CostRunFeeQuery.Material(code, organization), MaterialMasterRaw.class);
-      String rawAttr = trimToNull(prepared == null ? materialMasterRawMapper.selectActiveProductAttr(code, organization)
+      rawAttr = trimToNull(prepared == null ? materialMasterRawMapper.selectActiveProductAttr(code, organization)
           : raw == null ? null : raw.getProductAttr());
-      if (rawAttr != null) {
-        BigDecimal coefficient = propertyCoefficient(rawAttr, propertyYear, businessUnitType, prepared);
-        if (coefficient == null) {
-          throw new IllegalArgumentException("U9 料品档案产品属性缺少本年度规则：料号=" + code
-              + "，属性=" + rawAttr + "，年度=" + propertyYear + "，业务单元=" + businessUnitType);
-        }
-        return new ProductCoefficientLookup(coefficient,
-            "产品属性来源=U9料品档案；属性=" + rawAttr + "；规则年度=" + propertyYear, null);
-      }
+      bareCode = prepared == null ? materialMasterRawMapper.selectActiveBareCode(code, organization)
+          : raw == null ? null : raw.getBareCode();
     }
 
-    ProductProperty property = prepared == null ? cacheLookup.findProductProperty(code, propertyYear, businessUnitType)
-        : prepared.fees().one(new CostRunFeeQuery.Property(propertyYear, code, businessUnitType), ProductProperty.class);
+    String propertyCode = com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients.lookupCode(code, bareCode);
+    ProductProperty property = prepared == null ? cacheLookup.findProductProperty(propertyCode, propertyYear, businessUnitType)
+        : prepared.fees().one(new CostRunFeeQuery.Property(propertyYear, propertyCode, businessUnitType), ProductProperty.class);
+    if (property == null && rawAttr != null) {
+      BigDecimal coefficient = propertyCoefficient(rawAttr, propertyYear, businessUnitType, prepared);
+      if (coefficient == null) {
+        throw new IllegalArgumentException("U9 料品档案产品属性缺少本年度规则：料号=" + code
+            + "，属性=" + rawAttr + "，年度=" + propertyYear + "，业务单元=" + businessUnitType);
+      }
+      return new ProductCoefficientLookup(coefficient,
+          "产品属性来源=U9料品档案；属性=" + rawAttr + "；规则年度=" + propertyYear, null);
+    }
     if (prepared != null && property != null) {
       var coefficient = propertyCoefficient(property.getProductAttr(), property.getPropertyYear(), property.getBusinessUnitType(), prepared);
       if (coefficient != null) {
@@ -2616,7 +2654,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return new ProductCoefficientLookup(coefficient, technicalSourceRemark(technical, "PROFILE")
           + "；属性=" + technical.productProperty() + "；采用本年度公共属性规则", technical.sourceVersionId("PROFILE"));
     }
-    return coefficientFromProperty(code, propertyYear, businessUnitType, property);
+    var matched = coefficientFromProperty(code, propertyYear, businessUnitType, property);
+    return new ProductCoefficientLookup(matched.coefficient(),
+        joinRemarks(matched.remark(), "属性匹配料号=" + propertyCode), matched.technicalVersionId());
   }
 
   ProductCoefficientLookup lookupProductCoefficient(
@@ -2659,13 +2699,19 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private record DepartmentFundLookup(DepartmentFundRate rate, String remark) {}
 
   private record DepartmentSubjectAmount(
-      BigDecimal baseAmount, BigDecimal rate, BigDecimal amount, String remark) {}
+      BigDecimal baseAmount, BigDecimal rate, BigDecimal amount, String remark, CostAmountComposition composition) {
+    DepartmentSubjectAmount(BigDecimal base, BigDecimal rate, BigDecimal amount, String remark) {
+      this(base, rate, amount, remark, null);
+    }
+  }
 
   private static class LaborCostResult {
     private BigDecimal directTotal = BigDecimal.ZERO;
     private BigDecimal indirectTotal = BigDecimal.ZERO;
     private final List<String> missingDirectCodes = new ArrayList<>();
     private final List<String> missingIndirectCodes = new ArrayList<>();
+    private final List<CmsCostSourceEffective> directSources = new ArrayList<>();
+    private final List<CmsCostSourceEffective> indirectSources = new ArrayList<>();
     private String directRemark;
     private String indirectRemark;
     private String sourceTable;

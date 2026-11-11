@@ -1455,6 +1455,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     payload.put("qtyPerParent", row.getQtyPerParent());
     payload.put("grossWeightG", row.getGrossWeightG());
     payload.put("netWeightG", row.getNetWeightG());
+    payload.put("recoveredScrapWeightG", row.getRecoveredScrapWeightG());
     payload.put("rawPriceType", row.getRawPriceType());
     payload.put("rawUnitPrice", row.getRawUnitPrice());
     payload.put("scrapCode", row.getScrapCode());
@@ -1476,6 +1477,10 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   }
 
   private Map<String, Object> makePartFormula(MakePartPriceCalcRow row) {
+    if (com.sanhua.marketingcost.service.MakePartConsumption.nonWeightRaw(row))
+      return mapOf("formula", "qtyPerParent * rawUnitPrice - scrapWeightKg * scrapUnitPrice",
+          "displayFormula", "明细行成本 = BOM用量 × 原料单价 - 副产品废料重(kg) × 废料价",
+          "unitNote", "原料按" + row.getStockUnit() + "计量；副产品废料重单独换算为kg");
     if (PROCESS_TYPE_BLANK.equals(row.getItemProcessType())) {
       return mapOf(
           "formula", "rawUnitPrice - ((grossWeightG - netWeightG) / 1000) * scrapUnitPrice",
@@ -1495,6 +1500,9 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   private Map<String, Object> makePartVariables(MakePartPriceCalcRow row) {
     return mapOf(
         "itemProcessType", row.getItemProcessType(),
+        "qtyPerParent", row.getQtyPerParent(),
+        "stockUnit", row.getStockUnit(),
+        "recoveredScrapWeightG", row.getRecoveredScrapWeightG(),
         "grossWeightG", row.getGrossWeightG(),
         "netWeightG", row.getNetWeightG(),
         "scrapWeightKg", scrapWeightKg(row),
@@ -1512,7 +1520,9 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     BigDecimal scrapDeduction = multiply(scrapWeightKg, row.getScrapUnitPrice());
     return List.of(
         mapOf(
-            "step", "WEIGHT_CONVERT",
+            "step", com.sanhua.marketingcost.service.MakePartConsumption.nonWeightRaw(row) ? "MATERIAL_QUANTITY" : "WEIGHT_CONVERT",
+            "qtyPerParent", row.getQtyPerParent(),
+            "stockUnit", row.getStockUnit(),
             "grossWeightG", row.getGrossWeightG(),
             "netWeightG", row.getNetWeightG(),
             "grossWeightKg", grossWeightKg,
@@ -1521,7 +1531,8 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
             "step", PROCESS_TYPE_BLANK.equals(row.getItemProcessType()) ? "BLANK_AMOUNT" : "RAW_MATERIAL_AMOUNT",
             "formula", PROCESS_TYPE_BLANK.equals(row.getItemProcessType())
                 ? "rawUnitPrice"
-                : "(grossWeightG / 1000) * rawUnitPrice",
+                : com.sanhua.marketingcost.service.MakePartConsumption.nonWeightRaw(row)
+                    ? "qtyPerParent * rawUnitPrice" : "(grossWeightG / 1000) * rawUnitPrice",
             "grossWeightKg", grossWeightKg,
             "rawUnitPrice", row.getRawUnitPrice(),
             "amount", rawAmount),
@@ -1545,16 +1556,11 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     if (PROCESS_TYPE_BLANK.equals(row.getItemProcessType())) {
       return row.getRawUnitPrice();
     }
-    return multiply(grossWeightKg, row.getRawUnitPrice());
+    return multiply(com.sanhua.marketingcost.service.MakePartConsumption.rawQuantity(row), row.getRawUnitPrice());
   }
 
   private BigDecimal scrapWeightKg(MakePartPriceCalcRow row) {
-    if (row.getGrossWeightG() == null || row.getNetWeightG() == null) {
-      return null;
-    }
-    return row.getGrossWeightG()
-        .subtract(row.getNetWeightG())
-        .divide(G_TO_KG, AMOUNT_SCALE, RoundingMode.HALF_UP);
+    return com.sanhua.marketingcost.service.MakePartConsumption.scrapQuantityKg(row);
   }
 
   private BigDecimal toKg(BigDecimal grams) {

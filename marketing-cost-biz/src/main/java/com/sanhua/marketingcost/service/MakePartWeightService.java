@@ -13,4 +13,8 @@ public interface MakePartWeightService {
       LocalDate asOfDate,
       String businessUnitType,
       boolean requireChildNetWeight);
+
+  MakePartWeightResult resolveWeights(String parentMaterialNo, BomU9Source child,
+      String itemProcessType, String periodMonth, LocalDate asOfDate, String businessUnitType,
+      boolean requireChildNetWeight, MakePartQuotedWeight quotedWeight);
 }

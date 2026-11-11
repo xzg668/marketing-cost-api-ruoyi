@@ -61,18 +61,11 @@ public class MakePartPriceCalculator {
       return row;
     }
 
-    BigDecimal grossWeightG = row.getGrossWeightG();
-    BigDecimal netWeightG = row.getNetWeightG();
-    BigDecimal scrapWeightKg =
-        grossWeightG.subtract(netWeightG).divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP);
+    BigDecimal scrapWeightKg = MakePartConsumption.scrapQuantityKg(row);
     BigDecimal scrapDeduction = scrapWeightKg.multiply(row.getScrapUnitPrice());
     BigDecimal cost;
     if (MakePartProcessTypePolicy.PROCESS_TYPE_RAW.equals(row.getItemProcessType())) {
-      // 原材料加工：毛重/净重是 g，原材料价和废料价是元/kg，所以参与计算前必须 /1000 转 kg。
-      BigDecimal materialAmount =
-          grossWeightG
-              .divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP)
-              .multiply(row.getRawUnitPrice());
+      BigDecimal materialAmount = MakePartConsumption.rawQuantity(row).multiply(row.getRawUnitPrice());
       cost = materialAmount.subtract(scrapDeduction);
     } else {
       // 毛坯加工：采购单价按元/件，不再乘毛重；只有废料抵扣按 g 转 kg 计算。
@@ -99,7 +92,8 @@ public class MakePartPriceCalculator {
       missingRemarks.add("未知料件类型(item_process_type=" + row.getItemProcessType() + ")");
       return STATUS_INVALID_PROCESS_TYPE;
     }
-    if (row.getGrossWeightG() == null || row.getNetWeightG() == null) {
+    if (MakePartConsumption.rawQuantity(row) == null || MakePartConsumption.scrapQuantityKg(row) == null
+        || (!MakePartConsumption.nonWeightRaw(row) && (row.getGrossWeightG() == null || row.getNetWeightG() == null))) {
       missingRemarks.add("缺重量(gross_weight_g 或 net_weight_g 为空)");
       return STATUS_MISSING_WEIGHT;
     }
@@ -130,6 +124,8 @@ public class MakePartPriceCalculator {
         + format(scrapWeightKg)
         + ", raw_unit_price="
         + format(row.getRawUnitPrice())
+        + ", raw_quantity=" + format(MakePartConsumption.rawQuantity(row))
+        + ", stock_unit=" + row.getStockUnit()
         + ", scrap_unit_price="
         + format(row.getScrapUnitPrice())
         + ", outsource_fee_ignored="
@@ -189,6 +185,7 @@ public class MakePartPriceCalculator {
     row.setQtyPerParent(source.getQtyPerParent());
     row.setGrossWeightG(source.getGrossWeightG());
     row.setNetWeightG(source.getNetWeightG());
+    row.setRecoveredScrapWeightG(source.getRecoveredScrapWeightG());
     row.setRawPriceType(source.getRawPriceType());
     row.setRawUnitPrice(source.getRawUnitPrice());
     row.setScrapCode(source.getScrapCode());

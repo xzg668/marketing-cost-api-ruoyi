@@ -9,6 +9,18 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class JjbManufacturingEvidenceTest {
+  @Test void sourceLabelsUseOnlySavedWeightBasis() throws Exception {
+    var json = new ObjectMapper();
+    for (String source : List.of("SRM联动价表", "SRM区间价表")) {
+      var row = json.createObjectNode().put("itemProcessType", "毛坯加工")
+          .put("grossWeightG", "298.14").put("remark", "毛重来源=" + source + "；毛重取本次采用报价净重");
+      assertThat(JjbManufacturingEvidence.describe(row).get("grossWeightSource")).isEqualTo(source);
+    }
+    assertThat(JjbManufacturingEvidence.grossWeightSource("毛坯加工",
+        "毛重按本件净重加U9副产品废料重反算")).isEqualTo("U9理论净重＋副产品重量反算");
+    assertThat(JjbManufacturingEvidence.grossWeightSource("毛坯加工", "历史没有记录")).isNull();
+  }
+
   @Test void savedBlankProcessingExplainsItsActualPriceWithoutChangingTheSavedAmount() {
     var version=new QuoteCostRunVersion();version.setId(32L);version.setProductCode("PRODUCT");
     var part=new CostRunPartItem();part.setId(674L);part.setPartCode("BASE");part.setPricePrepareItemId(3121L);

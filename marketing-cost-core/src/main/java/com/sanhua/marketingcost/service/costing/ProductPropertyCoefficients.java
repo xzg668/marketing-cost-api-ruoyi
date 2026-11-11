@@ -7,6 +7,11 @@ import java.math.BigDecimal;
 public final class ProductPropertyCoefficients {
   private ProductPropertyCoefficients() {}
 
+  /** 属性表按U9裸品码维护；未维护裸品关系的料品保留自身料号查询。 */
+  public static String lookupCode(String productCode, String bareCode) {
+    return bareCode == null || bareCode.isBlank() ? productCode.trim() : bareCode.trim();
+  }
+
   public static BigDecimal from(ProductPropertyRule rule, String attribute, Integer year) {
     if (rule == null) return null;
     var rate = rule.getUpliftRate();

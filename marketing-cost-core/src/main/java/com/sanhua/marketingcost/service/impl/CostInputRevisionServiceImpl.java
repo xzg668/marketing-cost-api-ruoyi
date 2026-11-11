@@ -197,7 +197,9 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "surfaceTreatmentPolicy", "EXCLUDE_SINTERED_BASE_SUBTREE_V1");
     append(canonical, "supplierSelectionPolicy", "MAIN_SUPPLIER_BEFORE_PRICE_SOURCE_V1");
     append(canonical, "orderPriceVersionPolicy", "SOURCE_APPROVAL_DATE_THEN_HIGHEST_V1");
-    append(canonical, "makePartWeightPolicy", "U9_BYPRODUCT_FIRST_CMS_MATCH_GRAMS_V4");
+    append(canonical, "makePartWeightPolicy", "U9_BOM_WEIGHT_SINGLE_OR_CMS_MATCH_V6");
+    append(canonical, "blankQuoteGrossWeightPolicy", "SELECTED_QUOTE_GROSS_MINUS_U9_NET_V1");
+    append(canonical, "productPropertyPolicy", "U9_FINISHED_TO_BARE_ANNUAL_PROPERTY_V1");
     append(canonical, "materialDifferencePolicy",
         com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);

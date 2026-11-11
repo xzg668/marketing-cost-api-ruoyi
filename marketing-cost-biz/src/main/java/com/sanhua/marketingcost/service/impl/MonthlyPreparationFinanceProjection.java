@@ -10,8 +10,6 @@ import com.sanhua.marketingcost.service.MakePartProcessTypePolicy;
 import com.sanhua.marketingcost.service.pricing.monthly.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Objects;
 
 /** Projects saved OA inputs into P0 without opening a price session, reading sources or adopting. */
@@ -34,7 +32,6 @@ final class MonthlyPreparationFinanceProjection {
       throw new IllegalArgumentException("财务投影只接受已就绪且有实际用量的OA准备");
     var inputs = evidence.read(source);
     if (inputs == null || inputs.uses().isEmpty()) throw new IllegalArgumentException("财务投影缺少已采用月价与实际用量");
-    var uses = new HashMap<MonthlyPriceRequest, BigDecimal>();
     BigDecimal unitPrice;
     BigDecimal customerUnitPrice = source.getUnitPrice();
     if (MonthlyPreparationPrice.KIND.equals(source.getResultRefType())) {
@@ -45,7 +42,7 @@ final class MonthlyPreparationFinanceProjection {
         throw new IllegalArgumentException("保存OA的月价引用或路径与底稿不一致");
       amount(source.getQuantity(), captured.quantity(), "保存OA实际用量");
       unitPrice = base(source, inputs, captured, source.getMaterialCode(), source.getUnitPrice(),
-          source.getQuantity(), uses, false);
+          source.getQuantity(), false);
       // Amounts were calculated before DECIMAL(20,8) rounded the saved unit price.
       // Validate against the original captured price, preserving the calculation's precision.
       customerUnitPrice = captured.customerPrice().multiply(captured.unitPriceMultiplier());
@@ -54,14 +51,13 @@ final class MonthlyPreparationFinanceProjection {
       var rows = make.rows(source);
       if (rows == null) throw new IllegalArgumentException("财务投影缺少保存的制造计算行");
       for (var row : rows) {
-        BigDecimal raw = MakePartProcessTypePolicy.PROCESS_TYPE_RAW.equals(row.getItemProcessType())
-            ? row.getGrossWeightG().movePointLeft(3) : BigDecimal.ONE;
+        BigDecimal raw = com.sanhua.marketingcost.service.MakePartConsumption.rawQuantity(row);
         row.setRawUnitPrice(base(source, inputs, codec.decode(row.getRawInputSnapshotJson(), MonthlyPreparationPrice.class),
-            row.getChildMaterialNo(), row.getRawUnitPrice(), raw.multiply(source.getQuantity()), uses, true));
+            row.getChildMaterialNo(), row.getRawUnitPrice(), raw.multiply(source.getQuantity()), true));
         if (!Boolean.TRUE.equals(row.getNoScrapConfirmed())) {
-          BigDecimal scrap = row.getGrossWeightG().subtract(row.getNetWeightG()).movePointLeft(3);
+          BigDecimal scrap = com.sanhua.marketingcost.service.MakePartConsumption.scrapQuantityKg(row);
           row.setScrapUnitPrice(base(source, inputs, codec.decode(row.getScrapInputSnapshotJson(), MonthlyPreparationPrice.class),
-              row.getScrapCode(), row.getScrapUnitPrice(), scrap.multiply(source.getQuantity()), uses, true));
+              row.getScrapCode(), row.getScrapUnitPrice(), scrap.multiply(source.getQuantity()), true));
         }
         row.setPriceScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE.name());
       }
@@ -91,7 +87,7 @@ final class MonthlyPreparationFinanceProjection {
         if (!MonthlyPreparationPrice.KIND.equals(component.path("priceSource").asText()))
           throw new IllegalArgumentException("保存包装子件未接入月价");
         var p0 = base(source, inputs, codec.decode(component.path("inputs").toString(), MonthlyPreparationPrice.class),
-            component.path("materialCode").asText(), number(component, "unitPrice"), quantity, uses, true);
+            component.path("materialCode").asText(), number(component, "unitPrice"), quantity, true);
         var componentAmount = pack.componentAmount(component, p0);
         ((ObjectNode) component).put("unitPrice", p0); ((ObjectNode) component).put("amount", componentAmount);
         total = total.add(componentAmount);
@@ -101,7 +97,6 @@ final class MonthlyPreparationFinanceProjection {
     } else throw new IllegalArgumentException("财务投影不接受缺少月价依据的历史准备类型");
     amount(source.getAmount(), customerUnitPrice == null ? null
         : customerUnitPrice.multiply(source.getQuantity()), "保存OA金额");
-    validateUses(inputs, uses);
     result.setUnitPrice(unitPrice); result.setAmount(unitPrice.multiply(source.getQuantity()));
     // Re-run the same saved-evidence validators on the projected numbers.
     if ("MAKE_PART_PRICE".equals(result.getResultRefType())) new MakePartCalculationEvidence(json).rows(result);
@@ -110,7 +105,7 @@ final class MonthlyPreparationFinanceProjection {
   }
 
   private BigDecimal base(PricePrepareItem source, MonthlyPreparationInputs inputs, MonthlyPreparationPrice value,
-      String code, BigDecimal p1, BigDecimal physicalQuantity, Map<MonthlyPriceRequest, BigDecimal> uses, boolean ordinary) {
+      String code, BigDecimal p1, BigDecimal physicalQuantity, boolean ordinary) {
     var request = value.request(); var selected = value.selection();
     if (!request.matchesBomMaterialCode(code)
         || !Objects.equals(source.getBusinessUnitType(), request.family().businessUnitType())
@@ -126,18 +121,8 @@ final class MonthlyPreparationFinanceProjection {
       if (selected.monthlyPriceId() == null || selected.monthlyPriceId() <= 0
           || !selected.equals(inputs.plan().selections().get(request)))
         throw new IllegalArgumentException("保存基础价格不是本次已采用月价");
-      uses.merge(request, physicalQuantity.abs().multiply(value.unitPriceMultiplier()), BigDecimal::add);
     }
     return value.financialPrice().multiply(value.unitPriceMultiplier());
-  }
-
-  private static void validateUses(MonthlyPreparationInputs inputs, Map<MonthlyPriceRequest, BigDecimal> expected) {
-    var actual = new HashMap<MonthlyPriceRequest, BigDecimal>();
-    inputs.uses().forEach(use -> actual.merge(use.request(), use.cumulativeQuantity(), BigDecimal::add));
-    if (!actual.keySet().equals(expected.keySet())) throw new IllegalArgumentException("保存计算行与月价实际范围不一致");
-    expected.forEach((request, quantity) -> {
-      if (actual.get(request).compareTo(quantity) != 0) throw new IllegalArgumentException("保存计算行与月价实际用量不一致");
-    });
   }
 
   private static BigDecimal number(JsonNode value, String field) {

@@ -14,6 +14,20 @@ class JjbProjectionTest {
   QuoteCostRunVersion version() {var v=new QuoteCostRunVersion();v.setId(8L);v.setOaNo("OA");v.setOaFormItemId(3L);v.setCostRunNo("RUN");v.setProductCode("000000001");v.setStatus("SUCCESS");v.setAlgorithmVersion("COST_V3");v.setBusinessUnitType("COMMERCIAL");return v;}
   CostRunCostItem cost(long id,String code,String name,String amount) {var c=new CostRunCostItem();c.setId(id);c.setCostCode(code);c.setCostName(name);c.setAmount(amount==null?null:new BigDecimal(amount));c.setSourceTable("historical_source");c.setSourceId(id+100);return c;}
   JjbReadModel read(QuoteCostRunVersion v,CostRunCostItem... costs) {return projection.project(new Stored(v,null,List.of(),List.of(costs)),new OaForm(),new OaFormItem(),List.of());}
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"标准品,1", "非标品,1.05"})
+  void propertyNameComesFromSavedAppliedCoefficientWithoutTechnicalSupplement(
+      String attribute, String coefficient) {
+    var adjustment=cost(1,"ADJUSTED_MANUFACTURE_COST","属性调整后制造成本","105");
+    adjustment.setRate(new BigDecimal(coefficient));
+    adjustment.setRemark("产品属性来源=lp_product_property；属性="+attribute+"；规则年度=2026；属性匹配料号=101500549");
+    var sheet=read(version(),adjustment);
+    var property=sheet.rows().stream().filter(r->"PROPERTY".equals(r.kind())).findFirst().orElseThrow();
+    assertThat(property.remark()).isEqualTo(attribute);
+    assertThat(property.coefficient()).isEqualTo(coefficient);
+    assertThat(sheet.header().productProperty()).isEqualTo(attribute);
+  }
   @Test void missingLegacyTotalsAndFeesStayMissingAndHouseholdIsAbsent() {
     var model=read(version());assertThat(model.totals().totalCost()).isNull();assertThat(model.totals().cuMaterialAdjustment()).isNull();assertThat(model.totals().finalQuoteAmount()).isNull();
     assertThat(model.rows().stream().filter(r->r.kind().equals("FEE"))).hasSize(4).allMatch(r->r.amount()==null);

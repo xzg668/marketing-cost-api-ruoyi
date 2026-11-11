@@ -12,6 +12,8 @@ public class MakePartWeightResult {
   private String itemProcessType;
   private BigDecimal grossWeightG;
   private BigDecimal netWeightG;
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private BigDecimal recoveredScrapWeightG;
   private String status;
   private String remark;
 

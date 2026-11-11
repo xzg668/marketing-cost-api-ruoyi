@@ -27,6 +27,33 @@ class CostRunPublicInputPreparationIntegrationTest {
   static OaFormItemMapper items;
   static int year;
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"标准品,0,1", "非标品,0.05,1.05", "标准品,0.12,1.12"})
+  void finishedToBarePropertyMatchesInSingleAndPreparedBatch(
+      String attribute, String uplift, String coefficient) {
+    var f=fixture();String bare=f.product()+"-BARE";
+    var jdbc=CostRunFeeSourcesIntegrationTest.jdbc;
+    jdbc.update("UPDATE lp_material_master_raw SET bare_code=? WHERE material_code=? AND organization_code='COMMERCIAL'",bare,f.product());
+    insert("lp_product_property",Map.of("property_year",year,"business_unit_type","COMMERCIAL",
+        "product_code",bare,"product_attr",attribute));
+    jdbc.update("DELETE FROM lp_product_property_rule WHERE property_year=? AND product_attr=? AND business_unit_type='COMMERCIAL'",year,attribute);
+    insert("lp_product_property_rule",Map.of("property_year",year,"product_attr",attribute,
+        "business_unit_type","COMMERCIAL","uplift_rate",uplift));
+    insert("lp_quality_loss_rate",Map.of("rate_year",year,"bare_product_code",bare,
+        "business_unit_type","COMMERCIAL","loss_rate","0.01"));
+    var requests=requests(f,2);var single=calculate(requests.getFirst().context());
+    var adjusted=single.stream().filter(x->"ADJUSTED_MANUFACTURE_COST".equals(x.getCostCode())).findFirst().orElseThrow();
+    assertThat(adjusted.getRate()).isEqualByComparingTo(coefficient);
+    assertThat(adjusted.getRemark()).contains("属性="+attribute,"属性匹配料号="+bare);
+    preparation.prepare(requests);
+    for(var request:requests) {
+      var batch=calculate(request.context());
+      var row=batch.stream().filter(x->"ADJUSTED_MANUFACTURE_COST".equals(x.getCostCode())).findFirst().orElseThrow();
+      assertThat(row.getRate()).isEqualByComparingTo(coefficient);
+      assertThat(row.getRemark()).contains("属性="+attribute,"属性匹配料号="+bare);
+    }
+  }
+
   @BeforeAll static void start() throws Exception {
     CostRunFeeSourcesIntegrationTest.start(); sql = CostRunFeeSourcesIntegrationTest.session;
     year = Year.now(com.sanhua.marketingcost.util.CostPricingPeriodUtils.BUSINESS_ZONE).getValue();

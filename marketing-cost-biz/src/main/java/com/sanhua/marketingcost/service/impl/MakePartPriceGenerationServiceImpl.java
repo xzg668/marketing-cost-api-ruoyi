@@ -557,15 +557,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
                   + ", purchasing_unit="
                   + input.purchasingUnit());
     } else {
-      weight =
-          weightService.resolveWeights(
-              parent.getMaterialCode(),
-              child,
-              processType.getItemProcessType(),
-              period,
-              quoteDate,
-              businessUnitType,
-              requireChildNetWeight);
+      weight = null;
     }
     // 公共生成和工作台生成都以父结算节点的组织取子件价格。
     PricePrepareScenarioContext parentScenario =
@@ -589,6 +581,15 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             businessUnitType,
             parentScenario,
             MakePartMaterialPriceResolveService.Purpose.MATERIAL);
+    if (weight == null) {
+      var quotedWeight = MakePartProcessTypePolicy.PROCESS_TYPE_BLANK.equals(processType.getItemProcessType())
+          ? com.sanhua.marketingcost.service.MakePartQuotedWeight.read(rawPrice, monthlyCodec) : null;
+      weight = quotedWeight == null
+          ? weightService.resolveWeights(parent.getMaterialCode(), child, processType.getItemProcessType(),
+              period, quoteDate, businessUnitType, requireChildNetWeight)
+          : weightService.resolveWeights(parent.getMaterialCode(), child, processType.getItemProcessType(),
+              period, quoteDate, businessUnitType, requireChildNetWeight, quotedWeight);
+    }
     List<MaterialScrapRef> scraps = plan.scraps(child.getChildMaterialNo());
     if (scraps.isEmpty()) {
       MakePartPriceCalcRow row =
@@ -612,7 +613,23 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
         row.setScrapUnitPrice(BigDecimal.ZERO);
         row.setNoScrapConfirmed(true);
         row.setNoScrapConfirmationId(noScrapConfirmation.getId());
-        row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus(), priceSourceError(rawPrice, "RAW")));
+        String weightStatus = weight.getStatus();
+        if (com.sanhua.marketingcost.service.MakePartConsumption.nonWeightRaw(row)
+            && row.getQtyPerParent() != null && row.getQtyPerParent().signum() >= 0) {
+          row.setRecoveredScrapWeightG(BigDecimal.ZERO);
+          weightStatus = STATUS_OK;
+        }
+        if (MakePartProcessTypePolicy.PROCESS_TYPE_BLANK.equals(processType.getItemProcessType())
+            && MakePartPriceCalculator.STATUS_MISSING_WEIGHT.equals(weightStatus)
+            && row.getGrossWeightG() == null && row.getNetWeightG() != null
+            && row.getNetWeightG().signum() >= 0 && child.getQtyPerParent() != null
+            && child.getQtyPerParent().signum() >= 0) {
+          // 原有人工确认提供明确0废料重；件数毛坯仍可按本件净重加0反算。
+          row.setGrossWeightG(row.getNetWeightG());
+          weightStatus = STATUS_OK;
+          row.setRemark(appendRemark(row.getRemark(), "人工确认无废料：毛重按本件净重加0g废料重反算"));
+        }
+        row.setStatus(firstNonOk(processType.getStatus(), weightStatus, priceSourceError(rawPrice, "RAW")));
         row.setRemark(appendRemark(row.getRemark(), noScrapRemark(noScrapConfirmation)));
         return List.of(row);
       }
@@ -709,6 +726,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     row.setQtyPerParent(child.getQtyPerParent());
     row.setGrossWeightG(weight.getGrossWeightG());
     row.setNetWeightG(weight.getNetWeightG());
+    row.setRecoveredScrapWeightG(weight.getRecoveredScrapWeightG());
     row.setRawPriceType(rawPrice == null ? null : rawPrice.getPriceType());
     row.setRawUnitPrice(rawPrice == null ? null : rawPrice.getUnitPrice());
     if (rawPrice != null && rawPrice.getEvidence() != null) {

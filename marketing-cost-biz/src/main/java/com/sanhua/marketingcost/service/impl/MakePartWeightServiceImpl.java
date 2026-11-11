@@ -57,6 +57,14 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
       LocalDate asOfDate,
       String businessUnitType,
       boolean requireChildNetWeight) {
+    return resolveWeights(parentMaterialNo, child, itemProcessType, periodMonth, asOfDate,
+        businessUnitType, requireChildNetWeight, null);
+  }
+
+  @Override
+  public MakePartWeightResult resolveWeights(String parentMaterialNo, BomU9Source child,
+      String itemProcessType, String periodMonth, LocalDate asOfDate, String businessUnitType,
+      boolean requireChildNetWeight, com.sanhua.marketingcost.service.MakePartQuotedWeight quotedWeight) {
     String parentCode = trim(parentMaterialNo);
     String childCode = child == null ? null : trim(child.getChildMaterialNo());
     if (parentCode == null || childCode == null) {
@@ -65,7 +73,26 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
     }
     String organizationCode = requiredMaterialOrganization(child.getPriceOrgCode());
     Map<String, MaterialMasterRaw> rawByCode =
-        loadLatestRawRows(List.of(parentCode, childCode), organizationCode);
+        loadLatestRawRows(List.of(parentCode), organizationCode);
+    if (MakePartProcessTypePolicy.PROCESS_TYPE_BLANK.equals(itemProcessType) && quotedWeight != null) {
+      // SRM报价中的“净重”在毛坯加工中是投料毛重；该分支不再用副产品覆盖废料重。
+      BigDecimal gross = quotedWeight.grams();
+      BigDecimal net = theoreticalNetWeightG(rawByCode.get(parentCode));
+      String basis = "毛重来源=" + quotedWeight.source() + "；毛重取本次采用报价净重(gross_weight_g="
+          + format(gross) + ")；净重取U9本件理论净重(parent_material_no=" + parentCode
+          + ", net_weight_g=" + format(net) + ")";
+      if (net == null || net.signum() < 0) {
+        return MakePartWeightResult.of(parentCode, childCode, itemProcessType, gross, null,
+            "MISSING_WEIGHT", appendRemark(basis, "缺有效U9本件理论净重，无法计算废料重"));
+      }
+      if (gross.compareTo(net) < 0) {
+        return MakePartWeightResult.of(parentCode, childCode, itemProcessType, gross, net,
+            "MISSING_WEIGHT", appendRemark(basis, "SRM毛重小于U9本件理论净重，无法计算有效废料重"));
+      }
+      return MakePartWeightResult.of(parentCode, childCode, itemProcessType, gross, net, "OK",
+          appendRemark(basis, "废料重按SRM毛重减U9本件理论净重(scrap_weight_g="
+              + format(gross.subtract(net)) + ")"));
+    }
     MakePartChildNetWeight childNetWeight = requireChildNetWeight
         ? childNetWeightMapper.selectEffective(
             organizationCode,
@@ -75,36 +102,49 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
             trim(periodMonth))
         : null;
     BigDecimal netWeightG = null;
-    BigDecimal grossWeightG;
+    BigDecimal grossWeightG = toGram(child.getQtyPerParent(), child.getStockUnit());
+    boolean countedBlank = MakePartProcessTypePolicy.PROCESS_TYPE_BLANK.equals(itemProcessType)
+        && "只".equals(trim(child.getStockUnit()))
+        && child.getQtyPerParent() != null && child.getQtyPerParent().signum() >= 0;
     String remark = "";
-    if (MakePartProcessTypePolicy.PROCESS_TYPE_BLANK.equals(itemProcessType)) {
-      // 毛坯加工：毛重取 child 理论净重；global_seg_3_theoretical_net_weight 已按 g 进入生成表。
-      grossWeightG = theoreticalNetWeightG(rawByCode.get(childCode));
-      if (grossWeightG == null) {
-        remark = "缺 child 理论净重(child_material_no=" + childCode + ")";
-      }
-    } else {
-      // 原材料加工：U9 qty_per_parent 按 kg 理解，生成表毛重字段统一换算为 g。
-      grossWeightG = child.getQtyPerParent() == null ? null : child.getQtyPerParent().multiply(KG_TO_G);
-      if (grossWeightG == null) {
-        remark = "缺 qty_per_parent(child_material_no=" + childCode + ")";
-      }
-    }
-    // 两种加工都优先扣除对应 U9 副产品；毛重和副产品先统一为 g。
-    ByproductNetWeightResolution byproductResolution = ByproductNetWeightResolution.notAttempted();
     if (grossWeightG != null) {
-      byproductResolution = resolveNetWeightFromByproduct(
-          parentCode,
-          child,
-          grossWeightG,
-          asOfDate,
-          businessUnitType);
-      netWeightG = byproductResolution.netWeightG();
-      if (netWeightG != null) {
-        remark = appendRemark(remark, byproductResolution.remark());
-      } else {
-        remark = appendRemark(remark, byproductResolution.failureRemark());
-      }
+      remark = "毛重取U9 BOM用量(qty_per_parent=" + format(child.getQtyPerParent())
+          + ", stock_unit=" + trim(child.getStockUnit())
+          + ", gross_weight_g=" + format(grossWeightG) + ")";
+    } else if (countedBlank) {
+      remark = "U9 BOM用量为件数，毛重待本件净重加副产品废料重反算";
+    } else {
+      remark = "缺有效BOM重量(qty_per_parent=" + format(child.getQtyPerParent())
+          + ", stock_unit=" + nullToBlank(trim(child.getStockUnit()))
+          + ", child_material_no=" + childCode + ")";
+      if (child.getQtyPerParent() == null) remark = appendRemark(remark, "缺 qty_per_parent");
+    }
+    // 先独立取得制造BOM副产品的废料重，不能要求毛重已知才查询副产品。
+    ByproductWeightResolution byproduct = resolveByproductWeight(
+        parentCode, child, asOfDate, businessUnitType);
+    BigDecimal scrapWeightG = byproduct.weightG();
+    if (com.sanhua.marketingcost.service.MakePartConsumption.nonWeightRaw(itemProcessType, child.getStockUnit())) {
+      var result = MakePartWeightResult.of(parentCode, childCode, itemProcessType, null, null,
+          child.getQtyPerParent() != null && child.getQtyPerParent().signum() >= 0 && scrapWeightG != null
+              ? "OK" : "MISSING_WEIGHT",
+          "原料按BOM用量及原计量单位计价(qty_per_parent=" + format(child.getQtyPerParent())
+              + ", stock_unit=" + trim(child.getStockUnit()) + ")；"
+              + (scrapWeightG == null ? byproduct.failureRemark() : byproduct.remark()));
+      result.setRecoveredScrapWeightG(scrapWeightG);
+      return result;
+    }
+    if (scrapWeightG != null && grossWeightG != null
+        && scrapWeightG.compareTo(grossWeightG) > 0) {
+      remark = appendRemark(remark, "副产品反算失败：副产品重量大于毛重(gross_weight_g="
+          + format(grossWeightG) + ", byproduct_weight_g=" + format(scrapWeightG) + ")");
+      scrapWeightG = null;
+    } else if (scrapWeightG != null && grossWeightG != null) {
+      netWeightG = grossWeightG.subtract(scrapWeightG);
+      remark = appendRemark(remark, "净重按U9副产品反算(" + byproduct.remark()
+          + ", gross_weight_g=" + format(grossWeightG)
+          + ", net_weight_g=" + format(netWeightG) + ")");
+    } else {
+      remark = appendRemark(remark, byproduct.failureRemark());
     }
     if (netWeightG == null && childNetWeight != null) {
       // 多子料仍按各自配置回退，不能把母件总净重重复分给每种材料。
@@ -118,6 +158,16 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
       if (netWeightG != null) {
         remark = appendRemark(remark, "单子料：净重取 parent 理论净重");
       }
+    }
+    if (grossWeightG == null && countedBlank && netWeightG != null && scrapWeightG != null) {
+      // 件数不能换算为重量；用本件净重加已匹配副产品废料重恢复投料毛重。
+      grossWeightG = netWeightG.add(scrapWeightG);
+      remark = appendRemark(remark, "毛重按本件净重加U9副产品废料重反算("
+          + byproduct.remark() + ", net_weight_g=" + format(netWeightG)
+          + ", gross_weight_g=" + format(grossWeightG) + ")");
+    }
+    if (grossWeightG == null && countedBlank) {
+      remark = appendRemark(remark, "缺本件净重或有效副产品废料重，无法反算毛重");
     }
     if (netWeightG == null) {
       remark = appendRemark(
@@ -135,32 +185,16 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
         parentCode, childCode, itemProcessType, grossWeightG, netWeightG, status, remark);
   }
 
-  private ByproductNetWeightResolution resolveNetWeightFromByproduct(
+  private ByproductWeightResolution resolveByproductWeight(
       String parentCode,
       BomU9Source child,
-      BigDecimal grossWeightG,
       LocalDate asOfDate,
       String businessUnitType) {
     String childCode = trim(child.getChildMaterialNo());
-    // 原料和毛坯都先用子料号查CMS废料映射，只能扣除同料号的U9副产品重量。
-    List<MaterialScrapRef> mappings = scrapMappingService.listMappings(childCode, businessUnitType);
-    Set<String> scrapCodes = new LinkedHashSet<>();
-    for (MaterialScrapRef mapping : mappings == null ? List.<MaterialScrapRef>of() : mappings) {
-      String scrapCode = mapping == null ? null : trim(mapping.getScrapCode());
-      if (scrapCode != null) {
-        scrapCodes.add(scrapCode);
-      }
-    }
-    if (scrapCodes.isEmpty()) {
-      return ByproductNetWeightResolution.failure(
-          "副产品反算失败：缺原材料对应废料映射(child_material_no=" + childCode + ")");
-    }
-
     LocalDate effectiveDate = asOfDate == null ? LocalDate.now() : asOfDate;
     var query = Wrappers.lambdaQuery(U9BomByproductMaster.class)
         .eq(U9BomByproductMaster::getPriceOrgCode, trim(child.getPriceOrgCode()))
         .eq(U9BomByproductMaster::getParentMaterialNo, parentCode)
-        .in(U9BomByproductMaster::getByproductMaterialNo, scrapCodes)
         .eq(U9BomByproductMaster::getBomPurpose, BOM_PURPOSE_MAIN_MANUFACTURING)
         .eq(U9BomByproductMaster::getStatus, STATUS_APPROVED)
         .and(q -> q.le(U9BomByproductMaster::getEffectiveFrom, effectiveDate)
@@ -176,49 +210,58 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
       query.eq(U9BomByproductMaster::getVersionNo, bomVersion);
     }
     List<U9BomByproductMaster> rows = byproductMapper.selectList(query);
-    if (rows != null) {
-      rows = rows.stream()
-          .filter(row -> scrapCodes.contains(trim(row.getByproductMaterialNo())))
-          .toList();
-    }
     if (rows == null || rows.isEmpty()) {
-      return ByproductNetWeightResolution.failure(
+      return ByproductWeightResolution.failure(
           "副产品反算失败：缺有效U9主制造副产品(parent_material_no=" + parentCode
               + ", child_material_no=" + childCode
-              + ", scrap_codes=" + String.join(",", scrapCodes)
               + ", bom_version=" + nullToBlank(bomVersion)
               + ", as_of_date=" + effectiveDate + ")");
     }
-    if (rows.size() != 1) {
-      return ByproductNetWeightResolution.failure(
-          "副产品反算失败：有效副产品匹配不唯一(parent_material_no=" + parentCode
-              + ", child_material_no=" + childCode + ", count=" + rows.size() + ")");
+    String selectionRule = "SINGLE";
+    if (rows.size() > 1) {
+      // 唯一有效副产品直接提供重量；多条时才用当前原料的CMS废料码消歧。
+      // 废料价格始终由价格生成链按CMS废料码单独取得。
+      List<MaterialScrapRef> mappings = scrapMappingService.listMappings(childCode, businessUnitType);
+      Set<String> scrapCodes = new LinkedHashSet<>();
+      for (MaterialScrapRef mapping : mappings == null ? List.<MaterialScrapRef>of() : mappings) {
+        String scrapCode = mapping == null ? null : trim(mapping.getScrapCode());
+        if (scrapCode != null) {
+          scrapCodes.add(scrapCode);
+        }
+      }
+      if (scrapCodes.isEmpty()) {
+        return ByproductWeightResolution.failure(
+            "副产品反算失败：多个有效副产品且缺原材料对应废料映射(child_material_no=" + childCode + ")");
+      }
+      rows = rows.stream()
+          .filter(row -> scrapCodes.contains(trim(row.getByproductMaterialNo())))
+          .toList();
+      if (rows.size() != 1) {
+        return ByproductWeightResolution.failure(
+            "副产品反算失败：多个有效副产品按CMS废料码匹配不唯一(parent_material_no=" + parentCode
+                + ", child_material_no=" + childCode + ", scrap_codes=" + String.join(",", scrapCodes)
+                + ", count=" + rows.size() + ")");
+      }
+      selectionRule = "CMS_MATCH";
     }
 
     U9BomByproductMaster row = rows.get(0);
     BigDecimal byproductWeightG = toGram(row.getOutputQty(), row.getUnit());
     if (byproductWeightG == null) {
-      return ByproductNetWeightResolution.failure(
+      return ByproductWeightResolution.failure(
           "副产品反算失败：副产品用量或单位无效(byproduct_material_no="
               + nullToBlank(trim(row.getByproductMaterialNo()))
               + ", output_qty=" + format(row.getOutputQty())
               + ", unit=" + nullToBlank(trim(row.getUnit())) + ")");
     }
-    BigDecimal netWeightG = grossWeightG.subtract(byproductWeightG);
-    if (netWeightG.signum() < 0) {
-      return ByproductNetWeightResolution.failure(
-          "副产品反算失败：副产品重量大于毛重(gross_weight_g=" + format(grossWeightG)
-              + ", byproduct_weight_g=" + format(byproductWeightG) + ")");
-    }
-    return ByproductNetWeightResolution.success(
-        netWeightG,
-        "净重按U9副产品反算(byproduct_material_no="
+    return ByproductWeightResolution.success(
+        byproductWeightG,
+        "byproduct_material_no="
             + nullToBlank(trim(row.getByproductMaterialNo()))
-            + ", gross_weight_g=" + format(grossWeightG)
             + ", output_qty=" + format(row.getOutputQty())
             + ", unit=" + nullToBlank(trim(row.getUnit()))
             + ", byproduct_weight_g=" + format(byproductWeightG)
-            + ", net_weight_g=" + format(netWeightG) + ")");
+            + ", byproduct_selection=" + selectionRule);
   }
 
   private BigDecimal toGram(BigDecimal quantity, String unit) {
@@ -298,19 +341,15 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
     return value == null ? "" : value.stripTrailingZeros().toPlainString();
   }
 
-  private record ByproductNetWeightResolution(
-      BigDecimal netWeightG, String remark, String failureRemark) {
+  private record ByproductWeightResolution(
+      BigDecimal weightG, String remark, String failureRemark) {
 
-    private static ByproductNetWeightResolution notAttempted() {
-      return new ByproductNetWeightResolution(null, null, null);
+    private static ByproductWeightResolution success(BigDecimal weightG, String remark) {
+      return new ByproductWeightResolution(weightG, remark, null);
     }
 
-    private static ByproductNetWeightResolution success(BigDecimal netWeightG, String remark) {
-      return new ByproductNetWeightResolution(netWeightG, remark, null);
-    }
-
-    private static ByproductNetWeightResolution failure(String failureRemark) {
-      return new ByproductNetWeightResolution(null, null, failureRemark);
+    private static ByproductWeightResolution failure(String failureRemark) {
+      return new ByproductWeightResolution(null, null, failureRemark);
     }
   }
 }

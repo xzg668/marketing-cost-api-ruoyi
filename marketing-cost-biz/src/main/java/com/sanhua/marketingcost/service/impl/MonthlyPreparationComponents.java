@@ -28,7 +28,7 @@ public final class MonthlyPreparationComponents {
         var ids = new ArrayList<Long>();
         ids.add(priceId(row.getRawInputSnapshotJson()));
         if (!Boolean.TRUE.equals(row.getNoScrapConfirmed())
-            && row.getGrossWeightG().compareTo(row.getNetWeightG()) != 0)
+            && com.sanhua.marketingcost.service.MakePartConsumption.scrapQuantityKg(row).signum() != 0)
           ids.add(priceId(row.getScrapInputSnapshotJson()));
         String key = row.getChildMaterialNo() + "|" + Objects.toString(row.getScrapCode(), "");
         put(result, new Component(key, row.getChildMaterialNo(), row.getChildMaterialName(),

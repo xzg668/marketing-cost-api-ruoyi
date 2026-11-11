@@ -98,7 +98,10 @@ public final class CostRunPublicInputPreparation {
       manufacture.addAll(costing.manufactureRequests(product, request.materialCodes(), scope, materialFacts));
       if (scope.threeExpense() != null) three.add(scope.threeExpense());
       other.add(new CostRunFeeQuery.OtherExpense(product));
-      properties.add(new CostRunFeeQuery.Property(propertyYear, product, scope.unit()));
+      var master = materialFacts.one(new CostRunFeeQuery.Material(product, scope.organization()), MaterialMasterRaw.class);
+      String propertyCode = com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients
+          .lookupCode(product, master == null ? null : master.getBareCode());
+      properties.add(new CostRunFeeQuery.Property(propertyYear, propertyCode, scope.unit()));
       String ruleMonth = StringUtils.hasText(scope.accountingMonth())
           ? CostPricingPeriodUtils.normalizePricingMonth(scope.accountingMonth())
           : fallbackMonths.computeIfAbsent(scope.unit(), periods::currentMonth);
@@ -121,14 +124,12 @@ public final class CostRunPublicInputPreparation {
     for (int i = 0; i < stable.size(); i++) {
       var context = stable.get(i).context(); var scope = dimensions.get(i);
       var raw = partial.one(new CostRunFeeQuery.Material(context.getProductCode().trim(), scope.organization()), MaterialMasterRaw.class);
-      if (raw != null && StringUtils.hasText(raw.getProductAttr())) {
-        propertyRules.add(new CostRunFeeQuery.PropertyRule(propertyYear, raw.getProductAttr().trim(), scope.unit()));
-        continue;
-      }
       var property = partial.one(properties.get(i), ProductProperty.class);
       if (property != null && StringUtils.hasText(property.getProductAttr()) && property.getPropertyYear() != null
           && StringUtils.hasText(property.getBusinessUnitType())) {
         propertyRules.add(new CostRunFeeQuery.PropertyRule(property.getPropertyYear(), property.getProductAttr(), property.getBusinessUnitType()));
+      } else if (property == null && raw != null && StringUtils.hasText(raw.getProductAttr())) {
+        propertyRules.add(new CostRunFeeQuery.PropertyRule(propertyYear, raw.getProductAttr().trim(), scope.unit()));
       } else if (property == null && context.getEffectiveTechnicalData() != null
           && StringUtils.hasText(context.getEffectiveTechnicalData().productProperty())) {
         propertyRules.add(new CostRunFeeQuery.PropertyRule(propertyYear, context.getEffectiveTechnicalData().productProperty(), scope.unit()));

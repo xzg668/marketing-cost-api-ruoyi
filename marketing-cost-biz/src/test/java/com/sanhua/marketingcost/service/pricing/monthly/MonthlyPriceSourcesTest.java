@@ -62,17 +62,98 @@ class MonthlyPriceSourcesTest {
     when(supplemental.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
   }
   Candidates read(Set<MonthlyPriceRequest> requests){return sources.resolve(context,requests,ignored->{throw new AssertionError("No formula dependency expected");});}
+  @Test void missingPlatePricesUseCommercialLinkedPricesAndKeepTheRealSourceEvidence() {
+    var requests=new LinkedHashSet<MonthlyPriceRequest>();
+    for(String code:List.of("301070077","301070076"))requests.add(inOrganization(request(code),"220"));
+    when(originalLinked.read(any(),anySet())).thenAnswer(call->inOrganization(call.getArgument(1),"210","LINKED"));
+    var result=read(requests);
+    assertThat(result.problems()).isEmpty();
+    for(var request:requests) {
+      var selected=result.values().get(request).selection();
+      assertThat(selected.fact().price()).isEqualByComparingTo("87.168142");
+      assertThat(selected.fact().evidence().json()).contains("\"orgCode\":\"210\"");
+      assertThat(selected.applicability().matches(request)).isTrue();
+      assertThat(selected.applicability().fragments()).allSatisfy(fragment->assertThat(fragment.organizations()).containsExactly("220"));
+    }
+  }
+  @Test void currentOrganizationIsExhaustedBeforeAnotherOrganizationsEarlierSource() {
+    var request=inOrganization(request("local-fixed"),"220");
+    when(fixed.read(any(),anySet())).thenAnswer(call->inOrganization(call.getArgument(1),"220","PURCHASE_FIXED"));
+    when(originalLinked.read(any(),anySet())).thenAnswer(call->inOrganization(call.getArgument(1),"210","LINKED"));
+    var result=read(Set.of(request));
+    assertThat(result.values().get(request).selection().fact().evidence().json()).contains("PURCHASE_FIXED");
+    verify(originalLinked).read(context,Set.of(request));
+  }
+  @Test void fallbackIsSymmetricAndRetainsTheOriginalFinanceDesignation() {
+    manual=true;order=List.of(MaterialPriceSourceType.FIXED,MaterialPriceSourceType.LINKED,MaterialPriceSourceType.RANGE,MaterialPriceSourceType.SETTLE_FIXED,MaterialPriceSourceType.SETTLE_LINKED);
+    var request=request("commercial-to-plate");
+    when(fixed.read(any(),anySet())).thenAnswer(call->inOrganization(call.getArgument(1),"220","PURCHASE_FIXED"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);
+    verifyNoInteractions(linked,originalLinked,settlement,ods,inquiries,supplemental);
+  }
+  @Test void publicSourceApprovalAndInvalidInputAreRetained() {
+    var request=inOrganization(request("waiting-local"),"220");
+    for(var reason:List.of(Failure.WAITING,Failure.INVALID_INPUT)) {
+      clearInvocations(originalLinked);
+      when(linked.read(any(),anySet(),any())).thenAnswer(call->{Set<MonthlyPriceRequest> batch=call.getArgument(1);return batch.contains(request)?new Candidates(Map.of(),Map.of(request,new Problem(reason,"本组织待确认"))):missing(batch);});
+      assertThat(read(Set.of(request)).problems().get(request).reason()).isEqualTo(reason);
+      verifyNoInteractions(originalLinked);
+    }
+  }
+  @Test void incompleteLocalTechnicalSupplementDoesNotHideAnAvailableCommercialLinkedPrice() {
+    var excluded=inOrganization(request("pending-supplement"),"220");var f=excluded.family();
+    var included=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(f.month(),f.businessUnitType(),f.materialCode(),f.specification(),f.unit(),f.currency(),TaxBasis.INCLUDED,f.requestedSupplierCode()),"220",excluded.conditions(),BigDecimal.ONE);
+    {
+      when(supplemental.read(any(),anySet())).thenAnswer(call->{Set<MonthlyPriceRequest> batch=call.getArgument(1);var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();for(var r:batch)problems.put(r,new Problem(Failure.MISSING,r.family().taxBasis()==TaxBasis.INCLUDED?"补录固定价没有适用的含税口径":"未提交技术补录不参与取价"));return new Candidates(Map.of(),problems);});
+      when(originalLinked.read(any(),anySet())).thenAnswer(call->{Set<MonthlyPriceRequest> batch=call.getArgument(1);var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();for(var r:batch)if(r.priceOrgCode().equals("210")&&r.family().taxBasis()==TaxBasis.EXCLUDED)values.put(r,orgCandidate("210","LINKED"));else problems.put(r,new Problem(Failure.MISSING,"没有适用联动价"));return new Candidates(values,problems);});
+      var result=read(Set.of(included,excluded));
+      assertThat(result.values()).containsOnlyKeys(excluded);
+      assertThat(result.problems()).doesNotContainKey(excluded);
+    }
+  }
+  @Test void anExistingLocalTaxVariantPreventsAnotherOrganizationFromCreatingTaxAmbiguity() {
+    var excluded=inOrganization(request("local-tax"),"220");
+    var f=excluded.family();
+    var included=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(f.month(),f.businessUnitType(),f.materialCode(),f.specification(),f.unit(),f.currency(),TaxBasis.INCLUDED,f.requestedSupplierCode()),"220",excluded.conditions(),BigDecimal.ONE);
+    when(fixed.read(any(),anySet())).thenAnswer(call->{
+      Set<MonthlyPriceRequest> batch=call.getArgument(1);
+      if(batch.contains(included))return new Candidates(Map.of(included,orgCandidate("220","PURCHASE_FIXED")),Map.of(excluded,new Problem(Failure.MISSING,"没有未税价格")));
+      return inOrganization(batch,"210","PURCHASE_FIXED");
+    });
+    var result=read(Set.of(included,excluded));
+    assertThat(result.values()).containsOnlyKeys(included);
+    verify(fixed).read(context,Set.of(included,excluded));
+  }
+  @Test void fallbackKeepsSupplierQuantityMonthAndBusinessUnitAndUsesOnlyTheOtherPriceOrganization() {
+    var local=inOrganization(request("scope"),"220");
+    var f=local.family();
+    var request=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(f.month(),f.businessUnitType(),f.materialCode(),f.specification(),f.unit(),f.currency(),f.taxBasis(),"S1"),"220",new NonCuConditions(new BoardTerms(null,null,true)),new BigDecimal("3"),new BigDecimal("1000"));
+    when(originalLinked.read(any(),anySet())).thenAnswer(call->inOrganization(call.getArgument(1),"210","LINKED"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);
+    verify(originalLinked).read(eq(context),argThat(batch->batch.stream().allMatch(r->r.priceOrgCode().equals("210") && r.family().equals(request.family()) && r.conditions().boardTerms()==null && r.priceBasisQuantity().compareTo(new BigDecimal("3"))==0 && r.annualUsagePieces().compareTo(new BigDecimal("1000"))==0)));
+  }
+  static MonthlyPriceRequest inOrganization(MonthlyPriceRequest request,String org) {
+    return new MonthlyPriceRequest(request.family(),org,"220".equals(org)?request.conditions():NonCuConditions.empty(),request.priceBasisQuantity(),request.annualUsagePieces());
+  }
+  static Candidate orgCandidate(String org,String kind) {
+    return new Candidate(new Selection(null,new MonthlyPriceCoverage(Set.of(org),QuantityInterval.all(),ConditionDomain.any()),PriceFact.normal(new BigDecimal("87.168142"),SourceEvidence.ofJson("{\"snapshotSchema\":1,\"sourceKind\":\""+kind+"\",\"source\":{\"selected\":{\"orgCode\":\""+org+"\",\"fixedPrice\":87.168142}}}"),Set.of())),null);
+  }
+  static Candidates inOrganization(Set<MonthlyPriceRequest> requests,String org,String kind) {
+    var found=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
+    for(var request:requests)if(request.priceOrgCode().equals(org))found.put(request,orgCandidate(org,kind));else problems.put(request,new Problem(Failure.MISSING,"本组织没有适用价格"));
+    return new Candidates(found,problems);
+  }
   @Test void laterEmptySupplementalSourceCannotHideTheActualPrimarySupplierRestriction() {
     var request=request("restricted");
-    when(linked.read(any(),anySet(),any())).thenReturn(new Candidates(Map.of(),Map.of(request,
+    when(linked.read(any(),eq(Set.of(request)),any())).thenReturn(new Candidates(Map.of(),Map.of(request,
         new Problem(Failure.MISSING,"联动价有记录，但当前主供方没有适用价格"))));
-    when(supplemental.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,
+    when(supplemental.read(any(),eq(Set.of(request)))).thenReturn(new Candidates(Map.of(),Map.of(request,
         new Problem(Failure.MISSING,"当前料号没有技术补录办理来源"))));
     assertThat(read(Set.of(request)).problems().get(request).message()).contains("主供方").doesNotContain("技术补录办理来源");
   }
   @Test void noAvailableSourceDoesNotExposeTheLastSupplementalLookupAsTheBusinessCause() {
     var request=request("missing");
-    when(supplemental.read(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,
+    when(supplemental.read(any(),eq(Set.of(request)))).thenReturn(new Candidates(Map.of(),Map.of(request,
         new Problem(Failure.MISSING,"当前料号没有技术补录办理来源"))));
     assertThat(read(Set.of(request)).problems().get(request).message()).contains("未取得可用价格").doesNotContain("技术补录办理来源");
   }

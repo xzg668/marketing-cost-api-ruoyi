@@ -32,6 +32,147 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 class MakePartWeightServiceImplTest {
 
+  @Test void adoptedQuoteGrossMinusParentTheoreticalNetDeterminesScrapEvenWhenByproductExists() {
+    var raws = mock(MaterialMasterRawMapper.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(raws, mock(MakePartChildNetWeightMapper.class),
+        mock(MakePartScrapMappingService.class), products);
+    when(raws.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", "100")));
+    when(products.selectList(any())).thenReturn(List.of(byproduct("S", "20", "g")));
+    var bom = child("201502458", "1"); bom.setStockUnit("只");
+    var quoted = new com.sanhua.marketingcost.service.MakePartQuotedWeight(new BigDecimal("298.14"), "SRM联动价表");
+    var weight = service.resolveWeights("P", bom, "毛坯加工", "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", false, quoted);
+    assertThat(weight.getStatus()).isEqualTo("OK");
+    assertThat(weight.getGrossWeightG()).isEqualByComparingTo("298.14");
+    assertThat(weight.getNetWeightG()).isEqualByComparingTo("100");
+    assertThat(weight.getRemark()).contains("毛重来源=SRM联动价表；", "废料重按SRM毛重减U9本件理论净重", "scrap_weight_g=198.14");
+    org.mockito.Mockito.verifyNoInteractions(products);
+    var row = new com.sanhua.marketingcost.entity.MakePartPriceCalcRow();
+    row.setItemProcessType("毛坯加工"); row.setGrossWeightG(weight.getGrossWeightG());
+    row.setNetWeightG(weight.getNetWeightG()); row.setRawUnitPrice(new BigDecimal("50"));
+    row.setScrapCode("S"); row.setScrapUnitPrice(BigDecimal.TEN);
+    assertThat(new com.sanhua.marketingcost.service.MakePartPriceCalculator().calculate(List.of(row))
+        .getFirst().getCostPrice()).isEqualByComparingTo("48.0186");
+    when(products.selectList(any())).thenReturn(List.of());
+    var fallback = service.resolveWeights("P", bom, "毛坯加工", "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", false, quoted);
+    assertThat(fallback.getNetWeightG()).isEqualByComparingTo("100");
+    assertThat(fallback.getGrossWeightG().subtract(fallback.getNetWeightG())).isEqualByComparingTo("198.14");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0,0,OK", "100,100,OK", "100,101,MISSING_WEIGHT", "100,-1,MISSING_WEIGHT", "100,,MISSING_WEIGHT"})
+  void quotedWeightRequiresValidParentTheoryAndDoesNotFallBackToByproduct(
+      String gross, String net, String status) {
+    var raws = mock(MaterialMasterRawMapper.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(raws, mock(MakePartChildNetWeightMapper.class),
+        mock(MakePartScrapMappingService.class), products);
+    when(raws.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", net)));
+    var bom = child("C", "1"); bom.setStockUnit("只");
+    var result = service.resolveWeights("P", bom, "毛坯加工", "2026-11", LocalDate.of(2026,11,11),
+        "COMMERCIAL", true, new com.sanhua.marketingcost.service.MakePartQuotedWeight(
+            new BigDecimal(gross), "SRM区间价表"));
+    assertThat(result.getStatus()).isEqualTo(status);
+    assertThat(result.getGrossWeightG()).isEqualByComparingTo(gross);
+    org.mockito.Mockito.verifyNoInteractions(products);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"780.8", "999", "0"})
+  @DisplayName("BOM为1只时以本件理论净重加同号副产品废料重反算毛重，不取子毛坯理论净重")
+  void countedBlankReconstructsGrossFromParentNetAndMatchedScrap(String childTheoreticalNet) {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(rawMapper,
+        mock(MakePartChildNetWeightMapper.class), mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("201502283", "431.9"), raw("201502460", childTheoreticalNet)));
+    when(mappings.listMappings("201502460", "COMMERCIAL"))
+        .thenReturn(List.of(scrap("301990218")));
+    when(products.selectList(any()))
+        .thenReturn(List.of(byproduct("301990218", "0.3489", "千克")));
+    var bom = child("201502460", "1");
+    bom.setStockUnit("只");
+
+    var result = service.resolveWeights("201502283", bom, "毛坯加工", "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", false);
+
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getGrossWeightG()).isEqualByComparingTo("780.8");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("431.9");
+    assertThat(result.getRemark()).contains("毛重", "parent 理论净重", "byproduct_weight_g=348.9");
+    var row = new com.sanhua.marketingcost.entity.MakePartPriceCalcRow();
+    row.setParentMaterialNo("201502283"); row.setChildMaterialNo("201502460");
+    row.setItemProcessType("毛坯加工"); row.setGrossWeightG(result.getGrossWeightG());
+    row.setNetWeightG(result.getNetWeightG()); row.setRawUnitPrice(new BigDecimal("50"));
+    row.setScrapCode("301990218"); row.setScrapUnitPrice(new BigDecimal("10"));
+    assertThat(new com.sanhua.marketingcost.service.MakePartPriceCalculator()
+        .calculate(List.of(row)).getFirst().getCostPrice()).isEqualByComparingTo("46.511");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"原材料加工,kg,0.8", "毛坯加工,kg,0.8", "原材料加工,g,800", "毛坯加工,克,800"})
+  void explicitBomWeightWinsAndMatchedScrapPrecedesTheoreticalNet(
+      String process, String unit, String quantity) {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(rawMapper,
+        mock(MakePartChildNetWeightMapper.class), mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", "431.9"), raw("C", "999")));
+    when(mappings.listMappings("C", "COMMERCIAL")).thenReturn(List.of(scrap("S")));
+    when(products.selectList(any())).thenReturn(List.of(byproduct("S", "348.9", "g")));
+    var bom = child("C", quantity); bom.setStockUnit(unit);
+    var result = service.resolveWeights("P", bom, process, "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", false);
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getGrossWeightG()).isEqualByComparingTo("800");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("451.1");
+  }
+
+  @Test void countedBlankWithoutMatchedScrapCannotInventGrossFromChildMaster() {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var service = service(rawMapper, mock(MakePartChildNetWeightMapper.class));
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", "431.9"), raw("C", "780.8")));
+    var bom = child("C", "1"); bom.setStockUnit("只");
+    var result = service.resolveWeights("P", bom, "毛坯加工", "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", false);
+    assertThat(result.getStatus()).isEqualTo("MISSING_WEIGHT");
+    assertThat(result.getGrossWeightG()).isNull();
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("431.9");
+  }
+
+  @Test void countedMultiMaterialUsesOnlyItsOwnNetConfiguration() {
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    var netMapper = mock(MakePartChildNetWeightMapper.class);
+    var mappings = mock(MakePartScrapMappingService.class);
+    var products = mock(U9BomByproductMasterMapper.class);
+    var service = new MakePartWeightServiceImpl(rawMapper, netMapper, mappings, products);
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("P", "431.9"), raw("C", "999")));
+    when(mappings.listMappings("C", "COMMERCIAL")).thenReturn(List.of(scrap("S")));
+    when(products.selectList(any())).thenReturn(List.of(byproduct("S", "10", "g")));
+    var bom = child("C", "1"); bom.setStockUnit("只");
+    var missing = service.resolveWeights("P", bom, "毛坯加工", "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", true);
+    assertThat(missing.getStatus()).isEqualTo("MISSING_WEIGHT");
+    assertThat(missing.getNetWeightG()).isNull();
+    assertThat(missing.getGrossWeightG()).isNull();
+    when(netMapper.selectEffective(any(), any(), any(), any(), any())).thenReturn(childNetWeight("20"));
+    var configured = service.resolveWeights("P", bom, "毛坯加工", "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", true);
+    assertThat(configured.getStatus()).isEqualTo("OK");
+    assertThat(configured.getNetWeightG()).isEqualByComparingTo("20");
+    assertThat(configured.getGrossWeightG()).isEqualByComparingTo("30");
+  }
+
   @BeforeAll
   static void initializeByproductMetadata() {
     com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
@@ -69,8 +210,8 @@ class MakePartWeightServiceImplTest {
   }
 
   @Test
-  @DisplayName("毛坯加工毛重取 child 理论净重，净重取 parent 理论净重")
-  void blankProcessGrossWeightUsesChildTheoreticalNetWeight() {
+  @DisplayName("BOM有重量时毛坯加工也取BOM毛重，缺副产品时净重回退本件理论净重")
+  void blankProcessGrossWeightUsesBomAndNetFallsBackToParent() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
     MakePartChildNetWeightMapper childWeightMapper = mock(MakePartChildNetWeightMapper.class);
     MakePartWeightServiceImpl service = service(mapper, childWeightMapper);
@@ -165,8 +306,8 @@ class MakePartWeightServiceImplTest {
     assertThat(stainlessResult.getNetWeightG()).isEqualByComparingTo("33.6");
     assertThat(copperResult.getGrossWeightG()).isEqualByComparingTo("5.6");
     assertThat(copperResult.getNetWeightG()).isEqualByComparingTo("5.0");
-    verify(scrapMappingService).listMappings("301240299", "COMMERCIAL");
-    verify(scrapMappingService).listMappings("301070047", "COMMERCIAL");
+    verify(childWeightMapper).selectEffective("PLATE", "1053000301687", "301240299", "F001", "2026-07");
+    verify(childWeightMapper).selectEffective("PLATE", "1053000301687", "301070047", "F001", "2026-07");
   }
 
   @Test
@@ -349,7 +490,7 @@ class MakePartWeightServiceImplTest {
 
   @ParameterizedTest
   @CsvSource({"原材料加工,false", "毛坯加工,false", "原材料加工,true", "毛坯加工,true"})
-  void singleMaterialCannotUseByproductWithDifferentOrMissingCmsScrapCode(
+  void soleByproductProvidesWeightWithDifferentOrMissingCmsScrapCode(
       String process, boolean mappingMissing) {
     var rawMapper = mock(MaterialMasterRawMapper.class);
     var mappings = mock(MakePartScrapMappingService.class);
@@ -365,9 +506,8 @@ class MakePartWeightServiceImplTest {
     var result = service.resolveWeights("203240172", child("301200309", "0.02220653"),
         process, "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", false);
     assertThat(result.getStatus()).isEqualTo("OK");
-    assertThat(result.getNetWeightG()).isEqualByComparingTo("20.016");
-    assertThat(result.getRemark()).contains("副产品反算失败", "净重取 parent 理论净重");
-    assertThat(result.getRemark()).doesNotContain("净重按U9副产品反算");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("19.699");
+    assertThat(result.getRemark()).contains("净重按U9副产品反算", "byproduct_selection=SINGLE");
   }
 
   @Test void ambiguousMappedSingleMaterialByproductsCannotBeGuessed() {
@@ -384,7 +524,7 @@ class MakePartWeightServiceImplTest {
     var result = service.resolveWeights("P", child("C", "0.02220653"), "原材料加工",
         "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", false);
     assertThat(result.getNetWeightG()).isEqualByComparingTo("20.016");
-    assertThat(result.getRemark()).contains("有效副产品匹配不唯一", "净重取 parent 理论净重");
+    assertThat(result.getRemark()).contains("按CMS废料码匹配不唯一", "净重取 parent 理论净重");
   }
 
   private BomU9Source child(String childCode, String qtyPerParent) {
@@ -395,6 +535,7 @@ class MakePartWeightServiceImplTest {
       String childCode, String qtyPerParent, String priceOrgCode) {
     BomU9Source child = new BomU9Source();
     child.setChildMaterialNo(childCode);
+    child.setStockUnit("kg");
     child.setPriceOrgCode(priceOrgCode);
     child.setBomVersion("F001");
     if (qtyPerParent != null) {

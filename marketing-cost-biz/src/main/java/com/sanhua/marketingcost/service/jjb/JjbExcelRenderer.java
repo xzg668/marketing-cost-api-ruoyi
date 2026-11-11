@@ -160,7 +160,16 @@ public class JjbExcelRenderer {
       stringAt(row, 5, v.unit());
       numeric(row, 5, "PROPERTY".equals(v.kind()) ? v.coefficient() : v.amount(),
           "PROPERTY".equals(v.kind()) ? DECIMAL : MONEY);
-      numeric(row, 6, v.grossWeight(), DECIMAL); numeric(row, 7, v.netWeight(), DECIMAL);
+      String grossSource = v.manufacturing().size() == 1
+          ? v.manufacturing().getFirst().get("grossWeightSource") : null;
+      if (grossSource != null) {
+        // Retain a numeric weight while leaving enough room for its saved source label.
+        int width = (int)grossSource.codePoints().map(c -> c > 127 ? 2 : 1).sum()
+            + text(v.grossWeight()).length() + 6;
+        sheet.setColumnWidth(7, Math.max(sheet.getColumnWidth(7), Math.min(60, width) * 256));
+      }
+      numeric(row, 6, v.grossWeight(), grossSource == null ? DECIMAL : DECIMAL + "\"（" + grossSource + "）\"");
+      numeric(row, 7, v.netWeight(), DECIMAL);
       numeric(row, 8, v.rawUnitPrice(), MONEY); numeric(row, 9, v.scrapUnitPrice(), MONEY);
       string(row, 10, v.material()); string(row, 11, v.shape());
       string(row, 12, "HOUSEHOLD".equals(v.kind()) && v.priceSource() == null ? "询价（家用部件）" : v.priceSource());

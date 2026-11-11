@@ -31,6 +31,71 @@ class MakePartByproductWeightIntegrationTest extends OriginalPricingIntegrationT
   @Autowired ObjectMapper json;
   @Autowired org.mybatis.spring.SqlSessionTemplate sqlSession;
 
+  @Test void quoteGrossMinusU9TheoryIsSavedAndByproductDoesNotOverrideTheDeduction() {
+    String key = fixture();
+    jdbc.update("UPDATE lp_material_master_raw SET global_seg_3_theoretical_net_weight='100' WHERE material_code=?", key);
+    byproduct(key, "210", "F007", "主制造", "已核准", "2026-08-05", "9999-12-31", "0.3489", "kg");
+    var child = new BomU9Source(); child.setChildMaterialNo(key + "-C");
+    child.setPriceOrgCode("210"); child.setBomVersion("F007"); child.setStockUnit("只"); child.setQtyPerParent(BigDecimal.ONE);
+    sqlSession.clearCache();
+    var weight = weights.resolveWeights(key, child, "毛坯加工", "2026-11", LocalDate.of(2026,11,11),
+        "COMMERCIAL", false, new com.sanhua.marketingcost.service.MakePartQuotedWeight(new BigDecimal("298.14"), "SRM联动价表"));
+    assertThat(weight.getGrossWeightG()).isEqualByComparingTo("298.14");
+    assertThat(weight.getNetWeightG()).isEqualByComparingTo("100");
+    assertThat(weight.getRemark()).contains("scrap_weight_g=198.14").doesNotContain("byproduct_weight_g");
+    var row = new MakePartPriceCalcRow(); row.setCalcBatchId(key); row.setOaNo(key);
+    row.setBusinessUnitType("COMMERCIAL"); row.setPricingMonth("2026-11");
+    row.setPriceAsOfTime(java.time.LocalDateTime.of(2026,11,11,12,0)); row.setPriceScenarioType("FINANCE_BASE");
+    row.setParentMaterialNo(key); row.setChildMaterialNo(key + "-C"); row.setItemProcessType("毛坯加工");
+    row.setGrossWeightG(weight.getGrossWeightG()); row.setNetWeightG(weight.getNetWeightG()); row.setScrapCode(key + "-S");
+    row.setRawUnitPrice(new BigDecimal("50")); row.setScrapUnitPrice(BigDecimal.TEN); row.setRemark(weight.getRemark());
+    var calculated = calculator.calculate(List.of(row)).getFirst();
+    assertThat(calculated.getCostPrice()).isEqualByComparingTo("48.0186");
+    calculations.insert(calculated); sqlSession.clearCache();
+    var saved = calculations.selectById(calculated.getId());
+    assertThat(saved.getNetWeightG()).isEqualByComparingTo("100");
+    assertThat(saved.getCostPrice()).isEqualByComparingTo("48.0186");
+    assertThat(saved.getRemark()).contains("毛重来源=SRM联动价表；");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0.3489,431.9,780.8", "0,431.9,431.9", "0.3489,0,348.9"})
+  void countedBomUsesParentNetPlusMatchedOutputAndPersistsBlankPrice(
+      String scrapKg, String parentNet, String gross) {
+    String key = fixture();
+    jdbc.update("UPDATE lp_material_master_raw SET global_seg_3_theoretical_net_weight=? WHERE material_code=?", parentNet, key);
+    // 故意与实际投料毛重不一致，保证不会再把子毛坯理论净重作为毛重。
+    jdbc.update("UPDATE lp_material_master_raw SET global_seg_3_theoretical_net_weight='999' WHERE material_code=?", key + "-C");
+    byproduct(key, "210", "F007", "主制造", "已核准", "2026-08-05", "9999-12-31", scrapKg, "kg");
+    var child = new BomU9Source(); child.setChildMaterialNo(key + "-C");
+    child.setPriceOrgCode("210"); child.setBomVersion("F007");
+    child.setStockUnit("只"); child.setQtyPerParent(BigDecimal.ONE);
+    sqlSession.clearCache();
+    var weight = weights.resolveWeights(key, child, "毛坯加工", "2026-11",
+        LocalDate.of(2026, 11, 11), "COMMERCIAL", false);
+    assertThat(weight.getStatus()).isEqualTo("OK");
+    assertThat(weight.getGrossWeightG()).isEqualByComparingTo(gross);
+    assertThat(weight.getNetWeightG()).isEqualByComparingTo(parentNet);
+    assertThat(weight.getRemark()).contains("毛重按本件净重加U9副产品废料重反算");
+    var row = new MakePartPriceCalcRow(); row.setCalcBatchId(key); row.setOaNo(key);
+    row.setBusinessUnitType("COMMERCIAL"); row.setPricingMonth("2026-11");
+    row.setPriceAsOfTime(java.time.LocalDateTime.of(2026, 11, 11, 12, 0));
+    row.setPriceScenarioType("FINANCE_BASE");
+    row.setParentMaterialNo(key); row.setChildMaterialNo(key + "-C");
+    row.setItemProcessType("毛坯加工"); row.setGrossWeightG(weight.getGrossWeightG());
+    row.setNetWeightG(weight.getNetWeightG()); row.setScrapCode(key + "-S");
+    row.setRawUnitPrice(new BigDecimal("50")); row.setScrapUnitPrice(new BigDecimal("10"));
+    row.setRemark(weight.getRemark());
+    var calculated = calculator.calculate(List.of(row)).getFirst();
+    assertThat(calculated.getCostPrice())
+        .isEqualByComparingTo(new BigDecimal("50").subtract(new BigDecimal(scrapKg).multiply(BigDecimal.TEN)));
+    calculations.insert(calculated); sqlSession.clearCache();
+    var saved = calculations.selectById(calculated.getId());
+    assertThat(saved.getGrossWeightG()).isEqualByComparingTo(gross);
+    assertThat(saved.getNetWeightG()).isEqualByComparingTo(parentNet);
+    assertThat(saved.getCostPrice()).isEqualByComparingTo(calculated.getCostPrice());
+  }
+
   @ParameterizedTest
   @CsvSource({"原材料加工,千克,0.00250753", "原材料加工,克,2.50753",
       "毛坯加工,kg,0.00250753", "毛坯加工,g,2.50753"})
@@ -113,7 +178,7 @@ class MakePartByproductWeightIntegrationTest extends OriginalPricingIntegrationT
   @ParameterizedTest
   @CsvSource({"原材料加工,千克,0.00250753,false", "毛坯加工,g,2.50753,false",
       "原材料加工,千克,0.00250753,true", "毛坯加工,g,2.50753,true"})
-  void cmsScrapIdentityMustMatchEvenForOneUniqueU9Output(
+  void uniqueManufacturingByproductSuppliesWeightIndependentlyOfCmsPriceCode(
       String process, String unit, String output, boolean parentWeightMissing) {
     String key = fixture();
     jdbc.update("UPDATE lp_material_scrap_ref SET scrap_code=? WHERE material_code=?", key + "-CMS", key + "-C");
@@ -121,19 +186,26 @@ class MakePartByproductWeightIntegrationTest extends OriginalPricingIntegrationT
       jdbc.update("UPDATE lp_material_master_raw SET global_seg_3_theoretical_net_weight='' WHERE material_code=?", key);
     byproduct(key, "210", "F007", "主制造", "已核准", "2026-08-05", "9999-12-31", output, unit);
     var single = resolve(key, process, false);
-    if (parentWeightMissing) {
-      assertThat(single.getStatus()).isEqualTo("MISSING_WEIGHT");
-      assertThat(single.getNetWeightG()).isNull();
-    } else {
-      assertThat(single.getNetWeightG()).isEqualByComparingTo("20.016");
-      assertThat(single.getRemark()).contains("净重取 parent 理论净重");
-    }
-    assertThat(single.getRemark()).contains("缺有效U9主制造副产品");
-    assertThat(single.getRemark()).doesNotContain("净重按U9副产品反算");
-    // 同一资料作为多子料的一部分时不能无依据扣除这条产出。
+    assertThat(single.getStatus()).isEqualTo("OK");
+    assertThat(single.getNetWeightG()).isEqualByComparingTo("19.699");
+    assertThat(single.getRemark()).contains("净重按U9副产品反算", "byproduct_selection=SINGLE");
+    // 制造BOM仅一条有效副产品时，按用户确认规则直接使用，不要求CMS同号。
     var multi = resolve(key, process, true);
-    assertThat(multi.getStatus()).isEqualTo("MISSING_WEIGHT");
-    assertThat(multi.getNetWeightG()).isNull();
+    assertThat(multi.getStatus()).isEqualTo("OK");
+    assertThat(multi.getNetWeightG()).isEqualByComparingTo("19.699");
+  }
+
+  @Test void multipleEffectiveByproductsStillRequireOneCmsMatch() {
+    String key = fixture();
+    byproduct(key, "210", "F007", "主制造", "已核准", "2026-08-05", "9999-12-31", "0.00250753", "kg");
+    jdbc.update("INSERT INTO lp_u9_bom_byproduct_master(price_org_code,parent_material_no,bom_purpose,version_no,output_type,byproduct_material_no,output_qty,unit,status,effective_from,effective_to) VALUES('210',?,'主制造','F007','副产品',?,0.01,'kg','已核准','2026-08-05','9999-12-31')", key, key + "-OTHER");
+    var matched = resolve(key, "原材料加工", true);
+    assertThat(matched.getNetWeightG()).isEqualByComparingTo("19.699");
+    assertThat(matched.getRemark()).contains("byproduct_selection=CMS_MATCH");
+    jdbc.update("UPDATE lp_material_scrap_ref SET scrap_code=? WHERE material_code=?", key + "-MISSING", key + "-C");
+    var missing = resolve(key, "原材料加工", true);
+    assertThat(missing.getStatus()).isEqualTo("MISSING_WEIGHT");
+    assertThat(missing.getNetWeightG()).isNull();
   }
 
   private String fixture() {
@@ -149,6 +221,7 @@ class MakePartByproductWeightIntegrationTest extends OriginalPricingIntegrationT
     sqlSession.clearCache();
     var child = new BomU9Source(); child.setChildMaterialNo(key + "-C");
     child.setPriceOrgCode("210"); child.setBomVersion("F007");
+    child.setStockUnit("kg");
     child.setQtyPerParent(new BigDecimal("0.02220653"));
     return weights.resolveWeights(key, child, process, "2026-11", LocalDate.of(2026, 11, 9), "COMMERCIAL", multi);
   }

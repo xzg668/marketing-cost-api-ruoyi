@@ -100,15 +100,11 @@ public final class MonthlySupplementalFixedPriceSource {
             && owner.assigneeId()==null && owner.sourceVersionId()==null
             && owner.effectiveVersionId()==null && "PENDING".equals(owner.productStatus())
             && Integer.valueOf(1).equals(owner.taskActive()) && Integer.valueOf(1).equals(owner.productActive())) {
-          if(!fixed.getOrDefault(code,List.of()).isEmpty())
-            throw new IllegalArgumentException("未分派的空补录不能已有发布固定价");
           problems.put(request,new Problem(Failure.MISSING,"缺少有效价格，待分派技术员补录"));continue;
         }
         var key=new ApprovalKey(owner.owner(),owner.taskActive(),owner.productActive(),owner.productStatus(),owner.effectiveVersionId(),owner.originalFormId(),owner.flowId(),request.priceOrgCode());
         var approved=approvalCache.computeIfAbsent(key,ignored->approve(context,currentForm,request,owner,capturedProducts.get(owner.productId()),capturedFlows.get(owner.flowId()),capturedBasis.get(owner.flowId())));
         if(approved.error()!=null){
-          if(approved.error().reason()==Failure.MISSING && !fixed.getOrDefault(code,List.of()).isEmpty())
-            throw new IllegalArgumentException("待编辑补录版本不能已有发布固定价");
           problems.put(request,approved.error());continue;
         }
         var fixedRows=fixed.getOrDefault(code,List.of()).stream().filter(row->request.matchesSpecification(row.getSpecModel())).filter(row->Objects.equals(row.getTechnicalVersionId(),owner.sourceVersionId()) && "AVAILABLE".equals(row.getTechnicalPublicationStatus())).toList();
@@ -149,10 +145,14 @@ public final class MonthlySupplementalFixedPriceSource {
       var proof=new ApprovalBasis(VersionIdentity.of(qualified.version()),VersionIdentity.of(personal),flow,basis==null?null:json.canonicalHash(basis));
       return new Approved(proof,items(personal),items(qualified.version()),null);
     }catch(EffectiveTechnicalDataException blocked) {
-      // Dispatch claims its own missing materials before the technician has a submitted price.
-      // Keep that editable demand missing; no pending declaration is a monthly-price candidate.
-      if("TECH_DATA_TASK_NOT_SUBMITTED".equals(blocked.errorCode()) && ownEditableGap(context,form,owner,data))
-        return new Approved(null,Map.of(),Map.of(),new Problem(Failure.MISSING,blocked.getMessage()));
+      // An unsubmitted technical task is not a price source, regardless of who owns it.
+      // It must not block a public price or organization fallback.
+      boolean submitted=TechnicalDataSubmissionState.retainsSubmittedMaterials(owner.taskStatus())
+          && TechnicalDataSubmissionState.submitted(owner.productStatus())
+          && TechnicalDataSubmissionState.submitted(owner.moduleStatus())
+          && TechnicalDataSubmissionState.submitted(owner.sourceVersionStatus());
+      if("TECH_DATA_TASK_NOT_SUBMITTED".equals(blocked.errorCode()) && !submitted)
+        return new Approved(null,Map.of(),Map.of(),new Problem(Failure.MISSING,"未提交技术补录不参与取价"));
       var waiting=Set.of("TECH_DATA_TASK_NOT_SUBMITTED","TECH_DATA_FINANCE_CONFIRMATION_REQUIRED").contains(blocked.errorCode());
       return new Approved(null,Map.of(),Map.of(),new Problem(waiting?Failure.WAITING:Failure.INVALID_INPUT,blocked.getMessage()));
     }catch(IllegalArgumentException | IllegalStateException | NullPointerException invalid) {

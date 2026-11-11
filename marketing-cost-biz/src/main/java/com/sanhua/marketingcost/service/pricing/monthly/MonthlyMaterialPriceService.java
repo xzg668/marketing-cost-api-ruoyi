@@ -280,8 +280,17 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
   }
   private List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> reviews(Context context,Map<MonthlyPriceRequest,Selection> selections) {
     var evidence=new HashMap<ConsumerPrice,Set<String>>();
-    selections.forEach((request,selection)->evidence.computeIfAbsent(
-        new ConsumerPrice(request.priceOrgCode(),request.family().materialCode()),ignored->new HashSet<>()).add(selection.fact().evidence().sha256()));
+    selections.forEach((request,selection)->{
+      var organizations=new HashSet<>(Set.of(request.priceOrgCode()));
+      // The source remains in its actual organization when used as a fallback. Retain only
+      // reviews for the consumer or that captured source, with the exact selected evidence.
+      var source=codec.decode(codec.wrap(selection.fact().evidence().json()),com.fasterxml.jackson.databind.JsonNode.class).path("source");
+      var selected=source.has("selected")?source.path("selected"):source.path("selectedRule");
+      for(String field:List.of("orgCode","priceOrgCode","org_code","price_org_code"))
+        if(Set.of("210","220").contains(selected.path(field).asText()))organizations.add(selected.path(field).asText());
+      for(String organization:organizations)evidence.computeIfAbsent(
+          new ConsumerPrice(organization,request.family().materialCode()),ignored->new HashSet<>()).add(selection.fact().evidence().sha256());
+    });
     return context.supplierReviews().successfulReviews().stream().filter(binding->{
       var scope=binding.review().scope();
       return Objects.equals(scope.businessUnitType(),context.businessUnitType()) && Objects.equals(scope.oaNo(),context.oaNo())

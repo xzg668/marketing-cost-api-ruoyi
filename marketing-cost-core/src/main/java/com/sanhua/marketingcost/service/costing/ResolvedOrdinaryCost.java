@@ -16,7 +16,8 @@ public final class ResolvedOrdinaryCost {
   public record Calculated(Inputs inputs, List<Value> rows) {
     public Calculated { Objects.requireNonNull(inputs); rows = List.copyOf(rows); }
   }
-  private record Origin(String code, String name, String category, String table, Long id, String remark) {}
+  private record Origin(String code, String name, String category, String table, Long id, String remark,
+      com.sanhua.marketingcost.dto.CostAmountComposition composition) {}
   private final Inputs inputs;
   private final List<Origin> origins;
 
@@ -27,7 +28,7 @@ public final class ResolvedOrdinaryCost {
     inputs = new Inputs(rows.stream().map(row -> new Value(row.getCostCode(), row.getCategory(),
         row.getBaseAmount(), row.getRate(), row.getAmount())).toList(), independentExpenses, departmentsComplete);
     origins = rows.stream().map(row -> new Origin(row.getCostCode(), row.getCostName(), row.getCategory(),
-        row.getSourceTable(), row.getSourceId(), row.getRemark())).toList();
+        row.getSourceTable(), row.getSourceId(), row.getRemark(), row.getComposition())).toList();
   }
 
   public Inputs inputs() { return inputs; }
@@ -66,6 +67,7 @@ public final class ResolvedOrdinaryCost {
       var row = new CostRunCostItemDto();
       row.setCostCode(origin.code()); row.setCostName(origin.name()); row.setCategory(origin.category());
       row.setSourceTable(origin.table()); row.setSourceId(origin.id()); row.setRemark(origin.remark());
+      row.setComposition(origin.composition());
       row.setBaseAmount(value.base()); row.setRate(value.rate()); row.setAmount(value.amount());
       rows.add(row);
     }

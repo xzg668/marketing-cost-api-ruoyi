@@ -47,9 +47,17 @@ public final class MonthlyPreparationEvidence {
   }
 
   public MonthlyPreparationInputs capture(PricePrepareItem row, MonthlyAdoptionPlan plan, String path) {
-    return MonthlyPreparationPrice.KIND.equals(row.getResultRefType())
-        ? MonthlyPreparationInputs.captureDirect(plan, path)
-        : MonthlyPreparationInputs.capture(plan, path);
+    if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType()))
+      return MonthlyPreparationInputs.captureDirect(plan, path);
+    String root = MonthlyBomPricingScope.pathKey(path);
+    String ownedPrefix = "MAKE_PART_PRICE".equals(row.getResultRefType()) ? root + "/make-"
+        : row.getResultRefType() != null && row.getResultRefType().startsWith("PACKAGE") ? root + "/pack-" : null;
+    if (ownedPrefix == null) return MonthlyPreparationInputs.capture(plan, path);
+    // Manufacturing and packaging record their own consumption under synthetic paths.
+    // Other priced BOM descendants belong to separate preparation rows, even when
+    // they consume the same material. Formula dependencies are retained by capture.
+    var uses = plan.uses().stream().filter(use -> MonthlyBomPricingScope.pathKey(use.path()).startsWith(ownedPrefix)).toList();
+    return MonthlyPreparationInputs.capture(new MonthlyAdoptionPlan(plan.selections(), uses, java.util.Set.of()), root);
   }
 
   public String attach(PricePrepareItem row, MonthlyPreparationInputs inputs) {

@@ -37,6 +37,8 @@ class CostRunFeeSourcesIntegrationTest {
   @BeforeAll static void start() throws Exception {
     CostRunManufacturingSourcesIntegrationTest.start();
     jdbc = CostRunManufacturingSourcesIntegrationTest.jdbc;
+    // 父级夹具已建工资查询用的最小空料品表，本夹具需要完整字段的独立合成表。
+    jdbc.execute("DROP TABLE lp_material_master_raw");
     for (var type : List.of(DepartmentFundRate.class, ManufactureRate.class, ThreeExpenseRate.class,
         OtherExpenseRate.class, ProductProperty.class, ProductPropertyRule.class, QualityLossRate.class,
         ThreeExpenseDimensionMapping.class, MaterialMasterRaw.class)) createSyntheticTable(type);

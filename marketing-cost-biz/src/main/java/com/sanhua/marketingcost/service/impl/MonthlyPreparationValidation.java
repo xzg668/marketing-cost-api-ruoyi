@@ -22,17 +22,16 @@ public final class MonthlyPreparationValidation {
   public void validate(PricePrepareItem row, boolean financial, MonthlyAdoptionPlan plan,
       Map<Long, MonthlyPriceScenarios.Pair> scenarios, String root) {
     var inputs = evidence.read(row);
-    if (inputs == null || !inputs.equals(evidence.capture(row, plan, root).withSeparateRule(inputs.separateRule())))
-      throw new IllegalArgumentException("准备底稿与本次月价范围不一致");
+    if (inputs == null || !inputs.rootPath().equals(MonthlyBomPricingScope.pathKey(root)))
+      throw new IllegalArgumentException("准备底稿不属于本次计算路径");
     if (inputs.separateRule() != null && (!Objects.equals(row.getBusinessUnitType(), inputs.separateRule().businessUnitType())
         || !Objects.equals(row.getTopProductCode(), inputs.separateRule().productCode())))
       throw new IllegalArgumentException("零件成本配置不属于本次成品和业务单元");
-    var expected = new HashMap<MonthlyPriceRequest, BigDecimal>();
     BigDecimal calculationUnitPrice = row.getUnitPrice();
     if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType())) {
       var captured = codec.decode(row.getInputSnapshotJson(), MonthlyPreparationPrice.class);
       price(row, captured, row.getMaterialCode(), row.getUnitPrice(), row.getQuantity(),
-          financial, plan, scenarios, expected);
+          financial, plan, inputs, scenarios);
       // The saved amount used the full price; the unit-price column rounds to eight decimals.
       calculationUnitPrice = (financial ? captured.financialPrice() : captured.customerPrice())
           .multiply(captured.unitPriceMultiplier());
@@ -40,17 +39,16 @@ public final class MonthlyPreparationValidation {
       var rows = new MakePartCalculationEvidence(json).rows(row);
       if (rows == null) throw new IllegalArgumentException("制造准备缺少保存的计算行");
       for (var component : rows) {
-        BigDecimal rawQuantity = MakePartProcessTypePolicy.PROCESS_TYPE_RAW.equals(component.getItemProcessType())
-            ? component.getGrossWeightG().movePointLeft(3) : BigDecimal.ONE;
+        BigDecimal rawQuantity = com.sanhua.marketingcost.service.MakePartConsumption.rawQuantity(component);
         price(row, codec.decode(component.getRawInputSnapshotJson(), MonthlyPreparationPrice.class),
             component.getChildMaterialNo(), component.getRawUnitPrice(), rawQuantity.multiply(row.getQuantity()),
-            financial, plan, scenarios, expected);
+            financial, plan, inputs, scenarios);
         if (!Boolean.TRUE.equals(component.getNoScrapConfirmed())) {
-          var quantity = component.getGrossWeightG().subtract(component.getNetWeightG()).movePointLeft(3)
+          var quantity = com.sanhua.marketingcost.service.MakePartConsumption.scrapQuantityKg(component)
               .multiply(row.getQuantity());
           price(row, codec.decode(component.getScrapInputSnapshotJson(), MonthlyPreparationPrice.class),
               component.getScrapCode(), component.getScrapUnitPrice(), quantity,
-              financial, plan, scenarios, expected);
+              financial, plan, inputs, scenarios);
         }
       }
     } else if (row.getResultRefType() != null && row.getResultRefType().startsWith("PACKAGE")) {
@@ -76,28 +74,26 @@ public final class MonthlyPreparationValidation {
           throw new IllegalArgumentException("包装基础单价未接入月价");
         price(row, codec.decode(component.path("inputs").toString(), MonthlyPreparationPrice.class),
             component.path("materialCode").asText(), number(component, "unitPrice"), quantity,
-            financial, plan, scenarios, expected);
+            financial, plan, inputs, scenarios);
       }
     } else throw new IllegalArgumentException("当前成本准备未接入月价");
-    var actual = new HashMap<MonthlyPriceRequest, BigDecimal>();
-    inputs.uses().forEach(use -> actual.merge(use.request(), use.cumulativeQuantity(), BigDecimal::add));
-    if (!actual.keySet().equals(expected.keySet())) throw new IllegalArgumentException("准备实际用价范围不一致");
-    expected.forEach((request, quantity) -> {
-      if (actual.get(request).compareTo(quantity) != 0) throw new IllegalArgumentException("准备实际用量与保存依据不一致");
-    });
+    // Monthly adoption locks the applicable unit price. Its recorded consumption
+    // is evidence, not a required material list or BOM quantity for another calculation.
     decimal(row.getAmount(), row.getQuantity().multiply(calculationUnitPrice), "准备金额");
   }
 
   private void price(PricePrepareItem parent, MonthlyPreparationPrice value, String code,
       BigDecimal workingPrice, BigDecimal physicalQuantity, boolean financial, MonthlyAdoptionPlan plan,
-      Map<Long, MonthlyPriceScenarios.Pair> scenarios, Map<MonthlyPriceRequest, BigDecimal> uses) {
+      MonthlyPreparationInputs inputs, Map<Long, MonthlyPriceScenarios.Pair> scenarios) {
     if (physicalQuantity.signum() == 0) return;
     var request = value.request();
     if (!request.matchesBomMaterialCode(code)
         || !Objects.equals(parent.getBusinessUnitType(), request.family().businessUnitType())
-        || !Objects.equals(parent.getPriceOrgCode(), request.priceOrgCode())
+        || (MonthlyPreparationPrice.KIND.equals(parent.getResultRefType())
+            && !Objects.equals(parent.getPriceOrgCode(), request.priceOrgCode()))
         || !Objects.equals(parent.getPeriodMonth(), request.family().month().toString())
-        || !value.selection().equals(plan.selections().get(request)))
+        || !value.selection().equals(plan.selections().get(request))
+        || !value.selection().equals(inputs.plan().selections().get(request)))
       throw new IllegalArgumentException("准备基础用价身份不一致");
     var pair = scenarios.get(value.selection().monthlyPriceId());
     if (pair == null) throw new IllegalArgumentException("准备基础价缺少保存的双场景依据");
@@ -105,7 +101,6 @@ public final class MonthlyPreparationValidation {
     decimal(value.customerPrice(), pair.customerPrice(), "准备 P1");
     decimal(workingPrice, (financial ? pair.financialPrice() : pair.customerPrice())
         .multiply(value.unitPriceMultiplier()), "准备工作单位价格");
-    uses.merge(request, physicalQuantity.abs().multiply(value.unitPriceMultiplier()), BigDecimal::add);
   }
 
   private static BigDecimal number(JsonNode node, String field) {

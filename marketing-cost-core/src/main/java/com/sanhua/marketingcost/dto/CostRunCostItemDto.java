@@ -20,6 +20,10 @@ public class CostRunCostItemDto {
   private String category;
   private String sourceTable;
   private Long sourceId;
+  private CostAmountComposition composition;
+
+  public CostAmountComposition getComposition() { return composition; }
+  public void setComposition(CostAmountComposition composition) { this.composition = composition; }
 
   public Long getId() {
     return id;

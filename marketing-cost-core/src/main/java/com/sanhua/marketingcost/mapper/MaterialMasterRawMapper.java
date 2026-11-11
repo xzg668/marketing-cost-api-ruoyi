@@ -20,6 +20,14 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("materialCode") String materialCode,
       @Param("organizationCode") String organizationCode);
 
+  /** 产品属性对照表使用的U9裸品码；按同一料品组织读取当前有效记录。 */
+  @Select("SELECT bare_code FROM lp_material_master_raw "
+      + "WHERE organization_code = #{organizationCode} AND material_code = #{materialCode} "
+      + "AND active_flag = 1")
+  String selectActiveBareCode(
+      @Param("materialCode") String materialCode,
+      @Param("organizationCode") String organizationCode);
+
   /** U9 成品主分类为 10、裸品为 11；不把同型号零部件混入成品候选。 */
   @Select({
       "<script>",

@@ -854,6 +854,8 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     long repeatItem = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, repeatForm);
     jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,main_category_code) VALUES(?,'商用蒸发器','件','COMMERCIAL','MPP12-fixture',1,'10')", repeatKey);
     manufacturingRawTree(repeatKey, parentCode, raw, date, new BigDecimal("5"));
+    zeroPackaging(repeatKey, date);
+    ordinaryExpenseSources(repeatKey, repeatForm, date);
     var repeatParent = buildOriginalFixture(repeatForm, repeatItem, repeatKey, month, date, parentCode, Map.of(raw, "KG"));
     assertThat(repeatParent.getQtyPerTop()).isEqualByComparingTo("5");
     var repeatPlan = new PricePreparePlanItem(); repeatPlan.setBomRow(repeatParent);
@@ -867,6 +869,19 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     assertThat(repeatUses.stream().filter(use -> raw.equals(use.request().family().materialCode())).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("2");
     assertThat(repeatUses.stream().filter(use -> scrapCode.equals(use.request().family().materialCode())).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("0.5");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN (?,?,?)", Integer.class, parentCode, raw, scrapCode)).isEqualTo(2);
+    var firstMonthlyRows = jdbc.queryForList("SELECT * FROM lp_material_monthly_price WHERE material_code IN (?,?) ORDER BY id", raw, scrapCode);
+    var repeatRequest = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
+    repeatRequest.setOaNo(repeatKey); repeatRequest.setOaFormItemId(repeatItem);
+    repeatRequest.setTopProductCode(repeatKey); repeatRequest.setPeriodMonth(month);
+    repeatRequest.setPriceAsOfTime(date); repeatRequest.setBusinessUnitType("COMMERCIAL");
+    var repeatPrepared = generateThroughWorkbench(repeatRequest);
+    assertThat(repeatPrepared.getStatus()).isEqualTo("SUCCESS");
+    var repeatFinance = financePreparations.loadPreparedFromOa(repeatPrepared.getPrepareNo());
+    saveAggregateCost(repeatKey, repeatItem, month, parentCode, repeatPrepared.getPrepareNo(), repeatFinance.financePrepareNo(),
+        copperLinked ? "15" : "195", copperLinked ? "11" : "195");
+    assertThat(jdbc.queryForList("SELECT * FROM lp_material_monthly_price WHERE material_code IN (?,?) ORDER BY id", raw, scrapCode))
+        .as("不同成品的BOM用量翻倍仍沿用原月价记录，原始价格变化不改写锁定单价")
+        .isEqualTo(firstMonthlyRows);
   }
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
@@ -1243,6 +1258,167 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     for (String subject : List.of("水电费用", "大修费用", "工装零星费用"))
       jdbc.update("INSERT INTO lp_department_fund_rate(business_unit,business_division,expense_subject,rate_year,business_unit_type,manhour_rate,quote_ratio,rate_calculation_mode) VALUES(?,?,?,?,'COMMERCIAL',1,0,'FINAL_QUOTE')",
           division, division, subject, year);
+  }
+
+  @Test
+  void meterPurchasedInputInsideManufacturingSavesBothProductsWithoutInventedWeights() throws Exception {
+    boolean copperLinked = false;
+    String key = "MPP12-" + UUID.randomUUID().toString().substring(0, 12);
+    String raw = key + "-RAW", parentCode = key + "-MAKE", scrapCode = key + "-SCRAP";
+    String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    var date = YearMonth.parse(month).atDay(15).atStartOfDay();
+    jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,'COMMERCIAL',80000)", key);
+    long form = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, key);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,business_unit_type) VALUES(?,?,'COMMERCIAL')", form, key);
+    long item = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, form);
+    jdbc.update("UPDATE oa_form_item SET product_name='商用蒸发器' WHERE id=?", item);
+    jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,global_seg_3_theoretical_net_weight) VALUES(?,'MPP12 母件','件','COMMERCIAL','MPP12-fixture',1,'')", parentCode);
+    jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag) VALUES(?,'MPP12 原料','米','COMMERCIAL','MPP12-fixture',1)", raw);
+    jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) "
+        + "VALUES('210',?,'MPP12 原料','米',0.785,0,'MPP12-S',?,'2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())", raw, date.toLocalDate().withDayOfMonth(1));
+    if (copperLinked) {
+      jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?", raw);
+      MonthlyQuotationSourceFixture.copperLinked(jdbc, linkedRules, linkedSnapshots, effectivePrices,
+          transactions, raw, month, "KG");
+    }
+    jdbc.update("INSERT INTO lp_scrap_price(business_unit_type,price_month,material_code,material_name,price_type,fixed_price,factor_bindings_json,origin_type,rule_source_month,content_hash,created_by,created_at,updated_by,updated_at) "
+        + "VALUES('COMMERCIAL',?,?,'MPP12 废料','FIXED',10,'{}','IMPORT',?,?,'MPP12',NOW(),'MPP12',NOW())", month, scrapCode, month, "f".repeat(64));
+    var child = new com.sanhua.marketingcost.entity.BomU9Source();
+    child.setImportBatchId(key); child.setSourceType("U9"); child.setPriceOrgCode("210");
+    child.setImportedAt(date); child.setImportedBy("MPP12");
+    child.setParentMaterialNo(parentCode); child.setChildMaterialNo(raw); child.setStockUnit("米");
+    child.setBomPurpose("主制造"); child.setBomVersion("MPP12"); child.setChildSeq(1);
+    child.setQtyPerParent(new BigDecimal("0.0108")); child.setEffectiveFrom(date.toLocalDate().withDayOfMonth(1)); child.setEffectiveTo(java.time.LocalDate.of(2099, 1, 1));
+    u9Rows.insert(child);
+    jdbc.update("INSERT INTO lp_u9_bom_byproduct_master(price_org_code,parent_material_no,bom_purpose,version_no,output_type,byproduct_material_no,output_qty,unit,status,effective_from,effective_to) VALUES('210',?,'主制造','MPP12','副产品',?,0.0317,'g','已核准',?,'2099-01-01')",parentCode,scrapCode,date.toLocalDate().withDayOfMonth(1));
+    jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,main_category_code) VALUES(?,'商用蒸发器','件','COMMERCIAL','MPP12-fixture',1,'10')", key);
+    manufacturingRawTree(key, parentCode, raw, date, new BigDecimal("2"));
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET qty_per_parent=0.0108,qty_per_top=0.0216 WHERE build_batch_id=? AND material_code=?",key,raw);
+    zeroPackaging(key, date);
+    ordinaryExpenseSources(key, form, date);
+    var mapping = new com.sanhua.marketingcost.entity.MaterialScrapRef();
+    mapping.setMaterialCode(raw); mapping.setScrapCode(scrapCode); mapping.setScrapUnit("KG");
+    mapping.setBusinessUnitType("COMMERCIAL"); mapping.setRatio(BigDecimal.ONE); scrapMappings.insert(mapping);
+    // Use the existing special-purchase rollup rule to produce a manufacturing parent and
+    // its actual base sub-reference; the test never inserts settlement rows itself.
+    var rollup = new com.sanhua.marketingcost.entity.BomSettlementRule();
+    rollup.setRuleCode(key); rollup.setRuleName(key); rollup.setRuleCategory("SPECIAL_PURCHASE_ROLLUP");
+    rollup.setSettlementAction("ROLLUP_TO_PARENT"); rollup.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    rollup.setSubRefType("SPECIAL_ROLLUP_CHILD"); rollup.setMarkSubtreeCostRequired(1);
+    rollup.setMatchConditionJson("{\"nodeConditions\":[{\"field\":\"material_code\",\"op\":\"EQ\",\"value\":\"" + raw + "\"}]}");
+    rollup.setPriority(1); rollup.setEnabled(1); rollup.setDeleted(0); rollup.setBusinessUnitType("COMMERCIAL");
+    settlementRules.insert(rollup);
+    var parent = buildOriginalFixture(form, item, key, month, date, parentCode, Map.of(raw, "米"));
+    var plan = new PricePreparePlanItem(); plan.setBomRow(parent); plan.setMaterialCode(parentCode);
+    plan.setTopProductCode(key); plan.setItemType("MAKE"); plan.setStatus("READY");
+    var scenario = PricePrepareScenarioContext.oaLocked(item, "210");
+    var preview = manufacturing.calculate(key,"COMMERCIAL",month,date,scenario,plan);
+    assertThat(preview.getStatus()).as(preview.getMessage()).isEqualTo("READY");
+    assertThat(preview.getUnitPrice()).isEqualByComparingTo(copperLinked ? "2.2" : "0.008161");
+    assertThat(preview.getAmount()).isEqualByComparingTo(copperLinked ? "5.5" : "0.016322");
+    var uses = scenario.monthlyPrices().get().plan().uses();
+    assertThat(uses).hasSize(2);
+    assertThat(uses.stream().filter(use -> use.request().family().materialCode().equals(raw)).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("0.0216");
+    assertThat(uses.stream().filter(use -> use.request().family().materialCode().equals(scrapCode)).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("0.0000634");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN (?,?,?)",Integer.class,parentCode,raw,scrapCode)).isZero();
+    var request = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
+    request.setOaNo(key); request.setOaFormItemId(item); request.setTopProductCode(key); request.setPeriodMonth(month);
+    request.setPriceAsOfTime(date); request.setBusinessUnitType("COMMERCIAL");
+    var prepared = generateThroughWorkbench(request);
+    assertThat(prepared.getStatus()).isEqualTo("SUCCESS");
+    assertThat(jdbc.queryForList("SELECT material_code FROM lp_material_monthly_price WHERE material_code IN (?,?,?)",String.class,parentCode,raw,scrapCode)).containsExactlyInAnyOrder(raw,scrapCode);
+    var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    var stored = json.readTree(jdbc.queryForObject("SELECT input_snapshot_json FROM lp_price_prepare_item WHERE prepare_no=?", String.class, prepared.getPrepareNo()));
+    assertThat(stored.path("monthlyInputs").isTextual()).as("制造准备必须保存实际采用请求、基础用量和依赖闭包").isTrue();
+    assertThat(stored.path("rows").get(0).path("grossWeightG").isNull()).isTrue();
+    assertThat(stored.path("rows").get(0).path("netWeightG").isNull()).isTrue();
+    assertThat(stored.path("rows").get(0).path("stockUnit").asText()).isEqualTo("米");
+    assertThat(stored.path("rows").get(0).path("recoveredScrapWeightG").decimalValue()).isEqualByComparingTo("0.0317");
+    var inputs = json.readTree(json.readTree(stored.path("monthlyInputs").asText()).path("document").asText());
+    assertThat(inputs.path("prices")).hasSize(2);
+    assertThat(inputs.path("uses")).hasSize(2);
+    assertThat(inputs.path("rootPath").asText()).isEqualTo(MonthlyBomPricingScope.pathKey(parent.getPath()));
+    var quantities = new HashMap<String, BigDecimal>();
+    inputs.path("uses").forEach(use -> quantities.put(use.path("request").path("family").path("materialCode").asText(), use.path("cumulativeQuantity").decimalValue()));
+    assertThat(quantities.get(raw)).isEqualByComparingTo("0.0216");
+    assertThat(quantities.get(scrapCode)).isEqualByComparingTo("0.0000634");
+    inputs.path("prices").forEach(price -> assertThat(price.path("selection").path("monthlyPriceId").asLong()).isPositive());
+    var finance = financePreparations.loadPreparedFromOa(prepared.getPrepareNo());
+    var financial = jdbc.queryForMap("SELECT unit_price,amount,input_snapshot_json FROM lp_price_prepare_item WHERE prepare_no=?", finance.financePrepareNo());
+    assertThat((BigDecimal) financial.get("unit_price")).isEqualByComparingTo(copperLinked ? "3" : "0.008161");
+    assertThat((BigDecimal) financial.get("amount")).isEqualByComparingTo(copperLinked ? "7.5" : "0.016322");
+    assertThat(financePreparations.loadPreparedFromOa(prepared.getPrepareNo()).financePrepareNo()).isEqualTo(finance.financePrepareNo());
+    saveAggregateCost(key, item, month, parentCode, prepared.getPrepareNo(), finance.financePrepareNo(),
+        copperLinked ? "7.5" : "0.016322", copperLinked ? "5.5" : "0.016322");
+    var damaged = json.readTree(financial.get("input_snapshot_json").toString());
+    ((com.fasterxml.jackson.databind.node.ObjectNode) damaged.path("rows").get(0)).put("rawUnitPrice", new BigDecimal("999"));
+    jdbc.update("UPDATE lp_price_prepare_item SET input_snapshot_json=? WHERE prepare_no=?", damaged.toString(), finance.financePrepareNo());
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> financePreparations.loadPreparedFromOa(prepared.getPrepareNo()))
+        .as("保存的自制件用价损坏必须拒绝，不能以当前计算结果表掩盖")
+        .isInstanceOf(IllegalStateException.class);
+    jdbc.update("UPDATE lp_price_prepare_item SET input_snapshot_json=? WHERE prepare_no=?", financial.get("input_snapshot_json").toString(), finance.financePrepareNo());
+    jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=180 WHERE material_code=?", raw);
+    // A new quote's original tree doubles both the parent and the consumed base quantities.
+    // Updating only a persisted parent would leave the rollup numerator frozen at 1 KG and
+    // incorrectly describe 0.2 KG per parent; that is not the intended quantity-change case.
+    String repeatKey = key + "-Q2";
+    jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,'COMMERCIAL',80000)", repeatKey);
+    long repeatForm = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, repeatKey);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,business_unit_type) VALUES(?,?,'商用蒸发器','COMMERCIAL')", repeatForm, repeatKey);
+    long repeatItem = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, repeatForm);
+    jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,main_category_code) VALUES(?,'商用蒸发器','件','COMMERCIAL','MPP12-fixture',1,'10')", repeatKey);
+    manufacturingRawTree(repeatKey, parentCode, raw, date, new BigDecimal("4"));
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET qty_per_parent=0.0108,qty_per_top=0.0432 WHERE build_batch_id=? AND material_code=?",repeatKey,raw);
+    zeroPackaging(repeatKey, date);
+    ordinaryExpenseSources(repeatKey, repeatForm, date);
+    var repeatParent = buildOriginalFixture(repeatForm, repeatItem, repeatKey, month, date, parentCode, Map.of(raw, "米"));
+    assertThat(repeatParent.getQtyPerTop()).isEqualByComparingTo("4");
+    var repeatPlan = new PricePreparePlanItem(); repeatPlan.setBomRow(repeatParent);
+    repeatPlan.setMaterialCode(parentCode); repeatPlan.setTopProductCode(repeatKey);
+    repeatPlan.setItemType("MAKE"); repeatPlan.setStatus("READY");
+    var repeatScenario = PricePrepareScenarioContext.oaLocked(repeatItem, "210");
+    var repeated = manufacturing.calculate(repeatKey,"COMMERCIAL",month,date,repeatScenario,repeatPlan);
+    assertThat(repeated.getUnitPrice()).isEqualByComparingTo(copperLinked ? "2.2" : "0.008161");
+    assertThat(repeated.getAmount()).isEqualByComparingTo(copperLinked ? "11" : "0.032644");
+    var repeatUses = repeatScenario.monthlyPrices().get().plan().uses();
+    assertThat(repeatUses.stream().filter(use -> raw.equals(use.request().family().materialCode())).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("0.0432");
+    assertThat(repeatUses.stream().filter(use -> scrapCode.equals(use.request().family().materialCode())).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("0.0001268");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN (?,?,?)", Integer.class, parentCode, raw, scrapCode)).isEqualTo(2);
+    var firstMonthlyRows = jdbc.queryForList("SELECT * FROM lp_material_monthly_price WHERE material_code IN (?,?) ORDER BY id", raw, scrapCode);
+    var repeatRequest = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
+    repeatRequest.setOaNo(repeatKey); repeatRequest.setOaFormItemId(repeatItem);
+    repeatRequest.setTopProductCode(repeatKey); repeatRequest.setPeriodMonth(month);
+    repeatRequest.setPriceAsOfTime(date); repeatRequest.setBusinessUnitType("COMMERCIAL");
+    var repeatPrepared = generateThroughWorkbench(repeatRequest);
+    assertThat(repeatPrepared.getStatus()).isEqualTo("SUCCESS");
+    var repeatFinance = financePreparations.loadPreparedFromOa(repeatPrepared.getPrepareNo());
+    saveAggregateCost(repeatKey, repeatItem, month, parentCode, repeatPrepared.getPrepareNo(), repeatFinance.financePrepareNo(),
+        copperLinked ? "15" : "0.032644", copperLinked ? "11" : "0.032644");
+    assertThat(jdbc.queryForList("SELECT * FROM lp_material_monthly_price WHERE material_code IN (?,?) ORDER BY id", raw, scrapCode))
+        .as("不同成品的BOM用量翻倍仍沿用原月价记录，原始价格变化不改写锁定单价")
+        .isEqualTo(firstMonthlyRows);
+    for (var identity : List.of(Map.entry(key,item),Map.entry(repeatKey,repeatItem))) {
+      var successRequest = new com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest();
+      successRequest.setPeriodMonth(month);
+      var freshPrepared = generateThroughWorkbench(identity.getKey().equals(key) ? request : repeatRequest);
+      successRequest.setPricePrepareNo(freshPrepared.getPrepareNo());
+      ordinaryWorkbench.runToSuccess(identity.getKey(),identity.getValue(),successRequest,"non-weight-input-test");
+      long version = jdbc.queryForObject("SELECT id FROM lp_quote_cost_run_version WHERE oa_no=? AND status='SUCCESS' AND reprice_no IS NULL ORDER BY id DESC LIMIT 1",Long.class,identity.getKey());
+      var requestExport = java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+httpPort+"/api/v1/quote-requests/"+identity.getKey()+"/items/"+identity.getValue()+"/cost-run/versions/"+version+"/export"))
+          .header("Authorization","Bearer "+jwt.generateToken("admin","COMMERCIAL")).GET().build();
+      var response = java.net.http.HttpClient.newHttpClient().send(requestExport,java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+      assertThat(response.statusCode()).isEqualTo(200);
+      try (var book = new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(response.body()))) {
+        assertThat(book.getNumberOfSheets()).isPositive();
+        boolean priceFound=false;
+        for(var sheet:book) for(var row:sheet) for(var cell:row)
+          if(cell.getCellType()==org.apache.poi.ss.usermodel.CellType.NUMERIC && Math.abs(cell.getNumericCellValue()-.008161)<.000000001)priceFound=true;
+        assertThat(priceFound).as("真实Excel保留按米原料的制造件单价").isTrue();
+      }
+      var exportDir = java.nio.file.Path.of(System.getProperty("nonweight.exports",System.getProperty("java.io.tmpdir")));
+      java.nio.file.Files.createDirectories(exportDir);
+      java.nio.file.Files.write(exportDir.resolve(identity.getKey()+".xlsx"),response.body());
+    }
   }
 
   private void saveAggregateCost(String oa, long itemId, String month, String material,

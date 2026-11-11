@@ -87,9 +87,9 @@ class MonthlyPreparationFinanceProjectionTest {
     assertThat(projection.project(source).getAmount()).isEqualByComparingTo("25");
     assertThat(evidence.capture(source, plan, "P/NORMAL/CHILD").uses()).containsExactly(plan.uses().get(1));
     assertThat(plan.uses()).hasSize(2);
-    // An actual extra physical use remains invalid; the fix narrows capture, not validation.
+    // Other recorded monthly uses do not prevent this row using its locked price.
     source.setInputSnapshotJson(evidence.attach(source, MonthlyPreparationInputs.capture(plan, "P/NORMAL")));
-    assertThatThrownBy(() -> projection.project(source)).hasMessageContaining("月价实际范围不一致");
+    assertThat(projection.project(source).getAmount()).isEqualByComparingTo("25");
   }
 
   @Test void ordinaryProjectionUsesOnlySavedP0AndRetainsTheCompleteAdoptedEvidence() {
@@ -105,6 +105,77 @@ class MonthlyPreparationFinanceProjectionTest {
     assertThat(source.getAmount()).isEqualByComparingTo("30");
     assertThat(source.getUnitPrice()).isEqualByComparingTo("12");
     assertThat(source.getInputSnapshotJson()).isEqualTo(original);
+  }
+
+  @Test void manufacturingCaptureExcludesSeparatelyPricedDescendantFee() {
+    var source = make();
+    var original = evidence.read(source);
+    var fee = request("SEPARATE_PROCESS_FEE", "210");
+    var selections = new LinkedHashMap<>(original.plan().selections());
+    selections.put(fee, selected(4L, false, "3"));
+    var uses = new ArrayList<>(original.uses());
+    uses.add(new Use("P/MAKE/SEPARATE_PROCESS_FEE", fee, d("2.5")));
+    uses.add(new Use("P/MAKE/SEPARATELY_PRICED_RAW", original.uses().getFirst().request(), d("11")));
+    var plan = new MonthlyAdoptionPlan(selections, uses, Set.of());
+
+    source.setInputSnapshotJson(evidence.attach(source, evidence.capture(source, plan, "P/MAKE")));
+
+    assertThatCode(() -> projection.project(source)).doesNotThrowAnyException();
+    assertThat(evidence.read(source).uses()).containsExactlyElementsOf(original.uses());
+    assertThat(evidence.read(source).plan().selections()).doesNotContainKey(fee);
+    assertThat(plan.uses()).hasSize(4);
+  }
+
+  @Test void sameLockedPriceSupportsDifferentProductBomQuantities() {
+    var first = direct(false); var second = direct(false);
+    first.setTopProductCode("FIRST_PRODUCT");
+    var captured = codec.decode(first.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+    second.setTopProductCode("OTHER_PRODUCT");
+    second.setQuantity(d("7.5")); second.setAmount(d("90"));
+    second.setInputSnapshotJson(codec.encode(MonthlyPreparationPrice.of(new QuotationPriceSession.Value(
+        captured.request(), captured.selection(), captured.financialPrice(), captured.customerPrice()),
+        captured.path(), second.getQuantity()).withInputs(captured.monthlyInputs())));
+    var validation = new MonthlyPreparationValidation(json, codec);
+    var scenarios = Map.of(1L, new MonthlyPriceScenarios.Pair(1L,
+        captured.selection().fact().evidence().sha256(), d("10"), d("12"), "{}"));
+    for (var source : List.of(first, second)) {
+      var finance = projection.project(source);
+      assertThat(finance.getMonthlyPriceId()).isEqualTo(1L);
+      assertThat(finance.getUnitPrice()).isEqualByComparingTo("10");
+      assertThat(finance.getAmount()).isEqualByComparingTo(source.getQuantity().multiply(d("10")));
+      validation.validate(source, false, captured.monthlyInputs().plan(), scenarios, "P/NORMAL");
+      validation.validate(finance, true, captured.monthlyInputs().plan(), scenarios, "P/NORMAL");
+    }
+  }
+
+  @Test void savedUseQuantitiesDoNotLockManufacturingOrPackagingBomConsumption() {
+    for (var source : List.of(make(), pack())) {
+      var inputs = evidence.read(source);
+      var uses = inputs.uses().stream().map(use -> new Use(use.path(), use.request(), d("99"))).toList();
+      source.setInputSnapshotJson(evidence.attach(source, new MonthlyPreparationInputs(1, inputs.rootPath(),
+          inputs.prices(), uses, inputs.suppressedPaths())));
+      var finance = projection.project(source);
+      assertThat(finance.getAmount()).isEqualByComparingTo(source.getMaterialCode().equals("MAKE") ? "97.5" : "42");
+      var scenarios = new HashMap<Long, MonthlyPriceScenarios.Pair>();
+      for (var entry : inputs.prices()) {
+        long id = entry.selection().monthlyPriceId();
+        var p0 = entry.selection().fact().price();
+        var p1 = source.getMaterialCode().equals("MAKE") ? p0.multiply(d("1.2")) : d("8");
+        scenarios.put(id, new MonthlyPriceScenarios.Pair(id, entry.selection().fact().evidence().sha256(), p0, p1, "{}"));
+      }
+      var validation = new MonthlyPreparationValidation(json, codec);
+      var plan = inputs.plan();
+      if (source.getResultRefType().startsWith("PACKAGE")) {
+        var pack = new PackageCalculationEvidence(json);
+        var excluded = pack.household(pack.trace(source).path("components").get(1));
+        var selected = new LinkedHashMap<>(plan.selections());
+        selected.put(excluded.request(), selected(5L, true, "20"));
+        var allUses = new ArrayList<>(plan.uses()); allUses.add(excluded);
+        plan = new MonthlyAdoptionPlan(selected, allUses, Set.of());
+      }
+      validation.validate(source, false, plan, scenarios, inputs.rootPath());
+      validation.validate(finance, true, plan, scenarios, inputs.rootPath());
+    }
   }
 
   @Test void savedAmountsUseOriginalPricesDespiteDatabaseUnitPriceRounding() {
@@ -227,7 +298,7 @@ class MonthlyPreparationFinanceProjectionTest {
     row.setScrapCode(null); row.setScrapUnitPrice(BigDecimal.ZERO); row.setScrapInputSnapshotJson(null);
     var raw = codec.decode(row.getRawInputSnapshotJson(), MonthlyPreparationPrice.class);
     var inputs = inputs("P/MAKE", Map.of(raw.request(), raw.selection()),
-        List.of(new Use("P/MAKE/RAW", raw.request(), d("2.5"))));
+        List.of(new Use("P/MAKE/make-0/raw", raw.request(), d("2.5"))));
     source.setUnitPrice(d("120")); source.setAmount(d("300"));
     source.setInputSnapshotJson(make.withRows(source.getInputSnapshotJson(), new MakePartPriceCalculator().calculate(List.of(row))));
     source.setInputSnapshotJson(evidence.attach(source, inputs));
@@ -238,7 +309,7 @@ class MonthlyPreparationFinanceProjectionTest {
     assertThat(evidence.read(finance).uses()).hasSize(1);
   }
 
-  @Test void rejectsInconsistentSavedReferencesP0AndActualUseBeforeProducingFinance() throws Exception {
+  @Test void rejectsInconsistentSavedReferencesAndP0BeforeProducingFinance() throws Exception {
     var wrongId = direct(false); wrongId.setMonthlyPriceId(999L);
     assertThatThrownBy(() -> projection.project(wrongId)).hasMessageContaining("引用");
     var wrongType = direct(false); wrongType.setMonthlyPricingType("HOUSEHOLD_INQUIRY");
@@ -251,10 +322,6 @@ class MonthlyPreparationFinanceProjectionTest {
         captured.request(), captured.selection(), d("11"), captured.customerPrice(), captured.unitPriceMultiplier(),
         captured.path(), captured.quantity(), captured.monthlyInputs())));
     assertThatThrownBy(() -> projection.project(wrongP0)).hasMessageContaining("P0");
-    var wrongUse = pack(); var inputs = evidence.read(wrongUse); var use = inputs.uses().getFirst();
-    wrongUse.setInputSnapshotJson(evidence.attach(wrongUse, new MonthlyPreparationInputs(1, inputs.rootPath(),
-        inputs.prices(), List.of(new Use(use.path(), use.request(), d("3"))), inputs.suppressedPaths())));
-    assertThatThrownBy(() -> projection.project(wrongUse)).hasMessageContaining("实际用量");
   }
 
   @Test void rejectsForgedHouseholdExclusionPathAndMissingSourceEvidence() throws Exception {
@@ -289,7 +356,7 @@ class MonthlyPreparationFinanceProjectionTest {
     var raw = request("RAW", "220"); var scrap = request("SCRAP", "210");
     var rawPrice = selected(2L, false, "100"); var scrapPrice = selected(3L, false, "10");
     var inputs = inputs("P/MAKE", Map.of(raw, rawPrice, scrap, scrapPrice),
-        List.of(new Use("P/MAKE/RAW", raw, d("1")), new Use("P/MAKE/SCRAP", scrap, d(".25"))));
+        List.of(new Use("P/MAKE/make-0/raw", raw, d("1")), new Use("P/MAKE/make-0/scrap", scrap, d(".25"))));
     var row = new MakePartPriceCalcRow(); row.setId(50L); row.setCalcBatchId("MPP12-MAKE-60"); row.setSourceCostingRowId(9L);
     row.setParentMaterialNo("MAKE"); row.setBusinessUnitType("COMMERCIAL"); row.setPricingMonth("2026-10");
     row.setChildMaterialNo("RAW"); row.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW);
@@ -306,7 +373,7 @@ class MonthlyPreparationFinanceProjectionTest {
 
   PricePrepareItem pack() {
     var raw = request("RAW", "210"); var selected = selected(4L, false, "7");
-    var inputs = inputs("P/PACK", Map.of(raw, selected), List.of(new Use("P/PACK/RAW", raw, d("6"))));
+    var inputs = inputs("P/PACK", Map.of(raw, selected), List.of(new Use("P/PACK/pack-1", raw, d("6"))));
     var parent = new PackageComponentPrice(); parent.setPackageMaterialCode("PACK"); parent.setBusinessUnitType("COMMERCIAL");
     parent.setPriceOrgCode("210"); parent.setPeriodMonth("2026-10"); parent.setPackageParentBaseQty(d("5"));
     parent.setSourceRawHierarchyId(100L); parent.setSourcePath("/P/PACK/");

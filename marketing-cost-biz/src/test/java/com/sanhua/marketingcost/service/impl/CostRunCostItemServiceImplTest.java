@@ -416,6 +416,11 @@ class CostRunCostItemServiceImplTest {
     assertThat(tooling.getAmount()).isEqualByComparingTo("0.938774");
     assertThat(water.getRate()).isEqualByComparingTo("0.058300");
     assertThat(water.getAmount()).isEqualByComparingTo("1.758127");
+    assertThat(water.getComposition().rows().getFirst())
+        .containsEntry("directLabor", "12.491320").containsEntry("indirectLabor", "0.322200")
+        .containsEntry("baseAmount", "30.156554");
+    assertThat(new BigDecimal(water.getComposition().rows().getFirst().get("rate"))).isEqualByComparingTo("0.058300");
+    assertThat(water.getComposition().formula()).contains("工时工资率", "本次有效费率");
     assertThat(water.getRemark()).isNull();
     assertThat(material.getAmount()).isEqualByComparingTo("2.866079");
   }
@@ -1201,8 +1206,8 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("中台产品属性优先于财务导入，并按当前业务年度取属性规则")
-  void rawProductAttributeWinsOverFinanceImport() {
+  @DisplayName("产品属性表无匹配记录时保留U9属性后备，并按当前业务年度取属性规则")
+  void rawProductAttributeRemainsFallbackWhenPropertyTableHasNoRow() {
     CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     when(rawMapper.selectActiveProductAttr("P-RAW", "PLATE")).thenReturn(" 非标品 ");
@@ -1215,7 +1220,7 @@ class CostRunCostItemServiceImplTest {
 
     assertThat(result.coefficient()).isEqualByComparingTo("1.05");
     assertThat(result.remark()).contains("U9料品档案", "非标品", "2026");
-    verify(lookup, never()).findProductProperty("P-RAW", 2026, "COMMERCIAL");
+    verify(lookup).findProductProperty("P-RAW", 2026, "COMMERCIAL");
   }
 
   @Test
@@ -1236,6 +1241,26 @@ class CostRunCostItemServiceImplTest {
     verify(lookup).findProductProperty("P-FINANCE", 2026, "COMMERCIAL");
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"标准品,1", "非标品,1.05", "标准品,1.12"})
+  @DisplayName("报价成品先解析同组织U9裸品码，再按裸品码命中年度产品属性表")
+  void finishedProductUsesBareCodeForAnnualProperty(String attribute, String coefficient) {
+    var lookup = mock(CostRunCacheLookupService.class);
+    var rawMapper = mock(MaterialMasterRawMapper.class);
+    when(rawMapper.selectActiveProductAttr("1006900000885", "COMMERCIAL")).thenReturn("非标品");
+    when(rawMapper.selectActiveBareCode("1006900000885", "COMMERCIAL")).thenReturn(" 101500549 ");
+    var property = new ProductProperty(); property.setProductCode("101500549");
+    property.setProductAttr(attribute); property.setPropertyYear(2026);
+    property.setBusinessUnitType("COMMERCIAL"); property.setCoefficient(new BigDecimal(coefficient));
+    when(lookup.findProductProperty("101500549", 2026, "COMMERCIAL")).thenReturn(property);
+    var svc = buildWithLookupAndRawMapper(lookup, rawMapper);
+    var result = svc.lookupProductCoefficient("1006900000885", "COMMERCIAL", 2026, "COMMERCIAL", null);
+    assertThat(result.coefficient()).isEqualByComparingTo(coefficient);
+    assertThat(result.remark()).contains("属性=" + attribute, "属性匹配料号=101500549");
+    verify(lookup).findProductProperty("101500549", 2026, "COMMERCIAL");
+    verify(lookup, never()).findProductProperty("1006900000885", 2026, "COMMERCIAL");
+  }
+
   @Test
   @DisplayName("中台给出属性但缺少对应年度规则时明确失败")
   void rawProductAttributeWithoutRuleFailsClearly() {
@@ -1250,7 +1275,7 @@ class CostRunCostItemServiceImplTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("P-INVALID")
         .hasMessageContaining("非标品");
-    verify(lookup, never()).findProductProperty("P-INVALID", 2026, "COMMERCIAL");
+    verify(lookup).findProductProperty("P-INVALID", 2026, "COMMERCIAL");
   }
 
   @Test

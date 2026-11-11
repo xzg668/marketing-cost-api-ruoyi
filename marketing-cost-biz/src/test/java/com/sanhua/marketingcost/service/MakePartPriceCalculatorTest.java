@@ -12,6 +12,21 @@ class MakePartPriceCalculatorTest {
 
   private final MakePartPriceCalculator calculator = new MakePartPriceCalculator();
 
+  @Test void meterPricedPurchasedInputUsesItsBomQuantityInsideTheManufacturingRow() {
+    var row = baseRow("301990444");
+    row.setParentMaterialNo("203259851"); row.setChildMaterialNo("301280056");
+    row.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW);
+    row.setStockUnit("米"); row.setQtyPerParent(new BigDecimal("0.0108"));
+    row.setGrossWeightG(null); row.setNetWeightG(null);
+    row.setRecoveredScrapWeightG(new BigDecimal("0.0317"));
+    row.setRawUnitPrice(new BigDecimal("0.785"));
+    row.setScrapUnitPrice(new BigDecimal("7.21238938053097"));
+    var result = calculator.calculate(List.of(row)).getFirst();
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getCostPrice()).isEqualByComparingTo("0.00824937");
+    assertThat(result.getGrossWeightG()).isNull(); assertThat(result.getNetWeightG()).isNull();
+  }
+
   @Test
   void preservesRawAndScrapCalculationEvidence() {
     var row = baseRow("SCRAP-1");

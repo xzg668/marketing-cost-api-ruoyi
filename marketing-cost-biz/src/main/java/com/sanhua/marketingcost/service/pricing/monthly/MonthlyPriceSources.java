@@ -48,9 +48,21 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
 
   @Override public Candidates resolve(Context context,Set<MonthlyPriceRequest> requests,
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
+    var orders=orders(context,requests);
+    var local=resolveOrganization(context,requests,dependencies,orders);
+    return withOtherOrganization(requests,local,alternatives->{
+      var alternativeOrders=new LinkedHashMap<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>>();
+      for(var request:requests)alternativeOrders.put(otherOrganization(request),orders.get(request));
+      return resolveOrganization(context,alternatives,dependencies,alternativeOrders);
+    });
+  }
+
+  /** Finish every source in the requested organization before relaxing that one condition. */
+  private Candidates resolveOrganization(Context context,Set<MonthlyPriceRequest> requests,
+      Function<Set<MonthlyPriceRequest>,Candidates> dependencies,
+      Map<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>> orders) {
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     var pending=new LinkedHashSet<>(requests);
-    var orders=orders(context,pending);
     var automatic=new LinkedHashSet<MonthlyPriceRequest>();pending.stream().filter(request->orders.get(request).size()>1).forEach(automatic::add);
     if(!automatic.isEmpty())accept(household.read(context,automatic),pending,values,problems);
     // Existing scrap rules retain priority; a genuinely missing scrap price may use inquiry.
@@ -114,8 +126,78 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     return new Candidates(values,problems);
   }
 
+  private Candidates withOtherOrganization(Set<MonthlyPriceRequest> requests,Candidates local,
+      Function<Set<MonthlyPriceRequest>,Candidates> lookup) {
+    var aliases=new LinkedHashMap<MonthlyPriceRequest,MonthlyPriceRequest>();
+    var localResults=new HashSet<MonthlyPriceRequest>();
+    for(var request:requests)if(local.values().containsKey(request)
+        || local.problems().containsKey(request) && local.problems().get(request).reason()!=Failure.MISSING)
+      localResults.add(taxGroup(request));
+    for(var request:requests) {
+      var problem=local.problems().get(request);
+      if(problem==null || problem.reason()!=Failure.MISSING)continue;
+      // A valid local tax basis or actual public-source blocker retains priority.
+      // Unsubmitted technical supplements are ignored by their own source adapter.
+      if(!localResults.contains(taxGroup(request)))aliases.put(request,otherOrganization(request));
+    }
+    if(aliases.isEmpty())return local;
+    var foreign=lookup.apply(new LinkedHashSet<>(aliases.values()));
+    requireComplete(new LinkedHashSet<>(aliases.values()),foreign);
+    var values=new LinkedHashMap<>(local.values());var problems=new LinkedHashMap<>(local.problems());
+    var dependencies=new HashSet<MonthlyPriceRequest>();
+    foreign.values().values().forEach(candidate->dependencies.addAll(candidate.selection().fact().dependencies()));
+    // Source callbacks may return a complete dependency graph. Keep its actual request identities.
+    foreign.values().forEach((request,candidate)->{
+      if(!aliases.containsValue(request) || dependencies.contains(request)) {
+        var previous=values.putIfAbsent(request,candidate);
+        if(previous!=null && !previous.equals(candidate))throw new MonthlyPriceProblem(Failure.REPLAN_REQUIRED,
+            "跨组织取价的依赖依据发生变化，请重新取价");
+      }
+    });
+    aliases.forEach((request,sourceRequest)->{
+      var candidate=foreign.values().get(sourceRequest);
+      if(candidate!=null) {
+        var selected=candidate.selection();
+        if(selected.monthlyPriceId()!=null)throw new MonthlyPriceProblem(Failure.PERSISTENCE_INCOMPLETE,
+            "跨组织来源不能替换已采用月价身份");
+        var fragments=selected.applicability().fragments().stream()
+            .filter(fragment->fragment.matches(sourceRequest))
+            .map(fragment->new MonthlyPriceCoverage(Set.of(request.priceOrgCode()),fragment.quantities(),
+                ConditionDomain.exact(request.conditions()),fragment.annualUsage())).toList();
+        // The consumer keeps its BOM organization; the immutable source retains its real org,
+        // selected supplier, formula, factors and amount, without rewriting source records.
+        values.put(request,new Candidate(new MonthlyAdoptionPlan.Selection(null,
+            new MonthlyPriceApplicability(fragments),selected.fact()),candidate.householdSourceId()));
+        problems.remove(request);
+      } else if(foreign.problems().get(sourceRequest).reason()!=Failure.MISSING) {
+        problems.put(request,foreign.problems().get(sourceRequest));
+      }
+    });
+    return new Candidates(values,problems);
+  }
+
+  private static MonthlyPriceRequest otherOrganization(MonthlyPriceRequest request) {
+    String organization="210".equals(request.priceOrgCode())?"220":"210";
+    return new MonthlyPriceRequest(request.family(),organization,
+        "220".equals(organization)?request.conditions():NonCuConditions.empty(),
+        request.priceBasisQuantity(),request.annualUsagePieces());
+  }
+
+  private static MonthlyPriceRequest taxGroup(MonthlyPriceRequest request) {
+    var family=request.family();
+    return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(family.month(),family.businessUnitType(),
+        family.materialCode(),family.specification(),family.unit(),family.currency(),TaxBasis.EXCLUDED,
+        family.requestedSupplierCode(),family.specificationOnly()),request.priceOrgCode(),request.conditions(),
+        request.priceBasisQuantity(),request.annualUsagePieces());
+  }
+
   @Override public Candidates resolveScrap(Context context,Set<MonthlyPriceRequest> requests,
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
+    var local=resolveScrapOrganization(context,requests);
+    return withOtherOrganization(requests,local,alternatives->resolveScrapOrganization(context,alternatives));
+  }
+
+  private Candidates resolveScrapOrganization(Context context,Set<MonthlyPriceRequest> requests) {
     var found = scrap.read(context,requests);
     var values = new LinkedHashMap<>(found.values());
     var problems = new LinkedHashMap<>(found.problems());

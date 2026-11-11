@@ -928,6 +928,29 @@ class MakePartPriceGenerationServiceImplTest {
     assertThat(rowCaptor.getValue().getRemark()).contains("缺废料映射");
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"55", "0"})
+  @DisplayName("件数毛坯保留已生效人工无废料确认：本件净重加明确0废料重反算毛重")
+  void countedBlankWithConfirmedNoScrapCanReconstructGross(String net) {
+    var bom = child("301300339", "只"); bom.setQtyPerParent(BigDecimal.ONE);
+    stubHappyPath("MAKE-001", List.of(bom), List.of());
+    when(weightService.resolveWeights(any(), any(), any(), any(), any(), any(), anyBoolean()))
+        .thenReturn(com.sanhua.marketingcost.dto.MakePartWeightResult.of(
+            "MAKE-001", "301300339", "毛坯加工", null, new BigDecimal(net),
+            "MISSING_WEIGHT", "缺有效副产品废料重，无法反算毛重"));
+    when(noScrapConfirmationService.findEffective("301300339", "2026-05", "COMMERCIAL"))
+        .thenReturn(noScrapConfirmation());
+    var response = service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05");
+    assertThat(response.getOkCount()).isEqualTo(1);
+    var captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(captor.capture());
+    var saved = captor.getValue();
+    assertThat(saved.getGrossWeightG()).isEqualByComparingTo(net);
+    assertThat(saved.getNetWeightG()).isEqualByComparingTo(net);
+    assertThat(saved.getCostPrice()).isEqualByComparingTo("82.95");
+    assertThat(saved.getNoScrapConfirmationId()).isEqualTo(1001L);
+  }
+
   @Test
   @DisplayName("有正常 CMS 废料映射时优先走映射，不读取无废料确认")
   void normalScrapMappingDoesNotReadNoScrapConfirmation() {

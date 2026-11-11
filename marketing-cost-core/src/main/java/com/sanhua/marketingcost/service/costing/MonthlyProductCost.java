@@ -46,7 +46,12 @@ public final class MonthlyProductCost {
 
   /** Immutable ordinary detail, including existing department modes and original source coordinates. */
   public record OrdinaryDetail(String costCode, String costName, BigDecimal baseAmount,
-      BigDecimal rate, BigDecimal amount, String sourceTable, Long sourceId, String remark, String category) {
+      BigDecimal rate, BigDecimal amount, String sourceTable, Long sourceId, String remark, String category,
+      com.sanhua.marketingcost.dto.CostAmountComposition composition) {
+    public OrdinaryDetail(String costCode, String costName, BigDecimal baseAmount, BigDecimal rate,
+        BigDecimal amount, String sourceTable, Long sourceId, String remark, String category) {
+      this(costCode, costName, baseAmount, rate, amount, sourceTable, sourceId, remark, category, null);
+    }
     public OrdinaryDetail {
       if (costCode == null || costCode.isBlank() || costName == null || costName.isBlank())
         throw new IllegalArgumentException("Stable ordinary detail code/name required");
@@ -59,7 +64,7 @@ public final class MonthlyProductCost {
     }
     public static OrdinaryDetail from(com.sanhua.marketingcost.dto.CostRunCostItemDto row) {
       return new OrdinaryDetail(row.getCostCode(), row.getCostName(), row.getBaseAmount(), row.getRate(),
-          row.getAmount(), row.getSourceTable(), row.getSourceId(), row.getRemark(), row.getCategory());
+          row.getAmount(), row.getSourceTable(), row.getSourceId(), row.getRemark(), row.getCategory(), row.getComposition());
     }
   }
 

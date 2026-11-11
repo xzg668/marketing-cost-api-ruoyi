@@ -558,6 +558,7 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
         requireSame(componentKey, "子项数量", oa.getQtyPerParent(), finance.getQtyPerParent());
         requireSame(componentKey, "毛重", oa.getGrossWeightG(), finance.getGrossWeightG());
         requireSame(componentKey, "净重", oa.getNetWeightG(), finance.getNetWeightG());
+        requireSame(componentKey, "副产品废料重", oa.getRecoveredScrapWeightG(), finance.getRecoveredScrapWeightG());
         if (monthlyEvidence.read(sourceItem) != null) {
           validateMonthlyMakePrice(sourceItem, oa.getChildMaterialNo(), oa.getRawInputSnapshotJson(),
               finance.getRawInputSnapshotJson(), oa.getRawUnitPrice(), finance.getRawUnitPrice());

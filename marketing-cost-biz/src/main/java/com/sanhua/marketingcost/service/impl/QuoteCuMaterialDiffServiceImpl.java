@@ -374,6 +374,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       requireDecimal(componentIdentity, "子项数量", oa.getQtyPerParent(), finance.getQtyPerParent());
       requireDecimal(componentIdentity, "毛重", oa.getGrossWeightG(), finance.getGrossWeightG());
       requireDecimal(componentIdentity, "净重", oa.getNetWeightG(), finance.getNetWeightG());
+      requireDecimal(componentIdentity, "副产品废料重", oa.getRecoveredScrapWeightG(), finance.getRecoveredScrapWeightG());
       requireDecimal(componentIdentity, "委外费", oa.getOutsourceFee(), finance.getOutsourceFee());
     }
     validateMakeTotals(settlementKey, oaItem, oaRows, "OA");

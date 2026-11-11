@@ -15,6 +15,25 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 public class JjbExcelRendererTest {
+  @Test void blankWeightKeepsNumericCellAndDisplaysSavedSourceInParentheses() throws Exception {
+    var base = model(1,0,0);
+    var rows = new ArrayList<>(base.rows());
+    rows.set(0, rows.getFirst().toBuilder().grossWeight("298.14")
+        .manufacturing(List.of(Map.of("grossWeightSource", "SRM联动价表"))).build());
+    var value = new JjbReadModel(base.identity(), base.header(), rows, base.monthlyPrices(), base.totals(), base.warnings());
+    var bytes = new ByteArrayOutputStream();
+    new JjbExcelRenderer().write(value, bytes);
+    try (var workbook = new XSSFWorkbook(new ByteArrayInputStream(bytes.toByteArray()))) {
+      var row = java.util.stream.StreamSupport.stream(workbook.getSheetAt(0).spliterator(), false)
+          .filter(r -> r.getCell(0) != null && r.getCell(0).toString().equals(rows.getFirst().code()))
+          .findFirst().orElseThrow();
+      var cell = row.getCell(7);
+      assertThat(cell.getCellType()).isEqualTo(CellType.NUMERIC);
+      assertThat(new DataFormatter(java.util.Locale.CHINA).formatCellValue(cell)).isEqualTo("298.14（SRM联动价表）");
+      assertThat(cell.getNumericCellValue()).isEqualTo(298.14);
+    }
+  }
+
   public static JjbReadModel model(int ordinary, int household, int fees) {
     List<JjbReadModel.Row> rows = new ArrayList<>();
     for (int i = 0; i < ordinary; i++)

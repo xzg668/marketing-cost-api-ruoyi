@@ -55,6 +55,10 @@ public class MakePartPriceCalcRow {
   private BigDecimal qtyPerParent;
   private BigDecimal grossWeightG;
   private BigDecimal netWeightG;
+  /** Actual U9 recovered byproduct weight; saved in calculation evidence, not a new DB column. */
+  @TableField(exist = false)
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private BigDecimal recoveredScrapWeightG;
   private String rawPriceType;
   private BigDecimal rawUnitPrice;
   private String scrapCode;

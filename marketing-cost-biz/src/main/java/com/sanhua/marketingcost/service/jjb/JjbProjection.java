@@ -18,6 +18,20 @@ import org.springframework.stereotype.Component;
 public class JjbProjection {
   private final ObjectMapper json;
   public JjbProjection(ObjectMapper json) { this.json = json.copy().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS); }
+
+  private static String savedProductProperty(List<CostRunCostItem> adjustments) {
+    var clause = java.util.regex.Pattern.compile("(?:^|[；;])\\s*属性=([^；;]+)");
+    String attribute = null;
+    for (var adjustment : adjustments) {
+      if (adjustment.getRemark() == null) continue;
+      var matcher = clause.matcher(adjustment.getRemark());
+      while (matcher.find()) {
+        String value = matcher.group(1).trim();
+        if (!value.isEmpty()) attribute = value;
+      }
+    }
+    return attribute;
+  }
   private static final Map<String, String> LABELS = Map.ofEntries(
       Map.entry("MATERIAL", "材料费"), Map.entry("DIRECT_LABOR", "直接人工工资"),
       Map.entry("INDIRECT_LABOR", "辅助人工工资"), Map.entry("LOSS", "净损失"),
@@ -166,9 +180,16 @@ public class JjbProjection {
     String coefficient = calc == null ? costMap.getOrDefault("ADJUSTED_MANUFACTURE_COST",List.of()).stream()
         .map(CostRunCostItem::getRate).filter(Objects::nonNull).map(JjbProjection::decimal).findFirst().orElse(null)
         : decimal(calc.ordinaryInputs().coefficient());
-    String property = calc == null ? text(tech,"productProperty") : calc.technicalInput() == null ? null : calc.technicalInput().productProperty();
+    String property = savedProductProperty(costMap.getOrDefault("ADJUSTED_MANUFACTURE_COST", List.of()));
+    if (property == null) property = calc == null ? text(tech,"productProperty")
+        : calc.technicalInput() == null ? null : calc.technicalInput().productProperty();
+    String propertyLabel = property == null
+        ? costMap.getOrDefault("ADJUSTED_MANUFACTURE_COST", List.of()).stream()
+            .anyMatch(c -> c.getRemark() != null && c.getRemark().contains("产品属性系数未命中"))
+            ? "未匹配" : "未记录"
+        : property;
     rows.add(Row.builder().key("PRODUCT_PROPERTY").section("PROPERTY").kind("PROPERTY").name("产品属性")
-        .remark(property).coefficient(coefficient).build());
+        .remark(propertyLabel).coefficient(coefficient).build());
     BigDecimal t1 = v.getTotalCost();
     var totals = costMap.getOrDefault("TOTAL",List.of());
     if (calc != null) {
@@ -338,6 +359,7 @@ public class JjbProjection {
             .drawingNo(text(child,"childMaterialSpec")).unitPrice(number(child,rollup?"childUnitCost":"costPrice"))
             .quantity(rollup?text(child,"childQtyPerTop"):null)
             .grossWeight(decimalNumber(child,"grossWeightG")).netWeight(decimalNumber(child,"netWeightG"))
+            .manufacturing(rollup ? List.of() : List.of(JjbManufacturingEvidence.describe(child)))
             .rawUnitPrice(number(child,"rawUnitPrice")).scrapUnitPrice(number(child,"scrapUnitPrice"))
             .priceSource(text(child,rollup?"childRawPriceType":"rawPriceType"))
             .partItemIds(row.partItemIds()).sources(List.of(new Source("lp_cost_run_trace_snapshot",trace.getId(),"保存的母件／子件依据")))
