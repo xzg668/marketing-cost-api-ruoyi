@@ -128,16 +128,56 @@ class OaWorkflowClientTest {
 
   @Test void sendsNativeRequestWithSharedTokenAndUtf8() throws Exception {
     var request = request();
+    var original = request.deepCopy();
     var result = client.submit(request);
     assertThat(result.status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
     assertThat(result.requestId()).isEqualTo("00123");
-    assertThat(json.readTree(requestBody)).isEqualTo(request);
+    var sent = json.readTree(requestBody);
+    assertThat(sent).isEqualTo(original.deepCopy().put("formSaveFailInterdictFlow", true));
+    assertThat(sent.path("formSaveFailInterdictFlow").isBoolean()).isTrue();
+    assertThat(sent.path("formSaveFailInterdictFlow").booleanValue()).isTrue();
+    assertThat(request).isEqualTo(original);
     assertThat(method).isEqualTo("POST");
     assertThat(caller).isEqualTo("CALLER");
     assertThat(contentType).contains("application/json", "UTF-8");
     assertThat(URLDecoder.decode(query, StandardCharsets.UTF_8)).isEqualTo("access_token=TOKEN +&中文&userType=JOB_NUM");
     assertThat(calls.get()).isEqualTo(1);
     verify(tokens).getAccessToken();
+  }
+
+  @ParameterizedTest @ValueSource(strings = {"false", "\"true\"", "null"})
+  void submitAlwaysSendsBooleanTrueWithoutChangingTheSavedRequest(String value) throws Exception {
+    var request = request();
+    request.set("formSaveFailInterdictFlow", json.readTree(value));
+    var original = request.deepCopy();
+    assertThat(client.submit(request).status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
+    assertThat(json.readTree(requestBody)).isEqualTo(original.deepCopy().put("formSaveFailInterdictFlow", true));
+    assertThat(request).isEqualTo(original);
+    assertThat(calls.get()).isEqualTo(1);
+  }
+
+  @Test void saveBeforeRejectionAlsoIncludesTheFlagWithoutChangingItsOperation() throws Exception {
+    var request = request();
+    request.withObject("/otherParams").put("src", "save");
+    assertThat(client.submit(request).status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
+    assertThat(json.readTree(requestBody)).isEqualTo(request.deepCopy().put("formSaveFailInterdictFlow", true));
+    assertThat(path).isEqualTo(OaWorkflowClient.SUBMIT_PATH);
+    assertThat(calls.get()).isEqualTo(1);
+  }
+
+  @Test void technicalSubmissionSendsTheFlagAlongsideTheOriginalRequestId() throws Exception {
+    var adapter = new OaTechnicalSubmissionClient(json, client);
+    var request = new OaTechnicalSubmissionClient.Request("00123", "0001", "补录工资资料",
+        "https://quote.example.test/review/123");
+    var original = adapter.preview(request);
+    assertThat(adapter.submit(request).status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
+    assertThat(json.readTree(requestBody)).isEqualTo(original.deepCopy().put("formSaveFailInterdictFlow", true));
+    assertThat(calls.get()).isEqualTo(1);
+  }
+
+  @Test void missingSubmitRequestStillFailsValidationWithoutSending() {
+    assertThatThrownBy(() -> client.submit(null)).hasMessageContaining("userid");
+    assertThat(calls.get()).isZero();
   }
 
   @ParameterizedTest
@@ -160,7 +200,7 @@ class OaWorkflowClientTest {
       assertThat(sent.path("requestId").asText()).isEqualTo("00123");
       assertThat(sent.path("userid").asText()).isEqualTo("0001");
       assertThat(sent.path("remark").asText()).isEqualTo("技术补录：产品P1：张三（0002）补工资。");
-      assertThat(sent).isEqualTo(body);
+      assertThat(sent).isEqualTo(body.deepCopy().put("formSaveFailInterdictFlow", true));
       assertThat(path).isEqualTo(OaWorkflowClient.SUBMIT_PATH);
       assertThat(calls.get()).isEqualTo(1);
     }
@@ -203,7 +243,7 @@ class OaWorkflowClientTest {
     assertThat(details.get(1).path("content").asText()).isEqualTo("293.39424237");
     assertThat(details.get(2).path("content").asText()).isEqualTo("151.57419573");
     assertThat(details.get(3).path("content").asText()).isEqualTo("151.57419573");
-    assertThat(sent).isEqualTo(body);
+    assertThat(sent).isEqualTo(body.deepCopy().put("formSaveFailInterdictFlow", true));
     assertThat(path).isEqualTo(OaWorkflowClient.SUBMIT_PATH);
     assertThat(calls.get()).isEqualTo(1);
   }

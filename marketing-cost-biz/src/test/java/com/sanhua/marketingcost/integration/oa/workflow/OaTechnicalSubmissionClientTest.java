@@ -97,8 +97,8 @@ class OaTechnicalSubmissionClientTest {
     var result = client.submit(request());
     assertThat(result.status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
     assertThat(result.requestId()).isEqualTo("0000123");
-    assertThat(received).isEqualTo(expected);
-    assertThat(received.size()).isEqualTo(5);
+    assertThat(received).isEqualTo(expected.deepCopy().put("formSaveFailInterdictFlow", true));
+    assertThat(received.size()).isEqualTo(6);
     assertThat(received.at("/otherParams/src").asText()).isEqualTo("submit");
     assertThat(received.at("/formData/module").asText()).isEqualTo("workflow");
     assertThat(received.at("/formData/dataDetails").size()).isEqualTo(1);

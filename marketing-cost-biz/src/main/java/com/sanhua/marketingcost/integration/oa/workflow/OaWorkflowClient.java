@@ -63,7 +63,9 @@ public class OaWorkflowClient {
   }
 
   public OaWorkflowResult submit(ObjectNode request) {
-    return send(request, SUBMIT_PATH);
+    // 统一覆盖新报文和已保存的旧报文；发送副本保留调用方的原始快照。
+    ObjectNode body = request == null ? null : request.deepCopy().put("formSaveFailInterdictFlow", true);
+    return send(body, SUBMIT_PATH);
   }
 
   public OaWorkflowResult reject(ObjectNode request) {
