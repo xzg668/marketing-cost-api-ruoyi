@@ -132,7 +132,7 @@ class MonthlyProductCostTest {
     var explanation=new MaterialLine("root/MAKE/B","B",BigDecimal.ONE,List.of(1L),d("10"),d("2"),"root/MAKE");
     var result=MonthlyProductCost.calculate(plan,zero(List.of(settlement,explanation)),null);
     assertThat(result.financeMaterialCost()).isEqualByComparingTo("20");assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("-8");
-    assertThatThrownBy(()->MonthlyProductCost.calculate(plan,zero(List.of(settlement,new MaterialLine(explanation.path(),"B",BigDecimal.ONE,List.of(1L),d("10"),d("2"),null))),null)).hasMessageContaining("twice");
+    assertThatThrownBy(()->MonthlyProductCost.calculate(plan,zero(List.of(settlement,new MaterialLine(explanation.path(),"B",BigDecimal.ONE,List.of(1L),d("10"),d("2"),null))),null)).hasMessageContaining("材料成本重复计入");
   }
   @Test void directlyPricedProcessingFeeAndChildMaterialBothContributeOnce() {
     var fee = request("FEE"); var material = request("MAT");
@@ -149,6 +149,15 @@ class MonthlyProductCostTest {
     var wrongFee = new MaterialLine(parent.path(), "FEE", d("3"), List.of(1L), d("5"), d("6"), null);
     assertThatThrownBy(() -> MonthlyProductCost.calculate(plan, zero(List.of(wrongFee, child)), null))
         .hasMessageContaining("Direct ordinary settlement");
+  }
+  @Test void explicitPreparationScopesStillRejectTheSameConsumedOccurrenceCountedTwice() {
+    var r=request("B");var selected=selection(1,PriceFact.normal(d("10"),SourceEvidence.ofJson("{\"fixture\":1}"),Set.of()));
+    String childPath="root/MAKE/B";
+    var plan=new MonthlyAdoptionPlan(Map.of(r,selected),List.of(new Use(childPath,r,BigDecimal.ONE)),Set.of());
+    var parent=new MaterialLine("root/MAKE","MAKE",BigDecimal.ONE,List.of(1L),d("10"),d("12"),null,null,List.of(childPath));
+    var child=new MaterialLine(childPath,"B",BigDecimal.ONE,List.of(1L),d("10"),d("12"),null,null,List.of(childPath));
+    assertThatThrownBy(()->MonthlyProductCost.calculate(plan,zero(List.of(parent,child)),null))
+        .hasMessageContaining("材料成本重复计入").hasMessageContaining("MAKE").hasMessageContaining("B");
   }
   @Test void emptyFeesRemainNullAndFinalProfileAmountsAreNeitherUpliftedNorDistributed() {
     var plan=new MonthlyAdoptionPlan(Map.of(),List.of(),Set.of());

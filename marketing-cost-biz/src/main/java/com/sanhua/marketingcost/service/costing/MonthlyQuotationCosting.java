@@ -127,7 +127,8 @@ public final class MonthlyQuotationCosting {
           throw new IllegalArgumentException("同一家用月价包含不同客户单价");
       } else materials.add(new MaterialLine(inputs.rootPath(), oa.getMaterialCode(), oa.getQuantity(),
           inputs.prices().stream().map(price -> price.selection().monthlyPriceId()).distinct().toList(),
-          fin.getAmount(), oa.getAmount(), null, inputs.separateRule()));
+          fin.getAmount(), oa.getAmount(), null, inputs.separateRule(),
+          inputs.uses().stream().map(MonthlyAdoptionPlan.Use::path).toList()));
     }
     var plan = new MonthlyAdoptionPlan(prices, uses, suppressed);
     return new MaterialInputs(plan, materials, bindings, preparations, householdCustomerPrices);

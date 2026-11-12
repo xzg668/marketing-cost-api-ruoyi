@@ -57,4 +57,43 @@ class MonthlyQuotationCostingTest {
         List.of(row(3,"root/A","20.463109690363685593",false),row(4,"root/B","20.463109690363685594",false)));
     assertThatThrownBy(()->costing.materials(version())).hasMessageContaining("不同客户单价");
   }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"MAKE_PART_PRICE,MAKE_PART_V1,make-0/raw", "PACKAGE_PRICE,PACKAGE_PRICE_V1,pack-0"})
+  void aggregateOwnConsumptionAndIndependentDescendantMayShareOneLockedUnitPrice(
+      String type,String calculator,String suffix) throws Exception {
+    var raw=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.of(2026,11),"COMMERCIAL","RAW",null,"件","CNY",TaxBasis.EXCLUDED,null),
+        "210",NonCuConditions.empty(),BigDecimal.ONE);
+    var price=new Selection(7L,new MonthlyPriceCoverage(Set.of("210"),QuantityInterval.all(),ConditionDomain.any()),
+        PriceFact.normal(new BigDecimal("3"),SourceEvidence.ofJson("{\"source\":\"fixed\"}"),Set.of()));
+    String root="root/MAKE",child=root+"/RAW";
+    var plan=new MonthlyAdoptionPlan(Map.of(raw,price),List.of(new Use(root+"/"+suffix,raw,BigDecimal.ONE),
+        new Use(child,raw,new BigDecimal("2"))),Set.of());
+    var parent=new PricePrepareItem();parent.setId(11L);parent.setStatus("READY");parent.setSettlementKey(root);
+    parent.setMaterialCode("MAKE");parent.setResultRefType(type);parent.setPriceOrgCode("210");
+    parent.setQuantity(BigDecimal.ONE);parent.setUnitPrice(new BigDecimal("3"));parent.setAmount(new BigDecimal("3"));
+    parent.setInputSnapshotJson(json.writeValueAsString(Map.of("calculatorVersion",calculator)));
+    var evidence=new MonthlyPreparationEvidence(codec);
+    parent.setInputSnapshotJson(evidence.attach(parent,evidence.capture(parent,plan,root)));
+    var value=new QuotationPriceSession.Value(raw,price,new BigDecimal("3"),new BigDecimal("3"));
+    var childRow=new PricePrepareItem();childRow.setId(12L);childRow.setStatus("READY");childRow.setSettlementKey(child);
+    childRow.setMaterialCode("RAW");childRow.setResultRefType(MonthlyPreparationPrice.KIND);childRow.setPriceOrgCode("210");
+    childRow.setQuantity(new BigDecimal("2"));childRow.setUnitPrice(new BigDecimal("3"));childRow.setAmount(new BigDecimal("6"));
+    childRow.setInputSnapshotJson(codec.encode(MonthlyPreparationPrice.of(value,child,new BigDecimal("2"))
+        .withInputs(MonthlyPreparationInputs.captureDirect(plan,child))));
+    when(rows.selectList(any())).thenReturn(List.of(parent,childRow),List.of(parent,childRow));
+    var actual=costing.materials(version());
+    assertThat(actual.plan().selections()).hasSize(1);
+    assertThat(actual.plan().uses()).hasSize(2);
+    var z=BigDecimal.ZERO;
+    var result=MonthlyProductCost.calculate(actual.plan(),new MonthlyProductCost.Ordinary(actual.materials(),z,z,z,z,z,
+        BigDecimal.ONE,z,z,z,z),null);
+    assertThat(result.financeMaterialCost()).isEqualByComparingTo("9");
+    // The saved JSON must retain the exact occurrence ownership, including shared monthly IDs.
+    var restored=json.readValue(json.writeValueAsString(actual.materials()),
+        new com.fasterxml.jackson.core.type.TypeReference<List<MonthlyProductCost.MaterialLine>>() {});
+    assertThat(restored).isEqualTo(actual.materials());
+    assertThat(MonthlyProductCost.calculate(actual.plan(),new MonthlyProductCost.Ordinary(restored,z,z,z,z,z,
+        BigDecimal.ONE,z,z,z,z),null).financeMaterialCost()).isEqualByComparingTo("9");
+  }
 }

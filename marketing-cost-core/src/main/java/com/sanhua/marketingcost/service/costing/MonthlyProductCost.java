@@ -24,10 +24,15 @@ public final class MonthlyProductCost {
   /** A settlement contributes once; its raw-component explanation rows do not contribute. */
   public record MaterialLine(String path, String materialCode, BigDecimal quantity,
       List<Long> monthlyPriceIds, BigDecimal financeAmount,
-      BigDecimal customerAmount, String explanationOf, ProductPartCostRule separateRule) {
+      BigDecimal customerAmount, String explanationOf, ProductPartCostRule separateRule,
+      List<String> priceUsePaths) {
     public MaterialLine(String path, String code, BigDecimal quantity, List<Long> ids,
         BigDecimal finance, BigDecimal customer, String explanation) {
       this(path, code, quantity, ids, finance, customer, explanation, null);
+    }
+    public MaterialLine(String path, String code, BigDecimal quantity, List<Long> ids,
+        BigDecimal finance, BigDecimal customer, String explanation, ProductPartCostRule separateRule) {
+      this(path, code, quantity, ids, finance, customer, explanation, separateRule, null);
     }
     public MaterialLine {
       path = MonthlyBomPricingScope.pathKey(path);
@@ -41,6 +46,9 @@ public final class MonthlyProductCost {
       if (explanationOf != null) explanationOf = MonthlyBomPricingScope.pathKey(explanationOf);
       if (separateRule != null && explanationOf != null)
         throw new IllegalArgumentException("说明行不能作为独立零件重复计价");
+      // Null is retained for old saved versions. New preparations carry their actual
+      // consumption occurrences; shared unit-price IDs do not imply shared amounts.
+      if (priceUsePaths != null) priceUsePaths = priceUsePaths.stream().map(MonthlyBomPricingScope::pathKey).toList();
     }
   }
 
@@ -385,16 +393,33 @@ public final class MonthlyProductCost {
     }
     var contributing = new HashMap<String, MaterialLine>();
     for (var row : materials) if (row.explanationOf() == null) contributing.put(row.path(), row);
+    var actualUses = new HashMap<String, MonthlyAdoptionPlan.Use>();
+    plan.uses().forEach(use -> actualUses.put(MonthlyBomPricingScope.pathKey(use.path()), use));
+    var useOwners = new HashMap<String, MaterialLine>();
+    for (var row : contributing.values()) if (row.priceUsePaths() != null) {
+      for (String path : row.priceUsePaths()) {
+        var use = actualUses.get(path);
+        if (use == null || !inside(path, row.path())
+            || !row.monthlyPriceIds().contains(plan.selections().get(use.request()).monthlyPriceId()))
+          throw new IllegalArgumentException("材料行采用范围与保存依据不一致：" + row.materialCode());
+        var previous = useOwners.putIfAbsent(path, row);
+        if (previous != null)
+          throw new IllegalArgumentException("材料成本重复计入：" + previous.materialCode() + "与" + row.materialCode());
+      }
+    }
     for (var row : materials) {
       if (row.explanationOf() != null) {
         var parent = contributing.get(row.explanationOf());
         if (parent == null || !inside(row.path(), parent.path()) || row.path().equals(parent.path()))
           throw new IllegalArgumentException("Explanation requires its contributing settlement parent");
       } else for (String ancestor = parent(row.path()); ancestor != null; ancestor = parent(ancestor)) {
-        // A direct price at the ancestor is independent (e.g. outsourced processing fee).
-        // An aggregate parent has only descendant uses and must still exclude counted children.
-        if (contributing.containsKey(ancestor) && !uses.contains(ancestor))
-          throw new IllegalArgumentException("Nested material settlements would be counted twice");
+        // New preparation scopes above prove occurrence ownership. BOM ancestry alone
+        // is not overlap: a MAKE/PACK parent can exclude separately priced descendants.
+        // Preserve the existing conservative check for old rows without that evidence.
+        var parent = contributing.get(ancestor);
+        if (parent != null && !uses.contains(ancestor)
+            && (parent.priceUsePaths() == null || row.priceUsePaths() == null))
+          throw new IllegalArgumentException("材料成本重复计入：" + parent.materialCode() + "与下级" + row.materialCode());
       }
     }
     for (var use : plan.uses()) {
@@ -404,9 +429,10 @@ public final class MonthlyProductCost {
         if (householdPaths.contains(ancestor)) throw new IllegalArgumentException("Adopted use below household cut");
       }
       if (selection.fact().type() == PricingType.NORMAL) {
-        MaterialLine settlement = null;
-        for (String ancestor = path; ancestor != null; ancestor = parent(ancestor)) {
-          if (contributing.containsKey(ancestor)) { settlement = contributing.get(ancestor); break; }
+        MaterialLine settlement = useOwners.get(path);
+        for (String ancestor = path; settlement == null && ancestor != null; ancestor = parent(ancestor)) {
+          var candidate = contributing.get(ancestor);
+          if (candidate != null && candidate.priceUsePaths() == null) { settlement = candidate; break; }
         }
         if (settlement == null || !settlement.monthlyPriceIds().contains(selection.monthlyPriceId()))
           throw new IllegalArgumentException("Ordinary use is missing from costing: " + use.path());
