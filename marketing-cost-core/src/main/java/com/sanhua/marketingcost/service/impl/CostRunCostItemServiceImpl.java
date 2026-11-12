@@ -479,10 +479,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal rawPackageAmount = useTechnicalPackage
         ? technicalData.packageTotalAmount()
         : partSplit.packageTotal();
+    var packageCalculation = useTechnicalPackage ? null
+        : packageBucket(oaNoValue, productCodeValue, currentPartItems, costSourceContext);
     BigDecimal packageBucketAmount = useTechnicalPackage
-        ? technicalData.packageTotalAmount()
-        : calculatePackageBucketAmount(
-            oaNoValue, productCodeValue, currentPartItems, costSourceContext);
+        ? technicalData.packageTotalAmount() : packageCalculation.amount();
     BigDecimal packageAmount = useTechnicalPackage
         ? nullToZero(technicalData.packageTotalAmount())
         : packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
@@ -554,7 +554,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         FIN_EXP, "财务费用", null, financeRate, null, threeExpRemark));
     items.addAll(otherExpenseItems);
     // T11：包装费仅用于展示其归集结果，金额已进入材料费，不重复累加总成本。
-    items.add(buildItem(
+    var packageItem = buildItem(
         OTHER_EXP_PACKAGE,
         "包装费",
         rawPackageAmount,
@@ -562,7 +562,17 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         packageAmount,
         useTechnicalPackage ? technicalSourceRemark(technicalData, "PACKAGE") : null,
         useTechnicalPackage ? "lp_quote_tech_data_version" : null,
-        useTechnicalPackage ? technicalData.versionId() : null));
+        useTechnicalPackage ? technicalData.versionId() : null);
+    var packageParameters = new LinkedHashMap<String,String>();
+    packageParameters.put("kind", "PACKAGE_FEE_PARAMETERS");
+    packageParameters.put("baseAmount", CmsCostCompositions.number(rawPackageAmount));
+    packageParameters.put("coefficient", CmsCostCompositions.number(!useTechnicalPackage && packageBucketAmount.signum() > 0
+        ? packageCalculation.coefficient() : BigDecimal.ONE));
+    packageParameters.put("mode", useTechnicalPackage ? "TECHNICAL" : packageBucketAmount.signum() > 0 ? "COMPONENT" : "DIRECT");
+    packageParameters.put("amountYuan", CmsCostCompositions.number(packageAmount));
+    packageItem.setComposition(new CostAmountComposition("SAVED", "包装费用按本次保存的包装结构及系数计算，已计入材料费。",
+        CmsCostCompositions.number(rawPackageAmount), "0", null, List.of(), List.of(packageParameters)));
+    items.add(packageItem);
     items.add(buildItem(TOTAL, "不含税总成本", null, null, null));
     items.add(buildDepartmentItem(OVERHAUL, "大修费", feeResult.overhaul));
     items.add(buildDepartmentItem(TOOLING_REPAIR, "工装零星修理费", feeResult.tooling));
@@ -652,17 +662,23 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       String productCodeValue,
       List<CostRunPartItemDto> currentPartItems,
       CostSourceContext costSourceContext) {
+    return packageBucket(oaNoValue, productCodeValue, currentPartItems, costSourceContext).amount();
+  }
+
+  private record PackageBucket(BigDecimal base, BigDecimal coefficient, BigDecimal amount) {}
+  private PackageBucket packageBucket(String oaNoValue, String productCodeValue,
+      List<CostRunPartItemDto> currentPartItems, CostSourceContext costSourceContext) {
     BigDecimal packageParentAmount =
         sumPackageComponentParentAmount(oaNoValue, productCodeValue, currentPartItems);
     if (packageParentAmount == null || packageParentAmount.signum() <= 0) {
-      return BigDecimal.ZERO;
+      return new PackageBucket(packageParentAmount, BigDecimal.ONE, BigDecimal.ZERO);
     }
-    return packageParentAmount
-        .multiply(ruleDecimal(
+    var coefficient = ruleDecimal(
             CostBusinessRuleProvider.PACKAGE_COMPONENT_COEFFICIENT,
             costSourceContext,
-            DEFAULT_PACKAGE_COEFFICIENT))
-        .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+            DEFAULT_PACKAGE_COEFFICIENT);
+    return new PackageBucket(packageParentAmount, coefficient,
+        packageParentAmount.multiply(coefficient).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP));
   }
 
   /**

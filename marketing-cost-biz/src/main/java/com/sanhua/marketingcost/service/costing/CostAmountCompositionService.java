@@ -25,6 +25,7 @@ public class CostAmountCompositionService {
   private final AuxCostItemMapper auxiliary;
   private final CmsCompositionReader raw;
   @Autowired private JdbcTemplate jdbc;
+  @Autowired private com.sanhua.marketingcost.service.impl.PackageAmountCompositionReader packaging;
   public CostAmountCompositionService(JjbVersionAccess access, MonthlyCostVersionService versions,
       CmsCostSourceEffectiveMapper salaries, AuxCostItemMapper auxiliary, CmsCompositionReader raw) {
     this.access=access; this.versions=versions; this.salaries=salaries; this.auxiliary=auxiliary; this.raw=raw;
@@ -57,6 +58,8 @@ public class CostAmountCompositionService {
     var base=detail==null?item.getBaseAmount():detail.baseAmount();
     var rate=detail==null?item.getRate():detail.rate();
     if(detail!=null)evidence=detail.composition();
+    if(Set.of("OTHER_EXP_PACKAGE","BOM_BUCKET_PACKAGE").contains(item.getCostCode()) && packaging!=null)
+      evidence=packaging.read(saved,item,evidence);
     if (evidence==null) evidence=currentReference(v,item,saved.costs(),base,rate);
     return view(v,item.getCostCode(),item.getCostName(),base,rate,item.getAmount(),evidence);
   }
@@ -150,7 +153,11 @@ public class CostAmountCompositionService {
       else if(Set.of("DIRECT_LABOR","INDIRECT_LABOR").contains(code)) reference=decimal(evidence.sourceAmount()).setScale(6,RoundingMode.HALF_UP);
     }
     String calculation="";
-    if (code.startsWith("AUX_") && reference!=null) {
+    if (Set.of("OTHER_EXP_PACKAGE","BOM_BUCKET_PACKAGE").contains(code)) {
+      calculation=String.join("；",evidence.rows().stream()
+          .filter(row->Set.of("PACKAGE_PARENT","PACKAGE_TOTAL").contains(row.getOrDefault("kind","")))
+          .map(row->row.get("calculation")).filter(Objects::nonNull).toList());
+    } else if (code.startsWith("AUX_") && reference!=null) {
       var adoptedBase=decimal(evidence.sourceAmount()).subtract(decimal(evidence.excludedAmount())).setScale(6,RoundingMode.HALF_UP);
       calculation=evidence.sourceAmount()+" − "+evidence.excludedAmount()+" = "+number(adoptedBase)+" 元；"
           +number(adoptedBase)+" × "+number(rate==null?BigDecimal.ONE:rate)+" = "+number(reference)+" 元";
