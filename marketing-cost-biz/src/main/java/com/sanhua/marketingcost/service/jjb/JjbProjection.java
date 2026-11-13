@@ -229,7 +229,8 @@ public class JjbProjection {
     rows = new JjbBomOrder(snapshot == null || snapshot.pricingBom() == null
         ? List.of() : snapshot.pricingBom().nodes()).apply(rows);
     return new JjbReadModel(identity,header,rows,calc==null?List.of():monthly(calc, snapshot.priceScenarios()),
-        new Totals(money(t1),money(v.getCuMaterialAdjustment()),money(v.getFinalQuoteAmount())),warnings);
+        new Totals(money(t1),money(v.getCuMaterialAdjustment()),money(v.getFinalQuoteAmount())),warnings,
+        new JjbCalculationExplanation(json).describe(snapshot, rows));
   }
 
   public JjbReadModel project(Stored stored, OaForm form, OaFormItem item, List<CostRunTraceSnapshot> traces) {

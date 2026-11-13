@@ -207,7 +207,15 @@ public class TechnicalDataTaskApplicationServiceImpl
       String keyword,
       String oaNo,
       TechnicalDataActor actor) {
+    return workbench(current,size,taskStatus,accountingMonth,keyword,oaNo,null,actor);
+  }
+
+  @Override @Transactional(readOnly=true)
+  public TechnicalDataWorkbenchPageResponse workbench(int current,int size,String taskStatus,String accountingMonth,
+      String keyword,String oaNo,Long itemId,TechnicalDataActor actor) {
     requireActor(actor);
+    if(itemId!=null && (itemId<=0 || !StringUtils.hasText(oaNo) || !StringUtils.hasText(accountingMonth)))
+      throw invalid("定位产品必须提供有效产品ID、报价单和核算月份");
     if (!actor.technician() && !actor.canEdit() && !actor.canViewSupplementOverview()) throw forbidden("当前用户无权查看技术资料工作台");
     if (actor.oaSession()) throw forbidden("OA 协作会话只能查看当前单据的任务");
     if (current <= 0) throw invalid("current必须大于0");
@@ -222,17 +230,17 @@ public class TechnicalDataTaskApplicationServiceImpl
     int offset = (current - 1) * size;
     boolean includePending = status == null || "UNASSIGNED".equals(status);
     var pendingPage = pendingProducts.readPage(accessMode, businessUnitType, month, search, oaNo,
-        offset, includePending ? size : 0);
+        offset, includePending ? size : 0, itemId);
     long unassigned = pendingPage.total();
     long pendingCount = status == null || "UNASSIGNED".equals(status) ? unassigned : 0;
-    long taskCount = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, status, month, search, oaNo);
+    long taskCount = countWorkbenchProducts(accessMode, actor.userId(), businessUnitType, status, month, search, oaNo, itemId);
     long total = pendingCount + taskCount;
     List<TechnicalDataWorkbenchRowResponse> records = new ArrayList<>();
     if (includePending) records.addAll(pendingPage.records());
     int taskOffset = (int) Math.max(0, offset - pendingCount);
     List<QuoteTechProduct> products = records.size() == size || taskCount == 0 ? List.of()
-        : repository.findAccessibleProductPage(accessMode, actor.userId(), businessUnitType,
-            status, month, search, oaNo, taskOffset, size - records.size());
+        : pageWorkbenchProducts(accessMode, actor.userId(), businessUnitType,
+            status, month, search, oaNo, itemId, taskOffset, size - records.size());
     Map<Long, QuoteTechTask> tasks = repository.findTasks(products.stream()
             .map(QuoteTechProduct::getTaskId).distinct().toList()).stream()
         .collect(Collectors.toMap(QuoteTechTask::getId, Function.identity()));
@@ -258,18 +266,27 @@ public class TechnicalDataTaskApplicationServiceImpl
         })
         .toList());
     // 统计遵循月份、关键字和权限范围，不受当前页或状态筛选影响。
-    long allTasks = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, null, month, search, oaNo);
-    long unassignedTasks = repository.countAccessibleProducts(
-        accessMode, actor.userId(), businessUnitType, "UNASSIGNED", month, search, oaNo);
+    long allTasks = countWorkbenchProducts(accessMode, actor.userId(), businessUnitType, null, month, search, oaNo, itemId);
+    long unassignedTasks = countWorkbenchProducts(
+        accessMode, actor.userId(), businessUnitType, "UNASSIGNED", month, search, oaNo, itemId);
     long pending = unassigned + unassignedTasks;
     for (String pendingStatus : List.of("PENDING", "IN_PROGRESS", "RETURN_PENDING", "PARTIALLY_RETURNED")) {
-      pending += repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, pendingStatus, month, search, oaNo);
+      pending += countWorkbenchProducts(accessMode, actor.userId(), businessUnitType, pendingStatus, month, search, oaNo, itemId);
     }
-    long submitting = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "PREPARED", month, search, oaNo);
-    long submitted = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "SUBMITTED", month, search, oaNo);
+    long submitting = countWorkbenchProducts(accessMode, actor.userId(), businessUnitType, "PREPARED", month, search, oaNo, itemId);
+    long submitted = countWorkbenchProducts(accessMode, actor.userId(), businessUnitType, "SUBMITTED", month, search, oaNo, itemId);
     var summary = new TechnicalDataWorkbenchPageResponse.Summary(
         allTasks + unassigned, pending, submitting, submitted, unassigned + unassignedTasks);
     return new TechnicalDataWorkbenchPageResponse(total, current, size, actor.canViewSupplementOverview(), summary, records);
+  }
+
+  private long countWorkbenchProducts(String mode,Long actor,String unit,String status,String month,String search,String oaNo,Long itemId) {
+    return itemId==null?repository.countAccessibleProducts(mode,actor,unit,status,month,search,oaNo)
+        :repository.countAccessibleProducts(mode,actor,unit,status,month,search,oaNo,itemId);
+  }
+  private List<QuoteTechProduct> pageWorkbenchProducts(String mode,Long actor,String unit,String status,String month,String search,String oaNo,Long itemId,int offset,int size) {
+    return itemId==null?repository.findAccessibleProductPage(mode,actor,unit,status,month,search,oaNo,offset,size)
+        :repository.findAccessibleProductPage(mode,actor,unit,status,month,search,oaNo,itemId,offset,size);
   }
 
   @Override

@@ -72,6 +72,29 @@ class CostRunWorkerApplicationTest {
   }
 
   @Test
+  void workerPreparationRegistersTheRealPendingSourceReaderDependency() {
+    // Use the worker's explicit registration list: technicaldata package scanning is excluded.
+    try (var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+      context.registerBean(org.springframework.jdbc.core.JdbcTemplate.class,
+          () -> org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class));
+      context.registerBean(com.fasterxml.jackson.databind.ObjectMapper.class,
+          () -> new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+      context.registerBean(com.sanhua.marketingcost.service.technicaldata.TechnicalDataSharedModuleQuery.class,
+          () -> org.mockito.Mockito.mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataSharedModuleQuery.class));
+      context.registerBean(com.sanhua.marketingcost.service.technicaldata.TechnicalDataQuoteSourceReader.class,
+          () -> org.mockito.Mockito.mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataQuoteSourceReader.class));
+      for (var type : QuotePreparationWorkerConfiguration.class.getAnnotation(Import.class).value()) {
+        if (type == com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingProductQuery.class
+            || type == com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingSourceReads.class)
+          context.register(type);
+      }
+      context.refresh();
+      assertThat(context.getBean(com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingProductQuery.class)).isNotNull();
+      assertThat(context.getBean(com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingSourceReads.class)).isNotNull();
+    }
+  }
+
+  @Test
   void oaDirectorySchedulerRunsOnlyInServletApiProcess() {
     ConditionalOnWebApplication annotation =
         OaPersonDirectorySyncScheduler.class.getAnnotation(ConditionalOnWebApplication.class);

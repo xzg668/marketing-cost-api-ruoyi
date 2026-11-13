@@ -56,6 +56,6 @@ public class JjbMeasurementUnits {
       sources.add(new JjbReadModel.Source("lp_material_master_raw", material.getId(), "计量单位取当前同组织料品档案；保存金额不变"));
       return row.toBuilder().unit(material.getUnit().trim()).sources(sources).build();
     }).toList();
-    return new JjbReadModel(sheet.identity(), sheet.header(), rows, sheet.monthlyPrices(), sheet.totals(), sheet.warnings());
+    return new JjbReadModel(sheet.identity(), sheet.header(), rows, sheet.monthlyPrices(), sheet.totals(), sheet.warnings(), sheet.explanation());
   }
 }

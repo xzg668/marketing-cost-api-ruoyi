@@ -28,9 +28,25 @@ public class MaterialPriceSourceController {
   }
 
   @PatchMapping("/attribute")
-  @PreAuthorize("@ss.hasAnyRole('admin','bu_director','finance_reviewer') and @ss.hasPermi('price:material-sources:edit')")
+  @PreAuthorize("(@ss.hasAnyRole('admin','bu_director','finance_reviewer') and @ss.hasPermi('price:material-sources:edit')) or (@ss.hasPermi('price:material-sources:list') and @ss.hasPermi('quote:costing:bom:alternative-select'))")
   public CommonResult<Entry> change(@RequestBody Change change, Principal principal) {
     return CommonResult.success(service.change(BusinessUnitContext.getCurrentBusinessUnitType(), change, principal.getName()));
+  }
+
+  @GetMapping("/export")
+  @PreAuthorize("@ss.hasPermi('price:material-sources:list')")
+  public void export(@RequestParam(required=false) String month,@RequestParam(required=false) String materialCode,
+      @RequestParam(required=false) String organization,@RequestParam(required=false) String materialAttribute,
+      jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+    response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    response.setHeader("Content-Disposition","attachment; filename*=UTF-8''"+java.net.URLEncoder.encode("物料多形态属性价格表.xlsx",java.nio.charset.StandardCharsets.UTF_8));
+    service.export(BusinessUnitContext.getCurrentBusinessUnitType(),new Filter(month,materialCode,organization,materialAttribute,1,100),response.getOutputStream());
+  }
+
+  @PatchMapping("/attribute/batch")
+  @PreAuthorize("(@ss.hasAnyRole('admin','bu_director','finance_reviewer') and @ss.hasPermi('price:material-sources:edit')) or (@ss.hasPermi('price:material-sources:list') and @ss.hasPermi('quote:costing:bom:alternative-select'))")
+  public CommonResult<java.util.List<Entry>> changeBatch(@RequestBody java.util.List<Change> changes,Principal principal) {
+    return CommonResult.success(service.changeBatch(BusinessUnitContext.getCurrentBusinessUnitType(),changes,principal.getName()));
   }
 
   @PostMapping("/refresh")

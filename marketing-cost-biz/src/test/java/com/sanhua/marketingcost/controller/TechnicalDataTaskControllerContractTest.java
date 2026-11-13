@@ -28,7 +28,7 @@ class TechnicalDataTaskControllerContractTest {
         .doesNotContain("collaboration:");
 
     Method workbench = TechnicalDataTaskController.class.getMethod(
-        "workbench", int.class, int.class, String.class, String.class, String.class, String.class);
+        "workbench", int.class, int.class, String.class, String.class, String.class, String.class, Long.class);
     assertThat(workbench.getAnnotation(GetMapping.class).value())
         .containsExactly("/products");
     assertThat(workbench.getAnnotation(PreAuthorize.class).value())

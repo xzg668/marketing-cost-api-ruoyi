@@ -34,4 +34,5 @@ public record QuoteEffectiveBomNodeResponse(
     String priceOrgCode,
     boolean multiPriceSource,
     java.util.List<String> availableMaterialShapes,
-    long shapeSelectionVersion) {}
+    long shapeSelectionVersion,
+    boolean sourceHasChildren) {}

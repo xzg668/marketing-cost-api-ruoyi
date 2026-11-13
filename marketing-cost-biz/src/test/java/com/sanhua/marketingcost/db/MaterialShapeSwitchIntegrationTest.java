@@ -78,6 +78,51 @@ class MaterialShapeSwitchIntegrationTest extends OriginalPricingIntegrationTestB
   BigDecimal part(long version,String code) {return jdbc.queryForObject("SELECT SUM(amount) FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",BigDecimal.class,version,code);}
   BigDecimal cost(long version,String code) {return jdbc.queryForObject("SELECT amount FROM lp_cost_run_cost_item WHERE cost_run_version_id=? AND cost_code=?",BigDecimal.class,version,code);}
 
+  @Test void calculatedMakeIsVisibleAndBecomesSecondPublicSourceBeforeShapeSelection() throws Exception {
+    var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
+    jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",s.parent());
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    long original=latest(s);
+    var page=call(HttpMethod.GET,"/api/v1/make-part-price-calc/page?parentMaterialNo="+s.parent()+"&pricingMonth="+s.month(),null);
+    assertThat(page.path("total").asLong()).isPositive();
+    var publicRows=catalog.list("COMMERCIAL",new MaterialPriceSourceCatalog.Filter(s.month(),s.parent(),"210","",1,100)).rows();
+    assertThat(publicRows).extracting(MaterialPriceSourceCatalog.Entry::sourceType).containsExactlyInAnyOrder("MAKE","LINKED");
+    var make=publicRows.stream().filter(e -> e.sourceType().equals("MAKE")).findFirst().orElseThrow();
+    assertThat(make.prices()).anyMatch(price -> price.value()!=null && new BigDecimal(price.value()).compareTo(new BigDecimal("9"))==0);
+    catalog.change("COMMERCIAL",new MaterialPriceSourceCatalog.Change(s.month(),"210",s.parent(),"LINKED","PURCHASE",0L),"quoter");
+    choose(s,"PURCHASE");
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    long purchase=latest(s);
+    assertThat(part(purchase,s.parent())).isEqualByComparingTo("7.5");
+    assertThat(part(purchase,s.raw())).isNull();
+    assertThat(cost(purchase,"DIRECT_LABOR")).isEqualByComparingTo("1");
+    assertThat(cost(purchase,"INDIRECT_LABOR")).isEqualByComparingTo("1");
+    assertThat(cost(purchase,"AUX_0201")).isEqualByComparingTo("2.1");
+    assertThat(part(original,s.parent())).isEqualByComparingTo("22.5");
+    for(int i=0;i<3;i++) {assertThat(calculate(s).path("reusedSuccess").asBoolean()).isTrue();assertThat(latest(s)).isEqualTo(purchase);}
+  }
+
+  @Test void absentCatalogDiscoversAllSourcesAndKeepsThemAfterUnclassifiedChoiceIsRejected() throws Exception {
+    var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
+    preparations.prepareByOaFormItem(s.itemId(),java.time.LocalDate.now(),s.month());
+    var tree=bom(s);JsonNode node=null;
+    for(var n:tree.path("nodes")) if(s.parent().equals(n.path("materialCode").asText())) node=n;
+    var body=Map.of("periodMonth",s.month(),"materialCode",s.parent(),"organization","210",
+        "selectedShape","PURCHASE","expectedVersion",node.path("shapeSelectionVersion").asLong(),
+        "expectedVariantHash",tree.path("effectiveVariantHash").asText());
+    var headers=new HttpHeaders();headers.setContentType(MediaType.APPLICATION_JSON);headers.setBearerAuth(token);
+    var response=rest.exchange("http://127.0.0.1:"+port+base(s)+"/effective-bom/material-shape",HttpMethod.PATCH,new HttpEntity<>(body,headers),String.class);
+    var rejected=json.readTree(response.getBody());
+    assertThat(rejected.path("code").asInt()).isNotZero();
+    assertThat(rejected.path("msg").asText()).contains("公共", "形态");
+    assertThat(jdbc.queryForList("SELECT price_source_type FROM lp_material_price_source_row WHERE material_code=? AND price_source_type<>'MAKE'",String.class,s.parent()))
+        .containsExactlyInAnyOrder("FIXED","LINKED");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_material_shape_selection WHERE oa_form_item_id=?",Integer.class,s.itemId())).isZero();
+    classify(s);choose(s,"PURCHASE");
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    assertThat(part(latest(s),s.parent())).isEqualByComparingTo("50");
+  }
+
   @Test void realHttpMakePurchaseOutsourceAndRestoreKeepHistoryAndOnlyDeductOwnCmsCosts() throws Exception {
     var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
     assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
@@ -88,6 +133,10 @@ class MaterialShapeSwitchIntegrationTest extends OriginalPricingIntegrationTestB
     assertThat(cost(original,"INDIRECT_LABOR")).isEqualByComparingTo("2");
     classify(s);
     choose(s,"PURCHASE");assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    var purchasedTree=bom(s);
+    var purchasedParent=java.util.stream.StreamSupport.stream(purchasedTree.path("nodes").spliterator(),false)
+        .filter(n -> s.parent().equals(n.path("materialCode").asText())).findFirst().orElseThrow();
+    assertThat(purchasedParent.path("sourceHasChildren").asBoolean()).isTrue();
     long purchase=latest(s);assertThat(purchase).isNotEqualTo(original);
     assertThat(part(purchase,s.parent())).isEqualByComparingTo("50");assertThat(part(purchase,s.raw())).isNull();
     assertThat(cost(purchase,"DIRECT_LABOR")).isEqualByComparingTo("1");
@@ -127,4 +176,82 @@ class MaterialShapeSwitchIntegrationTest extends OriginalPricingIntegrationTestB
     var result=calculate(s);assertThat(result.path("pipelineStatus").asText()).isEqualTo("BLOCKED");
     assertThat(result.path("message").asText()).contains(s.raw(),"SRM","重量");
   }
+
+  @Test void publicPriceLeafCannotSwitchEvenWhenFinanceClassifiedAnotherShape() throws Exception {
+    var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
+    preparations.prepareByOaFormItem(s.itemId(),java.time.LocalDate.now(),s.month());bom(s);
+    new OrdinaryCostingTestSources(jdbc,hierarchy).comparisonFixedPrice(s.raw(),"10",
+        java.time.YearMonth.parse(s.month()).atDay(1).atTime(12,0));
+    catalog.refresh("COMMERCIAL",s.month(),"leaf-test");
+    catalog.change("COMMERCIAL",new MaterialPriceSourceCatalog.Change(s.month(),"210",s.raw(),"FIXED","OUTSOURCE",0L),"finance");
+    var tree=bom(s);
+    var node=java.util.stream.StreamSupport.stream(tree.path("nodes").spliterator(),false)
+        .filter(n -> s.raw().equals(n.path("materialCode").asText())).findFirst().orElseThrow();
+    assertThat(node.path("multiPriceSource").asBoolean()).isTrue();
+    assertThat(node.path("sourceHasChildren").asBoolean()).isFalse();
+    var headers=new HttpHeaders();headers.setContentType(MediaType.APPLICATION_JSON);headers.setBearerAuth(token);
+    var response=rest.exchange("http://127.0.0.1:"+port+base(s)+"/effective-bom/material-shape",HttpMethod.PATCH,
+        new HttpEntity<>(Map.of("periodMonth",s.month(),"materialCode",s.raw(),"organization","210",
+            "selectedShape","OUTSOURCE","expectedVersion",0,"expectedVariantHash",tree.path("effectiveVariantHash").asText()),headers),String.class);
+    var result=json.readTree(response.getBody());
+    assertThat(result.path("code").asInt()).isNotZero();
+    assertThat(result.path("msg").asText()).contains(s.raw(),"不能切换");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_material_shape_selection WHERE oa_form_item_id=?",Integer.class,s.itemId())).isZero();
+  }
+
+  @Test void originallyOutsourcedMaterialRejectsManufactureAndRetainsPurchaseOutsourceCalculations() throws Exception {
+    var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
+    jdbc.update("UPDATE lp_material_master_raw SET shape_attr='委外加工件' WHERE material_code=?",s.parent());
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET shape_attr='委外加工件' WHERE top_product_code=? AND material_code=?",s.product(),s.parent());
+    preparations.prepareByOaFormItem(s.itemId(),java.time.LocalDate.now(),s.month());
+    assertThat(bom(s).path("nodes").toString()).contains("委外加工件");
+    classify(s);
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    long outsourced=latest(s);assertThat(part(outsourced,s.parent())).isEqualByComparingTo("7.5");
+    assertThat(part(outsourced,s.raw())).isEqualByComparingTo("25");assertThat(part(outsourced,s.scrap())).isEqualByComparingTo("-2.5");
+    assertThatThrownBy(()->choose(s,"MANUFACTURE")).hasMessageContaining("不能改成制造件");
+    assertThat(latest(s)).isEqualTo(outsourced);
+    choose(s,"PURCHASE");assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    long purchased=latest(s);assertThat(part(purchased,s.parent())).isEqualByComparingTo("50");
+    assertThat(part(purchased,s.raw())).isNull();
+    choose(s,"OUTSOURCE");assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    assertThat(part(latest(s),s.parent())).isEqualByComparingTo("7.5");
+    assertThat(part(outsourced,s.parent())).isEqualByComparingTo("7.5");
+  }
+
+  @Test void twoPublicMaterialsBatchSaveRecalculateOnceAndRollbackEverySelectionOnConflict() throws Exception {
+    var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);String second=MaterialShapeSwitchTestData.secondParent(jdbc,hierarchy,s);
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    long original=latest(s);classify(s);
+    catalog.changeBatch("COMMERCIAL",List.of(new MaterialPriceSourceCatalog.Change(s.month(),"210",second,"FIXED","PURCHASE",0L),
+        new MaterialPriceSourceCatalog.Change(s.month(),"210",second,"LINKED","OUTSOURCE",0L)),"finance");
+    var tree=bom(s);
+    var body=Map.of("periodMonth",s.month(),"expectedVariantHash",tree.path("effectiveVariantHash").asText(),"selections",List.of(
+        Map.of("materialCode",s.parent(),"organization","210","selectedShape","PURCHASE","expectedVersion",0),
+        Map.of("materialCode",second,"organization","210","selectedShape","PURCHASE","expectedVersion",0)));
+    call(HttpMethod.PATCH,base(s)+"/effective-bom/material-shape/batch",body);
+    assertThat(latest(s)).isEqualTo(original);
+    var batchCalculated=calculate(s);
+    assertThat(batchCalculated.path("pipelineStatus").asText()).as(batchCalculated.toPrettyString()).isEqualTo("SUCCESS");
+    long purchased=latest(s);assertThat(part(purchased,s.parent())).isEqualByComparingTo("50");
+    assertThat(part(purchased,second)).isEqualByComparingTo("50");
+    assertThat(cost(purchased,"DIRECT_LABOR")).isEqualByComparingTo("1");
+    var after=bom(s);
+    var bad=Map.of("periodMonth",s.month(),"expectedVariantHash",after.path("effectiveVariantHash").asText(),"selections",List.of(
+        Map.of("materialCode",s.parent(),"organization","210","selectedShape","MANUFACTURE","expectedVersion",1),
+        Map.of("materialCode",second,"organization","210","selectedShape","MANUFACTURE","expectedVersion",0)));
+    assertThatThrownBy(()->call(HttpMethod.PATCH,base(s)+"/effective-bom/material-shape/batch",bad)).hasMessageContaining("更新");
+    assertThat(jdbc.queryForList("SELECT selected_shape FROM lp_quote_material_shape_selection WHERE oa_form_item_id=?",String.class,s.itemId())).containsOnly("PURCHASE");
+    assertThat(latest(s)).isEqualTo(purchased);
+    assertThat(part(original,s.parent())).isEqualByComparingTo("22.5");
+  }
+  @Test void failedManufacturingPreparationPublishesItsSourceWithoutInventingAPrice() throws Exception {
+    var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
+    jdbc.update("DELETE FROM lp_price_linked_item WHERE material_code=?",s.raw());
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("BLOCKED");
+    var make=catalog.list("COMMERCIAL",new MaterialPriceSourceCatalog.Filter(s.month(),s.parent(),"210","",1,100)).rows().stream()
+        .filter(r -> r.sourceType().equals("MAKE")).findFirst().orElseThrow();
+    assertThat(make.prices()).allMatch(p -> p.value()==null);
+  }
+
 }

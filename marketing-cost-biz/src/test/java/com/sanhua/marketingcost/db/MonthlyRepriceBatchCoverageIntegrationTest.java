@@ -186,7 +186,7 @@ class MonthlyRepriceBatchCoverageIntegrationTest extends MonthlyRepriceCostingFi
             .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
         var bytes=new java.io.ByteArrayOutputStream();sheetExcel.write(view.sheet(),bytes);
         try(var book=org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
-          assertThat(book.getNumberOfSheets()).isEqualTo(1);
+          assertThat(book.getNumberOfSheets()).isEqualTo(2);
           assertThat(book.getSheetAt(0).getRow(0).getCell(0).getCellComment().getString().getString())
               .contains("versionId="+saved.version().getId(),"月度价格依据");
         }

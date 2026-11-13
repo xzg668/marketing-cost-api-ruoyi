@@ -27,6 +27,21 @@ public class MaterialPriceSourceRepository {
         AND a.price_org_code=s.price_org_code AND a.material_code=s.material_code AND a.price_source_type=s.price_source_type
       """;
   private static final String ATTRIBUTE = "CASE WHEN s.auto_attribute IS NOT NULL THEN s.auto_attribute ELSE a.material_attribute END";
+  public boolean installed() {
+    return Objects.equals(3,jdbc.queryForObject("""
+        SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()
+          AND table_name IN ('lp_material_price_source_row','lp_material_price_source_scope','lp_material_price_attribute')
+        """,Map.of(),Integer.class));
+  }
+  public List<Key> manufacturedMaterials(String unit,String month,long itemId) {
+    return jdbc.query("""
+        SELECT DISTINCT n.material_code,n.price_org_code FROM lp_quote_effective_bom_node n
+        JOIN lp_quote_costing_workspace w ON w.current_bom_build_batch_id=n.build_batch_id
+        WHERE w.business_unit_type=:unit AND w.period_month=:month AND w.oa_form_item_id=:item
+          AND n.source_material_shape IN ('MANUFACTURE','制造件','自制件')
+          AND n.shape_resolution_source<>'STRUCTURE_ROOT'
+        """,Map.of("unit",unit,"month",month,"item",itemId),(r,n)->new Key(r.getString(1),r.getString(2),"MAKE"));
+  }
   private static final String WHERE = """
       WHERE s.business_unit_type=:unit AND s.price_month=:month
         AND (:organization='' OR s.price_org_code=:organization)
@@ -41,6 +56,16 @@ public class MaterialPriceSourceRepository {
         + "(s.auto_attribute IS NOT NULL) automatic "
         + FROM + filter + " ORDER BY s.material_code,s.price_org_code,s.price_source_type LIMIT :limit OFFSET :offset",params,this::entry);
     return new Page((String)params.get("month"),total,rows,state(params));
+  }
+
+  /** Exact quotation members, without the public table's pagination or unrelated materials. */
+  public List<Entry> quotationRows(Map<String,Object> params) {
+    return jdbc.query("SELECT s.*,"+ATTRIBUTE+" material_attribute,COALESCE(a.row_version,0) row_version,"
+        +"(s.auto_attribute IS NOT NULL) automatic "+FROM+"""
+        WHERE s.business_unit_type=:unit AND s.price_month=:month AND s.price_org_code=:organization
+          AND s.material_code IN (:materialCodes)
+        ORDER BY s.material_code,s.price_org_code,s.price_source_type
+        """,params,this::entry);
   }
 
   private Entry entry(ResultSet r, int ignored) throws SQLException {
@@ -65,6 +90,29 @@ public class MaterialPriceSourceRepository {
   }
 
   public void replace(Map<String,Object> scope, List<Candidate> rows, long generation, String actor) {
+    upsert(scope,rows,generation);
+    var params = new HashMap<String,Object>(scope); params.put("generation",generation); params.put("actor",actor);
+    params.put("materials",rows.stream().map(r -> r.key().organization()+":"+r.key().materialCode()).distinct().count()); params.put("sources",rows.size());
+    jdbc.update("DELETE FROM lp_material_price_source_row WHERE business_unit_type=:unit AND price_month=:month AND generation<>:generation",params);
+    jdbc.update("""
+        UPDATE lp_material_price_source_scope SET generation=:generation,refreshed_at=CURRENT_TIMESTAMP(6),refreshed_by=:actor,
+          material_count=:materials,source_count=:sources WHERE business_unit_type=:unit AND price_month=:month
+        """,params);
+  }
+
+  /** Caller holds the existing monthly lock and has rechecked that this material is absent. */
+  public void append(Map<String,Object> scope,List<Candidate> rows,long generation,String actor) {
+    upsert(scope,rows,generation);
+    var params=new HashMap<String,Object>(scope);params.put("generation",generation);params.put("actor",actor);
+    jdbc.update("""
+        UPDATE lp_material_price_source_scope SET generation=:generation,refreshed_at=CURRENT_TIMESTAMP(6),refreshed_by=:actor,
+          material_count=(SELECT COUNT(DISTINCT price_org_code,material_code) FROM lp_material_price_source_row WHERE business_unit_type=:unit AND price_month=:month),
+          source_count=(SELECT COUNT(*) FROM lp_material_price_source_row WHERE business_unit_type=:unit AND price_month=:month)
+        WHERE business_unit_type=:unit AND price_month=:month
+        """,params);
+  }
+
+  private void upsert(Map<String,Object> scope,List<Candidate> rows,long generation) {
     var batch = new ArrayList<Map<String,Object>>();
     for (var row : rows) {
       var params = new HashMap<String,Object>(scope);
@@ -82,13 +130,6 @@ public class MaterialPriceSourceRepository {
         ON DUPLICATE KEY UPDATE material_name=VALUES(material_name),material_model=VALUES(material_model),material_spec=VALUES(material_spec),
           organization_name=VALUES(organization_name),prices_json=VALUES(prices_json),auto_attribute=VALUES(auto_attribute),generation=VALUES(generation)
         """,batch.subList(start,Math.min(start+200,batch.size())).toArray(Map[]::new));
-    var params = new HashMap<String,Object>(scope); params.put("generation",generation); params.put("actor",actor);
-    params.put("materials",rows.stream().map(r -> r.key().organization()+":"+r.key().materialCode()).distinct().count()); params.put("sources",rows.size());
-    jdbc.update("DELETE FROM lp_material_price_source_row WHERE business_unit_type=:unit AND price_month=:month AND generation<>:generation",params);
-    jdbc.update("""
-        UPDATE lp_material_price_source_scope SET generation=:generation,refreshed_at=CURRENT_TIMESTAMP(6),refreshed_by=:actor,
-          material_count=:materials,source_count=:sources WHERE business_unit_type=:unit AND price_month=:month
-        """,params);
   }
 
   public List<String> availableMonths(String unit) {

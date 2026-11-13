@@ -20,7 +20,7 @@ public final class MaterialPriceSourceTestData {
   }
   public static void tree(JdbcTemplate j,String code,String month) {
     String b="CAT-TREE-"+code+month;
-    j.update("INSERT INTO lp_quote_effective_bom_node(build_batch_id,origin_monthly_snapshot_id,effective_variant_hash,top_product_code,cost_period_month,price_org_code,node_key,node_level,node_path,material_code,material_name,material_model,material_spec,material_unit,qty_per_parent,qty_per_top,effective_material_shape,shape_resolution_source,source_bom_type) VALUES(?,1,'TEST','CAT-TOP',?,'210',?,1,?,?,'计价树自制件','TREE-MODEL','TREE-SPEC','只',1,1,'MANUFACTURE','U9','U9')",b,month,code,"/CAT-TOP/"+code,code);
+    j.update("INSERT INTO lp_quote_effective_bom_node(build_batch_id,origin_monthly_snapshot_id,effective_variant_hash,top_product_code,cost_period_month,price_org_code,node_key,node_level,node_path,material_code,material_name,material_model,material_spec,material_unit,qty_per_parent,qty_per_top,effective_material_shape,source_material_shape,shape_resolution_source,source_bom_type) VALUES(?,1,'TEST','CAT-TOP',?,'210',?,1,?,?,'计价树自制件','TREE-MODEL','TREE-SPEC','只',1,1,'MANUFACTURE','制造件','U9','U9')",b,month,code,"/CAT-TOP/"+code,code);
     j.update("INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,business_unit_type,current_bom_build_batch_id) VALUES(?,?,'CAT-TOP',?,'COMMERCIAL',?)",b,(long)Math.abs(b.hashCode()),month,b);
   }
 }

@@ -187,6 +187,22 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
     assertThat(workbench.records().getFirst().product().oaFormItemId()).isEqualTo(expected.get(1));
   }
 
+  @Test void exactProductScopeDoesNotIncludeAnotherOccurrenceOfTheSameMaterial() throws Exception {
+    long form=jdbc.queryForObject("SELECT oa_form_id FROM oa_form_item WHERE id=?",Long.class,itemId);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,business_unit_type) VALUES(?,?,'同料号另一行','COMMERCIAL')",form,oaNo);
+    long other=jdbc.queryForObject("SELECT MAX(id) FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+    var saved=json.readTree(jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",String.class,itemId));
+    ((com.fasterxml.jackson.databind.node.ObjectNode)saved.path("check")).put("oaFormItemId",other);
+    jdbc.update("INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,business_unit_type,workspace_status,gap_count,last_checked_at,technical_check_json) VALUES(?,?,?,'2026-11','COMMERCIAL','WAIT_PRICE',2,NOW(),?)",oaNo,other,oaNo,json.writeValueAsString(saved));
+    var focused=tasks.workbench(1,20,null,"2026-11",null,oaNo,itemId,ADMIN);
+    assertThat(focused.total()).isEqualTo(1);assertThat(focused.summary().total()).isEqualTo(1);
+    assertThat(focused.records()).extracting(r->r.product().oaFormItemId()).containsExactly(itemId);
+    assertThat(tasks.workbench(1,20,null,"2026-11",null,oaNo,ADMIN).total()).isEqualTo(2);
+    assertThat(tasks.workbench(1,20,null,"2026-10",null,oaNo,itemId,ADMIN).total()).isZero();
+    assertThat(tasks.workbench(1,20,null,"2026-11",null,"OTHER-OA",itemId,ADMIN).total()).isZero();
+    assertThatThrownBy(()->tasks.workbench(1,20,null,null,null,oaNo,itemId,ADMIN)).hasMessageContaining("定位产品");
+  }
+
   private TechnicalDataSourceCheckService.Check current(boolean priceAvailable,boolean rateAvailable) {
     var checked = new TechnicalDataSourceCheckService.Check(
         TechnicalDataModuleType.orderedCodes().stream().map(code->{

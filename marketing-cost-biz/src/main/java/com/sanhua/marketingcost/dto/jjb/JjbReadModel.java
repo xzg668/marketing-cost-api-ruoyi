@@ -6,7 +6,11 @@ import lombok.Builder;
 
 /** Saved-version presentation contract. Decimal strings never pass through JavaScript doubles. */
 public record JjbReadModel(Identity identity, Header header, List<Row> rows,
-    List<MonthlyPrice> monthlyPrices, Totals totals, List<String> warnings) {
+    List<MonthlyPrice> monthlyPrices, Totals totals, List<String> warnings, JjbCostExplanation explanation) {
+  public JjbReadModel(Identity identity, Header header, List<Row> rows,
+      List<MonthlyPrice> monthlyPrices, Totals totals, List<String> warnings) {
+    this(identity, header, rows, monthlyPrices, totals, warnings, null);
+  }
   public JjbReadModel {
     rows = List.copyOf(rows); monthlyPrices = List.copyOf(monthlyPrices); warnings = List.copyOf(warnings);
   }

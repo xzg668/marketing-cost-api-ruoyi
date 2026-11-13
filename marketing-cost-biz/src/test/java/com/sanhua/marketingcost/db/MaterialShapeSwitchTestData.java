@@ -62,6 +62,27 @@ final class MaterialShapeSwitchTestData {
     cms(j,p,a,month,date.getYear());
     return new Sample(p,item,p,a,b,s,month);
   }
+  static String secondParent(JdbcTemplate j,BomRawHierarchyMapper hierarchy,Sample s) {
+    String second=s.parent()+"-SECOND";
+    var master=j.queryForMap("SELECT * FROM lp_material_master_raw WHERE material_code=? AND organization_code='COMMERCIAL'",s.parent());
+    master.remove("id");master.put("material_code",second);
+    String columns=String.join(",",master.keySet().stream().map(c -> "`"+c+"`").toList());
+    j.update("INSERT INTO lp_material_master_raw("+columns+") VALUES("+String.join(",",java.util.Collections.nCopies(master.size(),"?"))+")",master.values().toArray());
+    for(var original:hierarchy.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<BomRawHierarchy>lambdaQuery().eq(BomRawHierarchy::getTopProductCode,s.product())
+        .in(BomRawHierarchy::getMaterialCode,s.parent(),s.raw()))) {
+      var copy=new BomRawHierarchy();org.springframework.beans.BeanUtils.copyProperties(original,copy);copy.setId(null);
+      if(s.parent().equals(copy.getMaterialCode())) copy.setMaterialCode(second);
+      if(s.parent().equals(copy.getParentCode())) copy.setParentCode(second);
+      copy.setPath(copy.getPath().replace(s.parent(),second));copy.setSortSeq(copy.getSortSeq()+100);copy.setSourceLineKey(null);hierarchy.insert(copy);
+    }
+    j.update("INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,parent_material_no,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to,child_type) SELECT import_batch_id,'U9',NOW(),price_org_code,?,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to,child_type FROM lp_bom_u9_source WHERE parent_material_no=?",second,s.parent());
+    MaterialPriceSourceTestData.fixed(j,"COMMERCIAL","210",second,s.month(),"20");
+    j.update("UPDATE lp_price_fixed_item SET supplier_code='MRP11-S1',supplier_name='形态验收供应商',unit='件',tax_included=0 WHERE material_code=?",second);
+    MaterialPriceSourceTestData.linked(j,"COMMERCIAL","210",second,s.month());
+    j.update("UPDATE lp_price_linked_item SET formula_expr='3.39',unit='件',supplier_code='MRP11-S1',tax_included=0 WHERE material_code=?",second);
+    j.update("INSERT INTO lp_u9_bom_byproduct_master(price_org_code,parent_material_no,bom_purpose,version_no,output_type,byproduct_material_no,output_qty,unit,status,effective_from,effective_to) SELECT price_org_code,?,bom_purpose,version_no,output_type,byproduct_material_no,output_qty,unit,status,effective_from,effective_to FROM lp_u9_bom_byproduct_master WHERE parent_material_no=?",second,s.parent());
+    return second;
+  }
   private static void cms(JdbcTemplate j,String p,String a,String month,int year) {
     String own=p+"(×1)→"+a+"(×2.5)→WORK(自身)(20)",other=p+"(×1)→OTHER(×1)→WORK(自身)(10)";
     j.update("INSERT INTO cms_workshop_labor_raw(import_batch_id,row_no,period,parent_code,parent_name,working_cost_cent,working_cost_yuan,working_hours,path,source_row_id,business_unit_type) VALUES(1,1,?,?,?,300,3,30,?,UUID(),'COMMERCIAL')",month,p,p,own+";"+other);

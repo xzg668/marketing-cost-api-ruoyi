@@ -53,6 +53,20 @@ public class MaterialPriceSourcePrices {
           AND f.finance_batch_id=b.id AND f.scheme_code=b.default_scheme_code AND f.calculator_version='FINANCE_EFFECTIVE_V1'
         """;
   }
+  /** Costing rows are rebuilt on shape changes; saved preparation retains the original organization. */
+  static String manufacturedCalculations() {
+    return """
+        SELECT p.*, CONVERT(COALESCE(c.price_org_code,(
+          SELECT i.price_org_code FROM lp_price_prepare_item i
+          WHERE i.bom_row_id=p.source_costing_row_id AND i.business_unit_type COLLATE utf8mb4_0900_ai_ci=p.business_unit_type
+            AND i.period_month COLLATE utf8mb4_0900_ai_ci=p.pricing_month AND i.material_code COLLATE utf8mb4_0900_ai_ci=p.parent_material_no
+            AND i.result_ref_type='MAKE_PART_PRICE' AND i.status='READY'
+          ORDER BY i.id DESC LIMIT 1)) USING utf8mb4) COLLATE utf8mb4_0900_ai_ci source_price_org_code, c.unit source_unit
+        FROM lp_make_part_price_calc_row p LEFT JOIN lp_bom_costing_row c ON c.id=p.source_costing_row_id
+        WHERE p.business_unit_type=:unit AND p.pricing_month=:month
+        """;
+  }
+
   private static String query(String table) {
     return switch(table) {
       case "lp_price_fixed_item" -> select(table+" p","p.fixed_price","p.unit","'CNY'",
@@ -76,8 +90,17 @@ public class MaterialPriceSourcePrices {
       case "lp_settlement_price" -> select(table+" p LEFT JOIN lp_settlement_effective_price f ON f.id=(SELECT n.id FROM lp_settlement_effective_price n WHERE n.rule_id=p.id AND n.business_unit_type=p.business_unit_type AND n.effective_month<=:month ORDER BY n.effective_month DESC,n.revision_no DESC LIMIT 1)",
           "f.unit_price","p.material_unit","'CNY'","'EXCLUDED'","NULL","NULL","COALESCE(f.price_mode,'未有已生成结算价')");
       case "lp_scrap_price" -> select(table+" p","p.unit_price","p.unit","p.currency","CASE p.tax_included WHEN 1 THEN 'INCLUDED' ELSE 'EXCLUDED' END","p.supplier_code","p.supplier_name","p.price_type");
-      case "lp_quote_effective_bom_node" -> select(table+" p LEFT JOIN lp_price_prepare_item q ON q.id=(SELECT n.id FROM lp_price_prepare_item n JOIN lp_quote_costing_workspace w ON w.business_unit_type=n.business_unit_type AND w.period_month=n.period_month AND w.current_bom_build_batch_id=p.build_batch_id WHERE n.business_unit_type=:unit AND n.period_month=:month AND n.material_code=p.material_code AND n.price_org_code=p.price_org_code AND n.item_type='MAKE_PART' AND n.current_flag=1 AND n.status='READY' ORDER BY n.id DESC LIMIT 1)",
-          "q.unit_price","p.material_unit","'CNY'","'EXCLUDED'","NULL","NULL","CONCAT('计价BOM ',COALESCE(q.oa_no,''))");
+      case "lp_make_part_price_calc_row" -> "WITH make_calculations AS ("+manufacturedCalculations()+") "+select(
+          "make_calculations p LEFT JOIN lp_material_master_raw m ON m.material_code COLLATE utf8mb4_0900_ai_ci=p.parent_material_no AND m.active_flag=1"
+          +" AND m.organization_code=CASE p.source_price_org_code WHEN '210' THEN 'COMMERCIAL' WHEN '220' THEN 'PLATE' END",
+          "p.parent_total_cost_price","COALESCE(p.source_unit,m.unit)","'CNY'","'EXCLUDED'","NULL","NULL","CONCAT('制造件 ',p.oa_no,' / ',p.calc_batch_id)");
+      case "lp_quote_bom_monthly_snapshot_detail" -> select(table+" p JOIN lp_quote_bom_monthly_snapshot s ON s.id=p.monthly_snapshot_id", "NULL", "NULL", "'CNY'", "'EXCLUDED'", "NULL", "NULL",
+          "COALESCE((SELECT g.message FROM lp_price_prepare_gap g WHERE g.business_unit_type=:unit AND g.period_month=:month"
+          +" AND g.oa_form_item_id=s.source_oa_form_item_id AND g.material_code=JSON_UNQUOTE(JSON_EXTRACT(p.raw_node_json,'$.materialCode'))"
+          +" AND g.item_type='MAKE_PART' AND g.current_flag=1 ORDER BY g.id DESC LIMIT 1),"
+          +"'自制价格尚未算出；继续自制需检查重量、原材料及废料价格等核算资料')");
+      case "lp_quote_effective_bom_node" -> select(table+" p",
+          "NULL","p.material_unit","'CNY'","'EXCLUDED'","NULL","NULL","'计价BOM自制来源；金额以实际制造件计算结果为准'");
       default -> throw new IllegalArgumentException("未知来源表："+table);
     };
   }

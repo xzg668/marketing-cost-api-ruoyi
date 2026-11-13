@@ -165,6 +165,30 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  public com.sanhua.marketingcost.dto.quotebom.QuoteMaterialShapeScope materialShapeScope(String oaNo, Long itemId) {
+    var context = requireContext(oaNo, itemId);
+    var snapshot = findOrPrepareMonthlySnapshot(context);
+    if (snapshot == null) throw failure("MONTHLY_BOM_NOT_READY", "本产品月度BOM尚未准备");
+    var raw = loadRawSnapshot(context, snapshot);
+    if (!raw.blockIssues().isEmpty()) throw failure("MONTHLY_BOM_NOT_READY", raw.blockIssues().getFirst().message());
+    if (raw.rows().isEmpty()) throw failure("MONTHLY_BOM_NOT_READY", "本产品月度BOM明细为空");
+    var groups = alternativeGroupResolver.resolve(raw.rows());
+    var selections = resolveSelections(context, groups.groups(), Map.of());
+    if (!groups.issues().isEmpty()) throw failure("BOM_SCOPE_BLOCKED", groups.issues().getFirst().message());
+    if (!selections.issues().isEmpty()) throw failure("BOM_SCOPE_BLOCKED", selections.issues().getFirst().message());
+    var selected = alternativeBranchPruner.prune(new BomAlternativePruneRequest(raw.rows(), groups.groups(), selections.selectedMaterialByGroup())).nodes();
+    var materials = selected.stream().filter(r -> StringUtils.hasText(r.getMaterialCode()))
+        .filter(r -> !isShapeLessStructureRoot(context, r.getMaterialCode(), List.of(r)))
+        .map(r -> new com.sanhua.marketingcost.dto.quotebom.QuoteMaterialShapeScope.Material(
+            firstText(r.getPriceOrgCode(), context.organization().priceOrgCode()), r.getMaterialCode(),
+            r.getMaterialName(), r.getMaterialSpec(), r.getShapeAttr())).distinct().toList();
+    String fingerprint = com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec.sha256(
+        snapshot.getId()+"|"+materials+"|"+new java.util.TreeMap<>(selections.selectedMaterialByGroup()));
+    return new com.sanhua.marketingcost.dto.quotebom.QuoteMaterialShapeScope(context.costPeriodMonth(), context.topProductCode(), fingerprint, materials);
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
   @RetryOnConcurrency
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public QuoteEffectiveBomResponse rebuildPreview(String oaNo, Long oaFormItemId) {
@@ -385,10 +409,16 @@ public class QuoteEffectiveBomApplicationServiceImpl
                     (first, ignored) -> first,
                     LinkedHashMap::new));
     var priceShapeCatalog = shapeCatalog(context);
+    var sourceParentPaths = rawSnapshot.rows().stream().map(row -> sourcePathKey(row.getPath()))
+        .filter(path -> !path.isEmpty()).map(path -> path.substring(0, Math.max(0, path.lastIndexOf('/'))))
+        .collect(Collectors.toSet());
     List<QuoteEffectiveBomNodeResponse> nodes =
         // Classification does not choose a shape: only this quotation's explicit selection does.
         built.nodes().stream()
-            .map(node -> toNode(node, selectionByGroup.get(node.alternativeGroupKey()), priceShapeCatalog))
+            .map(node -> {
+              boolean hasChildren=sourceParentPaths.contains(sourcePathKey(node.sourceNodePath()));
+              return toNode(node, selectionByGroup.get(node.alternativeGroupKey()), priceShapeCatalog,hasChildren);
+            })
             .toList();
     if (built.blocked()) {
       return blockedEvaluation(
@@ -995,7 +1025,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   private QuoteEffectiveBomNodeResponse toNode(
       EffectiveBomNodeDraft node, QuoteEffectiveBomAlternativeResponse selection,
-      com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs.Catalog catalog) {
+      com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs.Catalog catalog,
+      boolean sourceHasChildren) {
     var choice = catalog.choice(node.priceOrgCode(),node.materialCode());
     return new QuoteEffectiveBomNodeResponse(
         node.nodeKey(),
@@ -1026,10 +1057,14 @@ public class QuoteEffectiveBomApplicationServiceImpl
         node.sourceHierarchyId(),
         node.sourceNodePath(),
         node.priceOrgCode(),
-        !catalog.sources(node.priceOrgCode(),node.materialCode()).isEmpty()
+        catalog.multiple(node.priceOrgCode(),node.materialCode())
             && node.shapeResolutionSource()!=MaterialQuoteShapeSource.STRUCTURE_ROOT,
         catalog.shapes(node.priceOrgCode(),node.materialCode()).stream().sorted().toList(),
-        choice==null ? 0 : choice.version());
+        choice==null ? 0 : choice.version(),sourceHasChildren);
+  }
+
+  private static String sourcePathKey(String path) {
+    return path==null ? "" : path.trim().replaceAll("^/+|/+$","");
   }
 
   private QuoteEffectiveBomIssueResponse toIssue(EffectiveBomBlockIssue issue) {

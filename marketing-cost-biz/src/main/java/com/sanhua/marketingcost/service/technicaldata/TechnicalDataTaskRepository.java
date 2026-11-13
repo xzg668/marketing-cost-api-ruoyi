@@ -64,5 +64,14 @@ public interface TechnicalDataTaskRepository {
       int offset,
       int size);
 
+  default long countAccessibleProducts(String accessMode,Long userId,String businessUnitType,String taskStatus,
+      String accountingMonth,String keyword,String oaNo,Long itemId) {
+    return countAccessibleProducts(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo);
+  }
+  default List<QuoteTechProduct> findAccessibleProductPage(String accessMode,Long userId,String businessUnitType,
+      String taskStatus,String accountingMonth,String keyword,String oaNo,Long itemId,int offset,int size) {
+    return findAccessibleProductPage(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo,offset,size);
+  }
+
   List<QuoteTechTask> findTasks(List<Long> taskIds);
 }

@@ -50,11 +50,13 @@ class MaterialPriceSourceIntegrationTest extends OriginalPricingIntegrationTestB
     String c="CAT-MONTH";both(c,"2026-10");both(c,"2026-11");refreshAll.refresh("COMMERCIAL","finance");service.change("COMMERCIAL",new Change("2026-10","210",c,"FIXED","OUTSOURCE",0L),"finance");
     assertThat(row("2026-11",c,"FIXED").materialAttribute()).isNull();assertThat(service.availableMonths("COMMERCIAL")).contains("2026-10","2026-11");refreshAll.refresh("COMMERCIAL","finance");assertThat(row("2026-10",c,"FIXED").materialAttribute()).isEqualTo("OUTSOURCE");
   }
-  @Test void manufactureComesFromPricingTreeEvenWithoutCalculatedPrice(){
-    String c="CAT-TREE";fixed(jdbc,"COMMERCIAL","210",c,"2026-11","10");tree(jdbc,c,"2026-11");service.refresh("COMMERCIAL","2026-11","finance");
-    var m=row("2026-11",c,"MAKE");assertThat(m.materialAttribute()).isEqualTo("MANUFACTURE");assertThat(m.prices().getFirst().value()).isNull();assertThat(row("2026-11",c,"FIXED").materialAttribute()).isNull();assertThat(read("2026-11",c,"MANUFACTURE").rows()).hasSize(1);
-    assertThatThrownBy(()->service.change("COMMERCIAL",new Change("2026-11","210",c,"MAKE","PURCHASE",0L),"finance")).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("无需选择");
-    assertThat(row("2026-11",c,"MAKE").materialAttribute()).isEqualTo("MANUFACTURE");
+  @Test void pendingManufactureWithoutCalculatedPriceStillCountsAsASecondSource() {
+    String c="CAT-TREE";fixed(jdbc,"COMMERCIAL","210",c,"2026-11","10");tree(jdbc,c,"2026-11");
+    service.refresh("COMMERCIAL","2026-11","finance");
+    assertThat(read("2026-11",c,"").rows()).extracting(Entry::sourceType).containsExactlyInAnyOrder("FIXED","MAKE");
+    assertThat(row("2026-11",c,"MAKE").prices()).allMatch(p -> p.value()==null);
+    assertThatThrownBy(()->service.change("COMMERCIAL",new Change("2026-11","210",c,"MAKE","PURCHASE",0L),"finance"))
+        .isInstanceOf(IllegalArgumentException.class);
   }
   @Test void materialMasterManufactureAloneDoesNotCreateSelfPriceSource(){
     String c="CAT-MASTER";both(c,"2026-11");jdbc.update("INSERT INTO lp_material_master_raw(organization_code,material_code,shape_attr,active_flag,import_batch_id,material_model,material_spec) VALUES('COMMERCIAL',?,'制造件',1,'CAT','MODEL-X','SPEC-Y')",c);service.refresh("COMMERCIAL","2026-11","finance");
@@ -67,6 +69,46 @@ class MaterialPriceSourceIntegrationTest extends OriginalPricingIntegrationTestB
   @Test void removedSourceDropsRowsButKeepsFinanceChoiceForLaterReappearance(){
     String c="CAT-REMOVE";both(c,"2026-11");service.refresh("COMMERCIAL","2026-11","finance");service.change("COMMERCIAL",new Change("2026-11","210",c,"FIXED","PURCHASE",0L),"finance");
     jdbc.update("UPDATE lp_price_linked_item SET deleted=1 WHERE material_code=?",c);service.refresh("COMMERCIAL","2026-11","finance");assertThat(read("2026-11",c,"").rows()).isEmpty();jdbc.update("UPDATE lp_price_linked_item SET deleted=0 WHERE material_code=?",c);service.refresh("COMMERCIAL","2026-11","finance");assertThat(row("2026-11",c,"FIXED").materialAttribute()).isEqualTo("PURCHASE");
+  }
+  @Test void quotationSourceLookupIsExactEvenWithMoreThanOnePageOfSimilarCodes() {
+    String code="TARGET-EXACT";
+    both(code,"2026-11");
+    for(int i=0;i<55;i++)both("AAA"+i+code,"2026-11");
+    service.refresh("COMMERCIAL","2026-11","finance");
+    assertThat(service.quotationSources("COMMERCIAL","2026-11","210",code)).hasSize(2).allMatch(r -> r.materialCode().equals(code));
+  }
+  @Test void quotationBatchDiscoversOnlyExactMembersInTheRequestedOrganizationAndMonth() {
+    String a="CAT-BATCH-A",b="CAT-BATCH-B",single="CAT-BATCH-SINGLE",unrelated=a+"-OTHER";
+    both(a,"2026-11");both(b,"2026-11");both(unrelated,"2026-11");
+    fixed(jdbc,"COMMERCIAL","210",single,"2026-11","0");
+    fixed(jdbc,"COMMERCIAL","220",a,"2026-11","99");linked(jdbc,"COMMERCIAL","220",a,"2026-11");
+    service.discoverForQuotation("COMMERCIAL","2026-11","210",java.util.List.of(a,b,single),java.util.Set.of(),"finance");
+    assertThat(service.quotationSources("COMMERCIAL","2026-11","210",a)).hasSize(2);
+    assertThat(service.quotationSources("COMMERCIAL","2026-11","210",b)).hasSize(2);
+    for(String c:java.util.List.of(single,unrelated)) assertThat(service.quotationSources("COMMERCIAL","2026-11","210",c)).isEmpty();
+    assertThat(service.quotationSources("COMMERCIAL","2026-11","220",a)).isEmpty();
+    assertThat(service.quotationSources("COMMERCIAL","2026-10","210",a)).isEmpty();
+    assertThat(service.quotationSources("HOUSEHOLD","2026-11","210",a)).isEmpty();
+  }
+  @Test void quotationBatchAddsUnpricedMakeToAnExistingCatalogAndPreservesFinanceClassification() {
+    String c="CAT-BATCH-NEW-MAKE";both(c,"2026-11");
+    service.discoverForQuotation("COMMERCIAL","2026-11","210",c,"finance");
+    service.change("COMMERCIAL",new Change("2026-11","210",c,"FIXED","PURCHASE",0L),"finance");
+    var classified=row("2026-11",c,"FIXED");tree(jdbc,c,"2026-11");
+    service.discoverForQuotation("COMMERCIAL","2026-11","210",java.util.List.of(c),java.util.Set.of(c),"finance");
+    assertThat(service.quotationSources("COMMERCIAL","2026-11","210",c)).extracting(Entry::sourceType).containsExactly("FIXED","LINKED","MAKE");
+    assertThat(row("2026-11",c,"MAKE").prices()).isNotEmpty().allMatch(p -> p.value()==null);
+    assertThat(row("2026-11",c,"FIXED")).isEqualTo(classified);
+  }
+  @Test void quotationBatchBoundsLargeOrdersWithoutLosingMembersBeyondTheFirstPage() {
+    var codes=new java.util.ArrayList<String>();
+    for(int i=0;i<201;i++) {String c="CAT-BATCH-LARGE-"+String.format("%03d",i);codes.add(c);both(c,"2026-11");}
+    clearInvocations(scanner);
+    service.discoverForQuotation("COMMERCIAL","2026-11","210",codes,java.util.Set.of(),"finance");
+    var calls=org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+    verify(scanner,times(2)).scan(calls.capture());
+    assertThat(calls.getAllValues()).allSatisfy(p -> assertThat((java.util.Collection<?>)p.get("materialCodes")).hasSizeLessThanOrEqualTo(200));
+    for(String c:codes) assertThat(service.quotationSources("COMMERCIAL","2026-11","210",c)).hasSize(2);
   }
   @Test void staleFinanceEditIsRejected(){
     String c="CAT-CONFLICT";both(c,"2026-11");service.refresh("COMMERCIAL","2026-11","finance");service.change("COMMERCIAL",new Change("2026-11","210",c,"FIXED","PURCHASE",0L),"finance");
@@ -85,16 +127,12 @@ class MaterialPriceSourceIntegrationTest extends OriginalPricingIntegrationTestB
     assertThat(row("2026-11",c,"FIXED").prices().getFirst().value()).isEqualTo("0.18");
   }
 
-  @Test void manufactureAndSelfMadeTextAreBothAutomaticAndCannotBeOverridden() {
+  @Test void manufactureAliasesRetainTheirUnpricedMakeSource() {
     for (String shape:java.util.List.of("制造件","自制件")) {
-      String c="CAT-AUTO-"+shape;
-      fixed(jdbc,"COMMERCIAL","210",c,"2026-11","1");tree(jdbc,c,"2026-11");
+      String c="CAT-AUTO-"+shape;both(c,"2026-11");tree(jdbc,c,"2026-11");
       jdbc.update("UPDATE lp_quote_effective_bom_node SET effective_material_shape=? WHERE material_code=?",shape,c);
       service.refresh("COMMERCIAL","2026-11","finance");
-      assertThat(row("2026-11",c,"MAKE").automatic()).isTrue();
-      assertThat(row("2026-11",c,"MAKE").materialAttribute()).isEqualTo("MANUFACTURE");
-      assertThatThrownBy(()->service.change("COMMERCIAL",new Change("2026-11","210",c,"MAKE","OUTSOURCE",0L),"finance"))
-          .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("无需选择");
+      assertThat(read("2026-11",c,"").rows()).extracting(Entry::sourceType).containsExactlyInAnyOrder("FIXED","LINKED","MAKE");
     }
   }
 
@@ -119,6 +157,20 @@ class MaterialPriceSourceIntegrationTest extends OriginalPricingIntegrationTestB
     linked(jdbc,"COMMERCIAL","210",c,"2026-11");service.refresh("COMMERCIAL","2026-11","finance");
     assertThat(row("2026-11",c,"FIXED").prices()).hasSize(1);
     assertThat(row("2026-11",c,"FIXED").prices().getFirst().value()).isEqualTo("1");
+  }
+  @Test void bulkAttributesAreAtomicAndKeepOtherMaterialsAndSourceChoices() {
+    String a="CAT-BULK-A",b="CAT-BULK-B";both(a,"2026-11");both(b,"2026-11");
+    service.refresh("COMMERCIAL","2026-11","finance");
+    var changes=java.util.List.of(new Change("2026-11","210",a,"FIXED","PURCHASE",0L),new Change("2026-11","210",b,"LINKED","OUTSOURCE",0L));
+    assertThat(service.changeBatch("COMMERCIAL",changes,"finance")).hasSize(2);
+    assertThat(row("2026-11",a,"FIXED").materialAttribute()).isEqualTo("PURCHASE");
+    assertThat(row("2026-11",b,"LINKED").materialAttribute()).isEqualTo("OUTSOURCE");
+    assertThatThrownBy(()->service.changeBatch("COMMERCIAL",java.util.List.of(
+        new Change("2026-11","210",a,"FIXED","OUTSOURCE",1L),new Change("2026-11","210",b,"LINKED","PURCHASE",0L)),"finance"))
+        .isInstanceOf(OptimisticLockingFailureException.class);
+    assertThat(row("2026-11",a,"FIXED").materialAttribute()).isEqualTo("PURCHASE");
+    assertThat(row("2026-11",a,"FIXED").version()).isEqualTo(1);
+    assertThat(row("2026-11",a,"LINKED").materialAttribute()).isNull();
   }
 
 }

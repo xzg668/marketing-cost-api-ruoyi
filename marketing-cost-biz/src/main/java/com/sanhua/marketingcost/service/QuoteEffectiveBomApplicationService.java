@@ -6,6 +6,8 @@ import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomCostingCan
 /** 核算工作台第 1 步的单产品本次计价 BOM 应用服务。 */
 public interface QuoteEffectiveBomApplicationService {
 
+  com.sanhua.marketingcost.dto.quotebom.QuoteMaterialShapeScope materialShapeScope(String oaNo, Long oaFormItemId);
+
   QuoteEffectiveBomResponse getEffectiveBom(String oaNo, Long oaFormItemId);
 
   QuoteEffectiveBomResponse rebuildPreview(String oaNo, Long oaFormItemId);

@@ -25,6 +25,13 @@ public final class MaterialShapePriceScope {
   }
 
   public static String shape(String scope) { return scope == null ? null : parts(scope)[0]; }
+  public static String pinned(String shape,String source,String revision) {
+    return of(shape,List.of(source),revision)+":"+source;
+  }
+  public static String pinnedSource(String scope) {
+    if(scope==null) return null;
+    var fields=parts(scope);return fields.length==4?fields[3]:null;
+  }
   public static boolean allows(String scope, String source) {
     if (scope == null) return true;
     int bit = SOURCES.indexOf(source);
@@ -32,8 +39,11 @@ public final class MaterialShapePriceScope {
   }
   private static String[] parts(String scope) {
     String[] parts = scope.split(":",-1);
-    if (parts.length != 3 || !parts[1].matches("[0-9a-f]{1,4}") || !parts[2].matches("[0-9a-f]{64}"))
+    if ((parts.length != 3 && parts.length != 4) || !parts[1].matches("[0-9a-f]{1,4}") || !parts[2].matches("[0-9a-f]{64}"))
       throw new IllegalArgumentException("物料形态价格范围损坏");
+    if(parts.length==4 && (!SOURCES.contains(parts[3])
+        || Integer.parseInt(parts[1],16)!=(1<<SOURCES.indexOf(parts[3]))))
+      throw new IllegalArgumentException("选用价格源范围损坏");
     return parts;
   }
 

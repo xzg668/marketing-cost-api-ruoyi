@@ -103,9 +103,11 @@ public class TechnicalDataTaskController {
       @RequestParam(required = false) String taskStatus,
       @RequestParam(required = false) String accountingMonth,
       @RequestParam(required = false) String keyword,
-      @RequestParam(required = false) String oaNo) {
-    return execute(() -> applicationService.workbench(
-        current, size, taskStatus, accountingMonth, keyword, oaNo, actorProvider.current()));
+      @RequestParam(required = false) String oaNo,
+      @RequestParam(required = false) Long oaFormItemId) {
+    return execute(() -> oaFormItemId==null
+        ? applicationService.workbench(current,size,taskStatus,accountingMonth,keyword,oaNo,actorProvider.current())
+        : applicationService.workbench(current,size,taskStatus,accountingMonth,keyword,oaNo,oaFormItemId,actorProvider.current()));
   }
 
   @PreAuthorize(READ_PERMISSION)

@@ -144,6 +144,12 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
         .extracting(QuoteTechProduct::getId).doesNotContain(fixture.productId());
     assertThat(productMapper.selectAccessibleWorkbenchPage("ASSIGNEE", 102L, null, null, "2026-09", null, null, 0, 100))
         .extracting(QuoteTechProduct::getId).contains(fixture.productId());
+    var item=productMapper.selectById(fixture.productId()).getOaFormItemId();
+    assertThat(productMapper.selectAccessibleWorkbenchPage("ASSIGNEE",102L,null,null,"2026-09",null,null,item,0,100))
+        .extracting(QuoteTechProduct::getId).containsExactly(fixture.productId());
+    assertThat(productMapper.selectAccessibleWorkbenchPage("ASSIGNEE",101L,null,null,"2026-09",null,null,item,0,100)).isEmpty();
+    assertThat(productMapper.countAccessibleWorkbenchRows("ASSIGNEE",102L,null,null,"2026-09",null,null,item)).isEqualTo(1);
+    assertThat(productMapper.countAccessibleWorkbenchRows("ASSIGNEE",102L,null,null,"2026-09",null,null,-1L)).isZero();
   }
 
   @Test void prepareFreezesOneProductAndSeparatesAssigneeOperatorAndOaState() {

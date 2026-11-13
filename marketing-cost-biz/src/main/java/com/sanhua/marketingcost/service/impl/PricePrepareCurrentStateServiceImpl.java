@@ -33,6 +33,8 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentStateService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.pricing.MaterialPriceSourceService publicPriceSources;
 
   private static final int ACTIVE = 1;
   private static final int HISTORY = 0;
@@ -105,6 +107,10 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
       publishSuccessfulBatch(batch, workspace);
     } else {
       publishFailedAttempt(batch, workspace);
+      // Failed make prices are not published as amounts. Their real BOM source still
+      // joins external sources so finance may select an independently usable purchase price.
+      if(publicPriceSources!=null)
+        publicPriceSources.includeUnpricedManufactures(batch.getBusinessUnitType(),batch.getPeriodMonth(),batch.getOaFormItemId());
     }
     cleanupUnreferencedBatches(batch, workspace.getCurrentPrepareNo());
   }
@@ -182,6 +188,14 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
         batch.getOaFormItemId(),
         batch.getTopProductCode(),
         batch.getPeriodMonth());
+    if(publicPriceSources!=null) {
+      var made=itemMapper.selectList(Wrappers.<PricePrepareItem>lambdaQuery()
+          .eq(PricePrepareItem::getPrepareNo,batch.getPrepareNo()).eq(PricePrepareItem::getItemType,"MAKE_PART")
+          .eq(PricePrepareItem::getStatus,"READY"));
+      var published=new java.util.HashSet<String>();
+      for(var item:made) if(item.getUnitPrice()!=null && published.add(item.getPriceOrgCode()+"|"+item.getMaterialCode()))
+        publicPriceSources.includeCalculatedMake(batch.getBusinessUnitType(),batch.getPeriodMonth(),item.getPriceOrgCode(),item.getMaterialCode());
+    }
   }
 
   private void publishFailedAttempt(PricePrepareBatch batch, QuoteCostingWorkspace workspace) {

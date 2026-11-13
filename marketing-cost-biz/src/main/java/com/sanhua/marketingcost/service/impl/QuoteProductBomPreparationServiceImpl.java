@@ -44,6 +44,8 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPreparationService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs quoteShapeInputs;
 
   static final String PREPARATION_READY = "READY";
   static final String PREPARATION_NEED_TECH = "NEED_TECH";
@@ -116,6 +118,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     String productCode = bomContext.productCode();
     String periodMonth = bomContext.costPeriodMonth();
     QuoteDataOrganization organization = bomContext.organization();
+    if(quoteShapeInputs!=null) quoteShapeInputs.discoverSelected(context.item().getBusinessUnitType(),periodMonth,itemId);
     boolean noOriginalBom = QuoteProductIdentityUtils.hasFormalMaterialNo(context.item())
         && originalBomMissing(context, bomContext, resolveQuoteDate(quoteDate));
     QuoteProductTypeResolveResult typeResult =

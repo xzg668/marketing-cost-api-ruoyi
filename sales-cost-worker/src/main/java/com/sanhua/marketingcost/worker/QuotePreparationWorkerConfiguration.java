@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Import;
     com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingProductQuery.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingSourceReads.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataGapStatusQuery.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataParticipantVersions.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingApplicationService.class,

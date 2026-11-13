@@ -63,6 +63,27 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
   private Candidates resolveOrganization(Context context,Set<MonthlyPriceRequest> requests,
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies,
       Map<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>> orders) {
+    var chosen=new LinkedHashMap<String,Set<MonthlyPriceRequest>>();
+    var ordinary=new LinkedHashSet<MonthlyPriceRequest>();
+    for(var request:requests) {
+      String source=MaterialShapePriceScope.pinnedSource(request.conditions().materialShapeScope());
+      if(source==null) ordinary.add(request);
+      else chosen.computeIfAbsent(source,ignored->new LinkedHashSet<>()).add(request);
+    }
+    if(!chosen.isEmpty()) {
+      var unchanged=resolveOrganization(context,ordinary,dependencies,orders);
+      var selected=new LinkedHashMap<>(unchanged.values());var failures=new LinkedHashMap<>(unchanged.problems());
+      for(var group:chosen.entrySet()) {
+        var found=MaterialShapePriceScope.read(group.getKey(),group.getValue(),batch->readChosenSource(context,group.getKey(),batch,dependencies));
+        selected.putAll(found.values());
+        for(var request:group.getValue()) if(!found.values().containsKey(request)) {
+          var problem=found.problems().get(request);
+          failures.put(request,new Problem(problem==null?Failure.MISSING:problem.reason(),
+              "本单选用的"+group.getKey()+"来源未取得适用价格"+(problem==null?"":"："+problem.message())));
+        }
+      }
+      return new Candidates(selected,failures);
+    }
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     var pending=new LinkedHashSet<>(requests);
     var automatic=new LinkedHashSet<MonthlyPriceRequest>();pending.stream().filter(request->orders.get(request).size()>1).forEach(automatic::add);
@@ -136,6 +157,28 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     return new Candidates(values,problems);
   }
 
+  private Candidates readChosenSource(Context context,String source,Set<MonthlyPriceRequest> batch,
+      Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
+    return switch(source) {
+      case "FIXED" -> chain(batch,b->fixed.read(context,b),b->{
+        var current=supplemental.read(context,b);requireComplete(b,current);return historicalSupplemental.fill(context,current);
+      });
+      case "LINKED" -> chain(batch,b->linked.read(context,b,dependencies),b->originalLinked.read(context,b));
+      case "RANGE" -> range(context,batch);
+      case "SETTLE_FIXED","SETTLE_LINKED" -> {
+        var types=new LinkedHashMap<MonthlyPriceRequest,SettlementPriceType>();batch.forEach(r->types.put(r,SettlementPriceType.valueOf(source)));
+        yield settlement.read(context,types);
+      }
+      case "TIER" -> ods.tiers(context,batch);
+      case "ORDER" -> ods.orders(context,batch);
+      case "INVOICE" -> invoices.read(context,batch);
+      case "INQUIRY" -> inquiries.read(context,batch);
+      case "HOUSEHOLD_INQUIRY" -> household.read(context,batch);
+      case "SCRAP" -> scrap.read(context,batch);
+      default -> new Candidates(Map.of(),Map.of());
+    };
+  }
+
   private Candidates withOtherOrganization(Context context,Set<MonthlyPriceRequest> requests,Candidates local,
       Function<Set<MonthlyPriceRequest>,Candidates> lookup) {
     var aliases=new LinkedHashMap<MonthlyPriceRequest,MonthlyPriceRequest>();
@@ -189,7 +232,11 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
   private MonthlyPriceRequest otherOrganization(Context context,MonthlyPriceRequest request) {
     String organization="210".equals(request.priceOrgCode())?"220":"210";
     String scope=request.conditions().materialShapeScope();
-    if(scope!=null && materialShapes!=null && !"OUTSOURCE_WEIGHT".equals(MaterialShapePriceScope.shape(scope))) {
+    String chosen=MaterialShapePriceScope.pinnedSource(scope);
+    if(chosen!=null) {
+      scope=MaterialShapePriceScope.pinned(MaterialShapePriceScope.shape(scope),chosen,
+          MonthlyPriceDocumentCodec.sha256(scope+"|"+organization));
+    } else if(scope!=null && materialShapes!=null && !"OUTSOURCE_WEIGHT".equals(MaterialShapePriceScope.shape(scope))) {
       String shape=MaterialShapePriceScope.shape(scope);
       var catalog=materialShapes.read(context.businessUnitType(),context.month().toString(),context.oaFormItemId(),Set.of(request.materialCode()));
       String foreign=catalog.priceScope(organization,request.materialCode(),shape);

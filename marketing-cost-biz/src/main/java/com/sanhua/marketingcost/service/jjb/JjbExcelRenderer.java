@@ -9,7 +9,7 @@ import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Component;
 
-/** One sheet, using the finance reference's actual formatting and saved monetary values. */
+/** Finance reference layout plus a readable explanation of saved calculation inputs. */
 @Component
 public class JjbExcelRenderer {
   private static final String MONEY = "0.000000", DECIMAL = "0.########################",
@@ -41,6 +41,7 @@ public class JjbExcelRenderer {
         layout.comment(layout.sheet.getRow(0).getCell(0), model.identity().toString()
             + "\n月度价格依据：" + model.monthlyPrices());
         layout.configurePrint();
+        new JjbCalculationExcel(workbook).write(model);
         workbook.getProperties().getCoreProperties().setTitle("产品成本计算一览表 - " + model.identity().costRunNo());
         workbook.getProperties().getCoreProperties().setDescription("保存成本版本 " + model.identity().versionId());
         workbook.write(output);

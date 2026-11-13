@@ -171,7 +171,7 @@ public class JjbExcelRendererTest {
       throws Exception {
     var m = model(ordinary, household, fees);
     try (var wb = render(m)) {
-      assertThat(wb.getNumberOfSheets()).isEqualTo(1);
+      assertThat(wb.getNumberOfSheets()).isEqualTo(2);
       Sheet sheet = wb.getSheet("见机表3");
       for (var row : m.rows()) {
         if (row.kind().equals("PART") || row.kind().equals("HOUSEHOLD")) {

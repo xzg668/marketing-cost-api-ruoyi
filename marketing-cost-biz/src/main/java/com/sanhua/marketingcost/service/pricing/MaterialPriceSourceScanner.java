@@ -26,10 +26,12 @@ public class MaterialPriceSourceScanner {
   // All identifiers and predicates are fixed application code, never request text.
   private static String source(String from, String code, String name, String org,
       String type, String predicate) {
-    String table = from.split(" ")[0];
+    String table = from.startsWith("make_calculations ") ? "lp_make_part_price_calc_row" : from.split(" ")[0];
     String model = table.equals("lp_quote_effective_bom_node") ? "p.material_model" : "NULL";
     String spec = switch(table) {
       case "lp_quote_effective_bom_node" -> "p.material_spec";
+      case "lp_make_part_price_calc_row" -> "NULL";
+      case "lp_quote_bom_monthly_snapshot_detail" -> "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(p.raw_node_json,'$.materialSpec')),'null')";
       case "lp_price_fixed_item","lp_price_linked_item","lp_price_range_factor_rule","lp_price_range_item","lp_settlement_price" -> "p.spec_model";
       case "lp_invoice_price","lp_household_inquiry_price","lp_scrap_price" -> "p.specification";
       case "lp_inquiry_rule" -> "JSON_UNQUOTE(JSON_EXTRACT(p.rule_json,'$.specification'))";
@@ -43,6 +45,7 @@ public class MaterialPriceSourceScanner {
         + " source_type," + normalized(model) + " source_model," + normalized(spec) + " source_spec FROM " + from + " WHERE " + predicate
         + " AND " + code + " IS NOT NULL AND TRIM(" + code + ")<>''"
         + " AND (:code='' OR (:exact=1 AND " + code + "=:code) OR (:exact=0 AND LOCATE(:code," + code + ")>0))"
+        + " AND (:restrictCodes=0 OR " + code + " IN (:materialCodes))"
         + " AND (:organization='' OR " + org + "=:organization)";
   }
 
@@ -109,13 +112,42 @@ public class MaterialPriceSourceScanner {
     sources.add(source("lp_scrap_price p CROSS JOIN organizations o", "p.material_code", "p.material_name", "o.organization", "'SCRAP'", """
         p.business_unit_type=:unit AND p.price_month=:month AND p.calc_status='READY' AND p.unit_price IS NOT NULL
         """));
+    sources.add(source("make_calculations p",
+        "p.parent_material_no", "p.parent_material_name", "p.source_price_org_code", "'MAKE'", """
+        p.business_unit_type=:unit AND p.pricing_month=:month AND p.status='OK'
+        AND p.price_complete=1 AND p.parent_total_cost_price IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM lp_make_part_price_calc_row bad WHERE bad.calc_batch_id=p.calc_batch_id AND bad.parent_material_no=p.parent_material_no
+          AND (bad.status<>'OK' OR bad.price_complete<>1 OR bad.parent_total_cost_price IS NULL))
+        AND (p.price_scenario_type='FINANCE_QUOTE_BASE' OR NOT EXISTS (
+          SELECT 1 FROM make_calculations f
+          WHERE f.business_unit_type=p.business_unit_type AND f.pricing_month=p.pricing_month
+            AND f.parent_material_no=p.parent_material_no AND f.source_price_org_code=p.source_price_org_code
+            AND f.price_scenario_type='FINANCE_QUOTE_BASE' AND f.status='OK' AND f.price_complete=1))
+        AND NOT EXISTS (SELECT 1 FROM make_calculations n
+          WHERE n.business_unit_type=p.business_unit_type AND n.pricing_month=p.pricing_month
+            AND n.parent_material_no=p.parent_material_no AND n.source_price_org_code=p.source_price_org_code
+            AND n.price_scenario_type=p.price_scenario_type AND n.status='OK' AND n.price_complete=1
+            AND (n.created_at>p.created_at OR (n.created_at=p.created_at AND n.id>p.id)))
+        """));
+    // A real manufactured BOM source remains a source even when its weight/material/scrap
+    // inputs cannot produce a price. The selected shape decides which gaps block costing.
+    sources.add(source("lp_quote_bom_monthly_snapshot_detail p JOIN lp_quote_bom_monthly_snapshot s ON s.id=p.monthly_snapshot_id",
+        "JSON_UNQUOTE(JSON_EXTRACT(p.raw_node_json,'$.materialCode'))",
+        "JSON_UNQUOTE(JSON_EXTRACT(p.raw_node_json,'$.materialName'))",
+        "COALESCE(NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(p.raw_node_json,'$.priceOrgCode')),'null'),''),s.price_org_code)", "'MAKE'", """
+        s.business_unit_type=:unit AND s.cost_period_month=:month AND s.active_flag=1 AND s.sync_status='SUCCESS'
+        AND TRIM(JSON_UNQUOTE(JSON_EXTRACT(p.raw_node_json,'$.shapeAttr'))) IN ('制造件','自制件','MANUFACTURE')
+        """));
     sources.add(source("lp_quote_effective_bom_node p JOIN lp_quote_costing_workspace w ON w.current_bom_build_batch_id=p.build_batch_id",
-        "p.material_code", "p.material_name", "p.price_org_code", "'MAKE'",
-        "w.business_unit_type=:unit AND w.period_month=:month AND p.cost_period_month=:month "
-            + "AND (p.effective_material_shape IN ('MANUFACTURE','制造件','自制件') OR p.source_material_shape IN ('MANUFACTURE','制造件','自制件'))"));
+        "p.material_code","p.material_name","p.price_org_code","'MAKE'", """
+        w.business_unit_type=:unit AND w.period_month=:month
+        AND p.source_material_shape IN ('制造件','自制件','MANUFACTURE') AND p.shape_resolution_source<>'STRUCTURE_ROOT'
+        """));
     return """
         WITH organizations AS (SELECT '210' organization UNION ALL SELECT '220'),
-        latest_preparations AS (
+        make_calculations AS (
+        """ + MaterialPriceSourcePrices.manufacturedCalculations() + """
+        ), latest_preparations AS (
           SELECT p.* FROM lp_price_prepare_item p JOIN (
             SELECT material_code,price_org_code,MAX(id) id FROM lp_price_prepare_item
             WHERE business_unit_type=:unit AND period_month=:month AND current_flag=1
@@ -136,6 +168,9 @@ public class MaterialPriceSourceScanner {
   private record FixedReference(Reference reference, LocalDate from, LocalDate to) {}
 
   public List<Candidate> scan(Map<String,Object> params) {
+    params=new HashMap<>(params);
+    params.put("restrictCodes",params.containsKey("materialCodes")?1:0);
+    params.putIfAbsent("materialCodes",List.of(""));
     var references = new ArrayList<Reference>();
     var fixed = new LinkedHashMap<String,List<FixedReference>>();
     var candidates = new LinkedHashMap<Key,Candidate>();
@@ -172,7 +207,11 @@ public class MaterialPriceSourceScanner {
       selected.forEach(r -> references.add(r.reference()));
     }
     var values = prices.read(references,params);
-    return candidates.values().stream().map(c -> new Candidate(c.key(),c.materialName(),c.materialModel(),c.materialSpec(),
-        c.organizationName(),values.getOrDefault(c.key(),List.of()),c.autoAttribute())).toList();
+    return candidates.values().stream().map(c -> {
+      var amounts=values.getOrDefault(c.key(),List.of());
+      if ("MAKE".equals(c.key().sourceType()) && amounts.stream().anyMatch(p -> p.value()!=null))
+        amounts=amounts.stream().filter(p -> p.value()!=null).toList();
+      return new Candidate(c.key(),c.materialName(),c.materialModel(),c.materialSpec(),c.organizationName(),amounts,c.autoAttribute());
+    }).toList();
   }
 }

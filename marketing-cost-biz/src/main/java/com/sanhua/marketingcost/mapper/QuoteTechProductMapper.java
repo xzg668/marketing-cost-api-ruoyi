@@ -97,6 +97,7 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       "AND EXISTS (SELECT 1 FROM oa_form qvf WHERE qvf.id=task.oa_form_id AND qvf.deleted=0 AND ${quoteVisibilityCondition})",
       "</if>",
       "<if test='oaNo != null'>AND task.oa_no=#{oaNo}</if>",
+      "<if test='oaFormItemId != null'>AND product.oa_form_item_id=#{oaFormItemId}</if>",
       "<if test='taskStatus != null and taskStatus != \"\"'>",
       "AND (" + WORKBENCH_STATUS + ")=#{taskStatus}",
       "</if>",
@@ -124,7 +125,7 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       @Param("businessUnitType") String businessUnitType,
       @Param("taskStatus") String taskStatus,
       @Param("accountingMonth") String accountingMonth,
-      @Param("keyword") String keyword, @Param("oaNo") String oaNo);
+      @Param("keyword") String keyword, @Param("oaNo") String oaNo, @Param("oaFormItemId") Long oaFormItemId);
 
   @Select({
       "<script>",
@@ -137,6 +138,7 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       "AND EXISTS (SELECT 1 FROM oa_form qvf WHERE qvf.id=task.oa_form_id AND qvf.deleted=0 AND ${quoteVisibilityCondition})",
       "</if>",
       "<if test='oaNo != null'>AND task.oa_no=#{oaNo}</if>",
+      "<if test='oaFormItemId != null'>AND product.oa_form_item_id=#{oaFormItemId}</if>",
       "<if test='taskStatus != null and taskStatus != \"\"'>",
       "AND (" + WORKBENCH_STATUS + ")=#{taskStatus}",
       "</if>",
@@ -168,6 +170,7 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       @Param("accountingMonth") String accountingMonth,
       @Param("keyword") String keyword,
       @Param("oaNo") String oaNo,
+      @Param("oaFormItemId") Long oaFormItemId,
       @Param("offset") int offset,
       @Param("size") int size);
 
@@ -214,4 +217,13 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       @Param("draftVersionId") Long draftVersionId,
       @Param("expectedVersion") int expectedVersion,
       @Param("updatedAt") LocalDateTime updatedAt);
+  default long countAccessibleWorkbenchRows(String accessMode,Long userId,String businessUnitType,String taskStatus,
+      String accountingMonth,String keyword,String oaNo) {
+    return countAccessibleWorkbenchRows(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo,null);
+  }
+  default List<QuoteTechProduct> selectAccessibleWorkbenchPage(String accessMode,Long userId,String businessUnitType,String taskStatus,
+      String accountingMonth,String keyword,String oaNo,int offset,int size) {
+    return selectAccessibleWorkbenchPage(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo,null,offset,size);
+  }
+
 }

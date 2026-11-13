@@ -66,7 +66,7 @@ public class JjbReadService {
           .collect(java.util.stream.Collectors.toSet());
       if(!codes.isEmpty()) sheet=new JjbReadModel(sheet.identity(),sheet.header(),sheet.rows().stream()
           .map(row -> codes.contains(row.code()) ? row.toBuilder().multiPriceSource(true).build() : row).toList(),
-          sheet.monthlyPrices(),sheet.totals(),sheet.warnings());
+          sheet.monthlyPrices(),sheet.totals(),sheet.warnings(),sheet.explanation());
     }
     return new View(sheet,
         saved.parts().stream().map(row->{var dto=new CostRunPartItemDto();BeanUtils.copyProperties(row,dto);dto.setPartQty(row.getQty());return dto;}).toList(),

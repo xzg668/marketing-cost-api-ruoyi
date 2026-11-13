@@ -146,7 +146,7 @@ public class MybatisTechnicalDataTaskRepository implements TechnicalDataTaskRepo
       String accountingMonth,
       String keyword, String oaNo) {
     return productMapper.countAccessibleWorkbenchRows(
-        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, oaNo);
+        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, oaNo, null);
   }
 
   @Override
@@ -161,7 +161,18 @@ public class MybatisTechnicalDataTaskRepository implements TechnicalDataTaskRepo
       int offset,
       int size) {
     return productMapper.selectAccessibleWorkbenchPage(
-        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, oaNo, offset, size);
+        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, oaNo, null, offset, size);
+  }
+
+  @Override public long countAccessibleProducts(String accessMode,Long userId,String businessUnitType,String taskStatus,
+      String accountingMonth,String keyword,String oaNo,Long itemId) {
+    if(itemId==null) return countAccessibleProducts(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo);
+    return productMapper.countAccessibleWorkbenchRows(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo,itemId);
+  }
+  @Override public List<QuoteTechProduct> findAccessibleProductPage(String accessMode,Long userId,String businessUnitType,
+      String taskStatus,String accountingMonth,String keyword,String oaNo,Long itemId,int offset,int size) {
+    if(itemId==null) return findAccessibleProductPage(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo,offset,size);
+    return productMapper.selectAccessibleWorkbenchPage(accessMode,userId,businessUnitType,taskStatus,accountingMonth,keyword,oaNo,itemId,offset,size);
   }
 
   @Override

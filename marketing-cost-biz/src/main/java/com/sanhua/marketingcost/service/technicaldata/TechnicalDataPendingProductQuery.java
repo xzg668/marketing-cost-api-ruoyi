@@ -87,6 +87,11 @@ public class TechnicalDataPendingProductQuery {
         module.assigneeUserId(), module.assigneeName());
   }
 
+  @org.springframework.beans.factory.annotation.Autowired
+  private TechnicalDataPendingSourceReads previews;
+  private record Candidate(long id,int seq,String code,String name,String model,String spec,java.math.BigDecimal volume,
+      String oaNo,String month,Long drawing,TechnicalDataSourceCheckResponse check) {}
+
   private record Query(String sql, List<Object> args) {}
 
   private Query scope(String accessMode, String businessUnit, String month, String keyword, String oaNo) {
@@ -149,6 +154,11 @@ public class TechnicalDataPendingProductQuery {
     if ("ASSIGNEE".equals(accessMode)) return new Page(0, List.of());
     return readPage(scope(accessMode, businessUnit, month, keyword, oaNo), offset, size, false);
   }
+  public Page readPage(String accessMode,String businessUnit,String month,String keyword,String oaNo,int offset,int size,Long itemId) {
+    if(itemId==null) return readPage(accessMode,businessUnit,month,keyword,oaNo,offset,size);
+    if("ASSIGNEE".equals(accessMode)) return new Page(0,List.of());
+    return readPage(scope(accessMode,businessUnit,month,keyword,oaNo,itemId),offset,size,false);
+  }
 
   private Page readPage(Query query, int offset, int size, boolean firstOnly) {
     long total = 0;
@@ -168,7 +178,7 @@ public class TechnicalDataPendingProductQuery {
   private List<TechnicalDataWorkbenchRowResponse> candidates(Query query, int offset, int size) {
     List<Object> args = new ArrayList<>(query.args());
     args.add(offset); args.add(size);
-    return jdbc.query("""
+    var stored = jdbc.query("""
         SELECT i.id,i.seq,i.material_no,i.product_name,i.sunl_model,i.spec,i.annual_volume,
           f.oa_no,w.period_month,w.technical_check_json,(%s) AS current_drawing_source_id
         """.formatted(CURRENT_DRAWING_SOURCE) + query.sql() + " ORDER BY w.updated_at DESC,w.id DESC LIMIT ?,?", (row, index) -> {
@@ -183,29 +193,31 @@ public class TechnicalDataPendingProductQuery {
           || !java.util.Objects.equals(check.accountingMonth(), row.getString("period_month"))) {
         throw new IllegalStateException("补录检查与当前产品、月份不一致，请重新检查资料");
       }
-      check = current(check);
-      Long drawingSourceId = row.getObject("current_drawing_source_id", Long.class);
-      var currentShared = shared.current(row.getLong("id"), row.getString("period_month"), check.modules());
-      check = new TechnicalDataSourceCheckResponse(check.oaFormItemId(), check.accountingMonth(), check.fingerprint(),
-          check.checkedAt(), check.modules(), check.taskUpdateMessage(), currentShared);
-      var modules = TechnicalDataSharedModuleQuery.applySharedSources(check.modules(), check.sharedModules()).stream().map(module ->
-          "DRAWING_BOM".equals(module.moduleType()) && drawingSourceId != null
-              ? new TechnicalDataModuleResponse(null, module.moduleType(), false, "DRAWING_SOURCE_AVAILABLE",
-                  "已有电子图库明细表，制造件原材料等核算资料单独检查", null, "NOT_REQUIRED", null, 0, null,
-                  "AVAILABLE", "{\"sourceVersionId\":" + drawingSourceId + "}", LocalDateTime.now(), null, null)
-              : new TechnicalDataModuleResponse(
-          null, module.moduleType(), module.required(), module.reasonCode(), module.reason(), null,
-          module.required() ? "PENDING" : "NOT_REQUIRED", null, 0, null, module.availability().name(),
-          module.sourceReference(), module.checkedAt(), null, null)).toList();
-      var product = new TechnicalDataProductResponse(null, row.getLong("id"), row.getInt("seq"),
-          row.getString("material_no"), row.getString("product_name"), row.getString("sunl_model"),
-          row.getString("spec"), row.getBigDecimal("annual_volume"), null, row.getString("oa_no"),
-          row.getString("period_month"), null, check.fingerprint(), "UNASSIGNED", null, null, null,
-          null, null, modules, null, null);
-      return new TechnicalDataWorkbenchRowResponse(null, null, row.getString("oa_no"),
-          row.getString("period_month"), null, null, "UNASSIGNED", null, null, null,
-          List.of(), List.of(), product, check);
-    }, args.toArray());
+      return new Candidate(row.getLong("id"),row.getInt("seq"),row.getString("material_no"),row.getString("product_name"),
+          row.getString("sunl_model"),row.getString("spec"),row.getBigDecimal("annual_volume"),row.getString("oa_no"),
+          row.getString("period_month"),row.getObject("current_drawing_source_id",Long.class),check);
+    },args.toArray());
+    // Finish the result set before opening independent source-preview transactions.
+    java.util.function.Function<Candidate,TechnicalDataSourceCheckResponse> refresh=row -> current(row.check());
+    var refreshed=previews==null?stored.stream().map(refresh).toList():previews.map(stored,refresh);
+    var result=new ArrayList<TechnicalDataWorkbenchRowResponse>();
+    for(int index=0;index<stored.size();index++) {
+      var row=stored.get(index);var check=refreshed.get(index);Long drawingSourceId=row.drawing();
+      var currentShared=shared.current(row.id(),row.month(),check.modules());
+      check=new TechnicalDataSourceCheckResponse(check.oaFormItemId(),check.accountingMonth(),check.fingerprint(),
+          check.checkedAt(),check.modules(),check.taskUpdateMessage(),currentShared);
+      var modules=TechnicalDataSharedModuleQuery.applySharedSources(check.modules(),check.sharedModules()).stream().map(module ->
+          "DRAWING_BOM".equals(module.moduleType()) && drawingSourceId!=null
+              ? new TechnicalDataModuleResponse(null,module.moduleType(),false,"DRAWING_SOURCE_AVAILABLE",
+                  "已有电子图库明细表，制造件原材料等核算资料单独检查",null,"NOT_REQUIRED",null,0,null,
+                  "AVAILABLE","{\"sourceVersionId\":"+drawingSourceId+"}",LocalDateTime.now(),null,null)
+              :new TechnicalDataModuleResponse(null,module.moduleType(),module.required(),module.reasonCode(),module.reason(),null,
+                  module.required()?"PENDING":"NOT_REQUIRED",null,0,null,module.availability().name(),module.sourceReference(),module.checkedAt(),null,null)).toList();
+      var product=new TechnicalDataProductResponse(null,row.id(),row.seq(),row.code(),row.name(),row.model(),row.spec(),row.volume(),null,row.oaNo(),
+          row.month(),null,check.fingerprint(),"UNASSIGNED",null,null,null,null,null,modules,null,null);
+      result.add(new TechnicalDataWorkbenchRowResponse(null,null,row.oaNo(),row.month(),null,null,"UNASSIGNED",null,null,null,List.of(),List.of(),product,check));
+    }
+    return List.copyOf(result);
   }
 
   private TechnicalDataSourceCheckResponse current(TechnicalDataSourceCheckResponse saved) {

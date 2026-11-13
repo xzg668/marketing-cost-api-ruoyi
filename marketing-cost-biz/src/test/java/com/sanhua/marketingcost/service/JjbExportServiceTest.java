@@ -27,8 +27,8 @@ class JjbExportServiceTest {
         var b = new XSSFWorkbook(new ByteArrayInputStream(legacy.toByteArray()))) {
       assertThat(a.getSheetAt(0).getCTWorksheet().xmlText())
           .isEqualTo(b.getSheetAt(0).getCTWorksheet().xmlText());
-      assertThat(a.getNumberOfSheets()).isEqualTo(1);
-      assertThat(b.getNumberOfSheets()).isEqualTo(1);
+      assertThat(a.getNumberOfSheets()).isEqualTo(2);
+      assertThat(b.getNumberOfSheets()).isEqualTo(2);
     }
     verify(reader).read("OA", 72L, 71L);
     verify(reader).resolve("OA", "P", 72L, 71L, "RUN");

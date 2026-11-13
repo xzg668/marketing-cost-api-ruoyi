@@ -20,6 +20,9 @@ public interface TechnicalDataTaskApplicationService {
       String oaNo,
       TechnicalDataActor actor);
 
+  TechnicalDataWorkbenchPageResponse workbench(int current,int size,String taskStatus,String accountingMonth,
+      String keyword,String oaNo,Long itemId,TechnicalDataActor actor);
+
   TechnicalDataTaskResponse detail(Long taskId, TechnicalDataActor actor);
   TechnicalDataTaskResponse submittedDetail(com.sanhua.marketingcost.entity.QuoteTechSubmission submission,
       TechnicalDataActor actor);

@@ -38,6 +38,8 @@ class MaterialShapeSwitchBrowserSession extends OriginalPricingIntegrationTestBa
   @Test void browser() throws Exception {
     var state=Path.of(System.getProperty("shape.browser.state"));assertThat(Files.exists(state)).isFalse();
     var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
+    new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("db/V100__make_part_price_calc_menu.sql")).execute(jdbc.getDataSource());
+    String second=MaterialShapeSwitchTestData.secondParent(jdbc,hierarchy,s);
     var authentication=new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("fixture","",
         List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN")));
     authentication.setDetails(Map.of("businessUnitType","COMMERCIAL"));
@@ -50,7 +52,7 @@ class MaterialShapeSwitchBrowserSession extends OriginalPricingIntegrationTestBa
     jdbc.update("INSERT INTO sys_user_role(user_id,role_id) SELECT user_id,1 FROM sys_user WHERE user_name=?",user);
     var json=new ObjectMapper().findAndRegisterModules();
     Files.createFile(state,PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
-    Files.writeString(state,json.writeValueAsString(Map.of("apiPort",port,"sample",s,"username",user,"password",password,
+    Files.writeString(state,json.writeValueAsString(Map.of("apiPort",port,"sample",s,"secondParent",second,"username",user,"password",password,
         "jdbcUrl",MYSQL.getJdbcUrl(),"databaseUser",MYSQL.getUsername(),"databasePassword",MYSQL.getPassword())));
     var release=Path.of(state+".release");long deadline=System.nanoTime()+Duration.ofMinutes(20).toNanos();
     while(!Files.exists(release)&&System.nanoTime()<deadline) Thread.sleep(250);

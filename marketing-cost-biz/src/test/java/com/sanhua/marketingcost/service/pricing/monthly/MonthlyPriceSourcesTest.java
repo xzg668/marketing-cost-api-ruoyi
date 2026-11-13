@@ -15,6 +15,32 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 
 class MonthlyPriceSourcesTest {
+  private MonthlyPriceRequest pinned(String code) {
+    var r=request(code);
+    return new MonthlyPriceRequest(r.family(),r.priceOrgCode(),r.conditions().withMaterialShapeScope(
+        "PURCHASE:1:"+"a".repeat(64)+":FIXED"),r.priceBasisQuantity(),r.annualUsagePieces());
+  }
+  @Test void anExplicitOrderSourceOverridesTheDefaultSourceOrder() {
+    var r=pinned("chosen-fixed");
+    when(linked.read(any(),anySet(),any())).thenReturn(found(r,"LINKED"));
+    when(fixed.read(any(),anySet())).thenReturn(found(r,"PURCHASE_FIXED"));
+    assertThat(read(Set.of(r)).values().get(r).selection().fact().evidence().json()).contains("PURCHASE_FIXED");
+    verifyNoInteractions(linked,originalLinked,ods,household,scrap);
+  }
+  @Test void anExplicitMissingSourceDoesNotSilentlyUseAnotherSource() {
+    var r=pinned("chosen-fixed-missing");
+    when(linked.read(any(),anySet(),any())).thenReturn(found(r,"LINKED"));
+    var result=read(Set.of(r));assertThat(result.values()).isEmpty();
+    assertThat(result.problems().get(r).message()).contains("FIXED");
+    verifyNoInteractions(linked,originalLinked,ods,household,scrap);
+  }
+  @Test void anExplicitSourceKeepsItsTypeWhenOnlyTheOtherOrganizationHasThatPrice() {
+    var r=pinned("chosen-fixed-other-org");
+    when(fixed.read(any(),anySet())).thenAnswer(call->inOrganization(call.getArgument(1),"220","PURCHASE_FIXED"));
+    var result=read(Set.of(r));assertThat(result.values()).containsKey(r);
+    assertThat(result.values().get(r).selection().fact().evidence().json()).contains("PURCHASE_FIXED");
+    verifyNoInteractions(linked,originalLinked,ods,household,scrap);
+  }
   private MonthlyPriceRequest shaped(String code,String shape,Set<String> types) {
     var original=request(code);
     return new MonthlyPriceRequest(original.family(),original.priceOrgCode(),original.conditions().withMaterialShapeScope(

@@ -200,7 +200,7 @@ class JjbReadIntegrationTest {
         var r=s.getRow(JjbExcelRendererTest.find(s,hh.code()).getRowIndex());
         JjbExcelRendererTest.amount(r.getCell(3),"20.985300");JjbExcelRendererTest.amount(r.getCell(6),"51.641245");
         assertThat(r.getCell(4).getNumericCellValue()).isEqualTo(2);
-        assertThat(wb.getNumberOfSheets()).isEqualTo(1);
+        assertThat(wb.getNumberOfSheets()).isEqualTo(2);
         assertThat(s.getRow(0).getCell(0).getCellComment().getString().getString())
             .contains("versionId=" + f.version().getId(), "月度价格依据");
         assertThat(wb.getProperties().getCoreProperties().getDescription())
@@ -209,6 +209,85 @@ class JjbReadIntegrationTest {
     }
     assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",f.version().getId())).isEqualTo(before);
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price",Long.class)).isEqualTo(prices);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"92000,-8", "100000,0", "120000,20"})
+  void exportedCalculationDetailsUseSavedFactorsAndReconcile(String customer, String delta) throws Exception {
+    var f=fixture("2.5",customer,true);saveCompleted(f);
+    var before=jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",f.version().getId());
+    var m=reader.read(f.version().getOaNo(),1L,f.version().getId()).sheet();
+    var explanation=m.explanation();assertThat(explanation).isNotNull();
+    assertThat(explanation.materials()).hasSize(2);
+    assertThat(explanation.materials().get(1).prices().getFirst().formula()).doesNotContain("null");
+    assertThat(explanation.materials().get(1).prices().getFirst().baseFactors()).contains("不参与联动");
+    var material=explanation.materials().getFirst();
+    assertThat(new BigDecimal(material.difference())).isEqualByComparingTo(delta);
+    assertThat(material.prices().getFirst().source()).contains("联动价", "S1");
+    assertThat(material.prices().getFirst().baseFactors()).contains("铜 100 元/公斤");
+    assertThat(material.prices().getFirst().customerFactors()).contains("铜 "+new BigDecimal(customer).movePointLeft(3).stripTrailingZeros().toPlainString()+" 元/公斤");
+    assertThat(material.prices().getFirst().formula()).contains("基准：(100)","客户：(");
+    assertThat(explanation.totalItems().stream().map(t->new BigDecimal(t.amount())).reduce(BigDecimal.ZERO,BigDecimal::add))
+        .isEqualByComparingTo(m.totals().totalCost());
+    jdbc.update("DELETE FROM lp_finance_effective_price WHERE original_id=?",f.linkedRuleId());
+    jdbc.update("DELETE FROM lp_price_linked_item WHERE id=?",f.linkedRuleId());
+    assertThat(reader.read(f.version().getOaNo(),1L,f.version().getId()).sheet().explanation()).isEqualTo(explanation);
+    var bytes=new java.io.ByteArrayOutputStream();new com.sanhua.marketingcost.service.JjbExportService(reader,new JjbExcelRenderer())
+        .exportVersion(f.version().getOaNo(),1L,f.version().getId(),bytes);
+    try(var book=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
+      var sheet=book.getSheet("成本计算明细");assertThat(sheet).isNotNull();
+      var row=sheet.getRow(JjbExcelRendererTest.find(sheet,material.code()+"\n"+Objects.toString(material.name(),"")).getRowIndex());
+      assertThat(row.getCell(2).getStringCellValue()).contains("铜 100 元/公斤");
+      assertThat(row.getCell(5).getStringCellValue()).contains("基准：(100)","客户：(");
+      assertThat(BigDecimal.valueOf(row.getCell(8).getNumericCellValue())).isEqualByComparingTo(delta);
+      assertThat(BigDecimal.valueOf(sheet.getRow(JjbExcelRendererTest.find(sheet,"材料成本差异").getRowIndex()).getCell(8).getNumericCellValue()))
+          .isEqualByComparingTo(m.totals().cuMaterialAdjustment());
+    }
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",f.version().getId())).isEqualTo(before);
+    String output=System.getProperty("jjb.explanation.output");
+    if(output!=null && customer.equals("120000")) {
+      var dir=java.nio.file.Path.of(output);java.nio.file.Files.createDirectories(dir);
+      java.nio.file.Files.write(dir.resolve("cost-calculation-details.xlsx"),bytes.toByteArray());
+      java.nio.file.Files.writeString(dir.resolve("saved-api-sheet.json"),new ObjectMapper().writeValueAsString(m));
+    }
+  }
+
+  @Test
+  @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named="jjb.explanation.browser.state",matches=".+")
+  void browserDownloadsTheOwnedSavedVersionWithoutChangingData() throws Exception {
+    var f=fixture("2.5","120000",true);saveCompleted(f);
+    var tables=List.of("lp_quote_cost_run_version","lp_cost_run_part_item","lp_cost_run_cost_item","lp_material_monthly_price");
+    var before=new LinkedHashMap<String,List<Map<String,Object>>>();
+    for(String table:tables)before.put(table,jdbc.queryForList("SELECT * FROM "+table+" ORDER BY id"));
+    var exporter=new com.sanhua.marketingcost.controller.CostRunExportController(new com.sanhua.marketingcost.service.JjbExportService(reader,new JjbExcelRenderer()));
+    var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+    var json=new ObjectMapper();
+    server.createContext("/sheet",exchange->{
+      auth("COMMERCIAL");
+      try {var model=reader.read(f.version().getOaNo(),1L,f.version().getId()).sheet();var bytes=json.writeValueAsBytes(model);
+        exchange.getResponseHeaders().set("Content-Type","application/json");exchange.getResponseHeaders().set("Access-Control-Allow-Origin","*");
+        exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+      } finally {SecurityContextHolder.clearContext();exchange.close();}
+    });
+    server.createContext("/export",exchange->{
+      auth("COMMERCIAL");
+      try {var response=new org.springframework.mock.web.MockHttpServletResponse();
+        exporter.exportJjb(f.version().getOaNo(),"TOP",1L,f.version().getId(),f.version().getCostRunNo(),response);
+        for(String header:response.getHeaderNames())exchange.getResponseHeaders().set(header,response.getHeader(header));
+        var bytes=response.getContentAsByteArray();exchange.sendResponseHeaders(response.getStatus(),bytes.length);exchange.getResponseBody().write(bytes);
+      } finally {SecurityContextHolder.clearContext();exchange.close();}
+    });
+    var state=java.nio.file.Path.of(System.getProperty("jjb.explanation.browser.state"));
+    assertThat(java.nio.file.Files.exists(state)).isFalse();server.start();
+    try {
+      java.nio.file.Files.writeString(state,json.writeValueAsString(Map.of("apiPort",server.getAddress().getPort(),"versionId",f.version().getId())));
+      var release=java.nio.file.Path.of(state+".release");long deadline=System.nanoTime()+java.time.Duration.ofMinutes(8).toNanos();
+      while(!java.nio.file.Files.exists(release)&&System.nanoTime()<deadline)Thread.sleep(200);
+      assertThat(java.nio.file.Files.exists(release)).isTrue();
+      assertThat(json.readTree(java.nio.file.Files.readString(release)).path("passed").asBoolean()).isTrue();
+      for(String table:tables)assertThat(jdbc.queryForList("SELECT * FROM "+table+" ORDER BY id")).as(table).isEqualTo(before.get(table));
+      java.nio.file.Files.writeString(java.nio.file.Path.of(state+".db-verified"),"{\"passed\":true,\"protectedTables\":4}");
+    } finally {server.stop(0);}
   }
 
   @Test void actualExportRefusesConflictingSelectorsAndCrossBusinessUnitBeforeWriting() throws Exception {

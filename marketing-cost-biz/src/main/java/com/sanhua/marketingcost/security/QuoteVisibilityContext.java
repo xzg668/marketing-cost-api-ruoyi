@@ -15,6 +15,15 @@ public final class QuoteVisibilityContext {
   }
   static void bind(Scope scope, LongPredicate access) { CURRENT.set(new State(scope, access)); }
   static void clear() { CURRENT.remove(); }
+  /** Carry the request's visibility into a bounded read task and restore the worker afterwards. */
+  public static <T> java.util.function.Supplier<T> capture(java.util.function.Supplier<T> work) {
+    var captured=CURRENT.get();
+    return () -> {
+      var previous=CURRENT.get();if(captured==null) CURRENT.remove();else CURRENT.set(captured);
+      try {return work.get();}
+      finally {if(previous==null) CURRENT.remove();else CURRENT.set(previous);}
+    };
+  }
   public static String formCondition(String alias) {
     if (!alias.matches("[a-zA-Z_][a-zA-Z_0-9]*")) throw new IllegalArgumentException("Invalid form alias");
     return switch (scope()) {

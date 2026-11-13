@@ -44,6 +44,10 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerationService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.pricing.MaterialPriceSourceService publicPriceSources;
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.mapper.BomCostingRowMapper makeSourceRows;
 
   private static final String STATUS_OK = MakePartPriceCalculator.STATUS_OK;
   private static final String STATUS_MISSING_BOM = "MISSING_BOM";
@@ -309,6 +313,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             parentMaterialNo,
             scenarioContext);
     upsertRows(calculation.rows());
+    publishCalculatedRows(calculation.rows());
     upsertGapItems(buildGapItems(calculation.rows(), LocalDateTime.now()));
     return summarize(calculation.calcBatchId(), calculation.parentCount(), calculation.rows());
   }
@@ -391,6 +396,17 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       } else {
         row.setId(existingId);
         calcRowMapper.updateById(row);
+      }
+    }
+  }
+
+  private void publishCalculatedRows(List<MakePartPriceCalcRow> rows) {
+    if(publicPriceSources!=null) {
+      var parents=rows.stream().filter(r -> "OK".equals(r.getStatus()) && r.getParentTotalCostPrice()!=null
+          && r.getSourceCostingRowId()!=null).map(MakePartPriceCalcRow::getSourceCostingRowId).distinct().toList();
+      for(var id:parents) {
+        var parent=makeSourceRows.selectById(id);
+        if(parent!=null) publicPriceSources.includeCalculatedMake(parent.getBusinessUnitType(),parent.getPeriodMonth(),parent.getPriceOrgCode(),parent.getMaterialCode());
       }
     }
   }

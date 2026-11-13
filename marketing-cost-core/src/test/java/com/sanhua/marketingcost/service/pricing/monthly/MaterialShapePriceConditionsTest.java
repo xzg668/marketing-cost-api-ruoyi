@@ -5,6 +5,12 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class MaterialShapePriceConditionsTest {
+  @Test void explicitSourceScopeRetainsItsShapeAndOnlyAllowsTheChosenSource() {
+    String scope="PURCHASE:1:"+"a".repeat(64)+":FIXED";
+    assertThat(MaterialShapePriceScope.shape(scope)).isEqualTo("PURCHASE");
+    assertThat(MaterialShapePriceScope.allows(scope,"FIXED")).isTrue();
+    assertThat(MaterialShapePriceScope.allows(scope,"LINKED")).isFalse();
+  }
   @Test void ordinaryAnyDoesNotReusePurchaseOrOutsourcePrice() {
     var ordinary = ConditionDomain.any();
     assertThat(ordinary.matches(NonCuConditions.empty())).isTrue();
