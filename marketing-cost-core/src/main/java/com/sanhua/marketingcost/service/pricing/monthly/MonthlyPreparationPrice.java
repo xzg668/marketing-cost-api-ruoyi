@@ -6,7 +6,14 @@ import java.math.BigDecimal;
 public record MonthlyPreparationPrice(int snapshotSchema, String sourceKind,
     MonthlyPriceRequest request, MonthlyAdoptionPlan.Selection selection,
     BigDecimal financialPrice, BigDecimal customerPrice, BigDecimal unitPriceMultiplier,
-    String path, BigDecimal quantity, MonthlyPreparationInputs monthlyInputs) {
+    String path, BigDecimal quantity, MonthlyPreparationInputs monthlyInputs,
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    java.util.Map<String,Object> materialShapeEvidence) {
+  public MonthlyPreparationPrice(int snapshotSchema,String sourceKind,MonthlyPriceRequest request,
+      MonthlyAdoptionPlan.Selection selection,BigDecimal financialPrice,BigDecimal customerPrice,
+      BigDecimal unitPriceMultiplier,String path,BigDecimal quantity,MonthlyPreparationInputs monthlyInputs) {
+    this(snapshotSchema,sourceKind,request,selection,financialPrice,customerPrice,unitPriceMultiplier,path,quantity,monthlyInputs,null);
+  }
   public static final String KIND = "MONTHLY_PRICE";
 
   public MonthlyPreparationPrice {
@@ -32,7 +39,12 @@ public record MonthlyPreparationPrice(int snapshotSchema, String sourceKind,
   /** Preserve the source unit price while recording the existing calculator's unit conversion. */
   public MonthlyPreparationPrice withUnitPriceMultiplier(BigDecimal multiplier) {
     return new MonthlyPreparationPrice(snapshotSchema, sourceKind, request, selection,
-        financialPrice, customerPrice, multiplier, path, quantity, monthlyInputs);
+        financialPrice, customerPrice, multiplier, path, quantity, monthlyInputs,materialShapeEvidence);
+  }
+
+  public MonthlyPreparationPrice withMaterialShapeEvidence(java.util.Map<String,Object> evidence) {
+    return new MonthlyPreparationPrice(snapshotSchema,sourceKind,request,selection,financialPrice,
+        customerPrice,unitPriceMultiplier,path,quantity,monthlyInputs,evidence);
   }
 
   public MonthlyPreparationPrice withInputs(MonthlyPreparationInputs inputs) {
@@ -40,7 +52,7 @@ public record MonthlyPreparationPrice(int snapshotSchema, String sourceKind,
         || !selection.equals(inputs.plan().selections().get(request)))
       throw new IllegalArgumentException("普通准备与月价实际输入不一致");
     return new MonthlyPreparationPrice(snapshotSchema, sourceKind, request, selection,
-        financialPrice, customerPrice, unitPriceMultiplier, path, quantity, inputs);
+        financialPrice, customerPrice, unitPriceMultiplier, path, quantity, inputs,materialShapeEvidence);
   }
 
   public static MonthlyPreparationPrice of(QuotationPriceSession.Value value, String path, BigDecimal quantity) {

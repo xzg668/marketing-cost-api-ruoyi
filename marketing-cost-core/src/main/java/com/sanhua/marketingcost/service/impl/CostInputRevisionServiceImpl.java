@@ -95,6 +95,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
   private final JdbcTemplate jdbcTemplate;
   private final EffectiveTechnicalDataQueryService effectiveTechnicalDataQueryService;
   private final QuotationMonthlyPriceInputs monthlyInputs;
+  @Autowired(required=false)
+  private com.sanhua.marketingcost.service.QuotationMaterialShapeInputs materialShapes;
 
   @Autowired
   public CostInputRevisionServiceImpl(
@@ -209,6 +211,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
         item.getBusinessUnitType(), com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(item));
     // Products without configuration keep their existing saved-cost revision and reuse behavior.
     if (!partCostRules.isEmpty()) append(canonical, "productPartCostRules", partCostRules);
+    String shapeRevision=materialShapes==null ? null : materialShapes.revision(item,pricingMonth);
+    if(shapeRevision!=null) append(canonical,"quotationMaterialShapes",shapeRevision);
     var monthly = monthlyInputs.read(form, item, pricingMonth);
     append(canonical, "monthlyPrices", monthly.evidence());
     append(canonical, "materialPrices", materialPriceRevision(item, pricingMonth, monthly));

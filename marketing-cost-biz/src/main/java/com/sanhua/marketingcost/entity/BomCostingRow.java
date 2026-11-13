@@ -27,6 +27,10 @@ import java.time.LocalDateTime;
  */
 @TableName("lp_bom_costing_row")
 public class BomCostingRow {
+  @TableField(exist=false)
+  private java.util.Map<String,Object> quotationShapeEvidence;
+  public java.util.Map<String,Object> getQuotationShapeEvidence() { return quotationShapeEvidence; }
+  public void setQuotationShapeEvidence(java.util.Map<String,Object> value) { quotationShapeEvidence=value; }
 
   /** True only for a settlement row with an actual TECH_PACKAGE source reference. */
   @TableField(exist = false)

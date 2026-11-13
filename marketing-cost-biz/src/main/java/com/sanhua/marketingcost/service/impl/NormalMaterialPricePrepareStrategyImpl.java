@@ -22,6 +22,8 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
   private static final String GAP_TYPE_MISSING_PRICE = "MISSING_PRICE";
   private final MonthlyQuotationSessions monthlySessions;
   private final MonthlyPriceDocumentCodec monthlyCodec;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.OutsourceScrapPreparation outsourceScrap;
 
   public NormalMaterialPricePrepareStrategyImpl(MonthlyQuotationSessions monthlySessions,
       MonthlyPriceDocumentCodec monthlyCodec) {
@@ -131,7 +133,9 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
           value.selection().fact().type() == MonthlyAdoptionPlan.PricingType.HOUSEHOLD_INQUIRY ? "HOUSEHOLD_INQUIRY" : "月度物料价",
           MonthlyPreparationPrice.KIND, value.selection().monthlyPriceId(), "按当月适用物料价格准备");
       result.setPriceType(value.selection().fact().type().name());
-      result.setInputSnapshotJson(monthlyCodec.encode(MonthlyPreparationPrice.of(value, path, quantity)));
+      var captured=MonthlyPreparationPrice.of(value,path,quantity);
+      if(outsourceScrap!=null) captured=captured.withMaterialShapeEvidence(outsourceScrap.evidence(item.getBomRow()));
+      result.setInputSnapshotJson(monthlyCodec.encode(captured));
       results.put(item, result);
     }
     return Map.copyOf(results);

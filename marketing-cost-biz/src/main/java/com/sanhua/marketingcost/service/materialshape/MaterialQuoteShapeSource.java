@@ -5,5 +5,6 @@ public enum MaterialQuoteShapeSource {
   U9,
   STRUCTURE_ROOT,
   FIXED_POLICY,
-  SUPPLIER_RATIO
+  SUPPLIER_RATIO,
+  QUOTATION_SELECTION
 }

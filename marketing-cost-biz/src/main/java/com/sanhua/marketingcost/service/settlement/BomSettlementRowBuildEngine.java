@@ -77,6 +77,12 @@ public class BomSettlementRowBuildEngine {
 
   /** Household occurrences are selected from the original tree before ordinary structural rules. */
   public BomSettlementRowBuildResult build(BomSettlementBuildRequest request, Set<String> householdPaths) {
+    return build(request,householdPaths,Set.of());
+  }
+
+  /** An explicit quotation shape prices that occurrence directly, instead of an old rollup action. */
+  public BomSettlementRowBuildResult build(BomSettlementBuildRequest request, Set<String> householdPaths,
+      Set<String> shapePricePaths) {
     List<String> warnings = new ArrayList<>();
     if (request == null) {
       warnings.add("REQUEST_NULL: BOM 结算行生成请求为空");
@@ -166,7 +172,9 @@ public class BomSettlementRowBuildEngine {
         continue;
       }
 
-      Optional<BomSettlementRule> hit = ruleMatcher.match(
+      Optional<BomSettlementRule> hit = shapePricePaths.contains(
+          com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(node.path()))
+          ? Optional.empty() : ruleMatcher.match(
           nodeContext,
           parentContext,
           childContexts,

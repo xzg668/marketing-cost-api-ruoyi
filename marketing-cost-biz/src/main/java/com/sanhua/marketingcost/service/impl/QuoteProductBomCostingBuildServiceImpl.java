@@ -75,6 +75,8 @@ public class QuoteProductBomCostingBuildServiceImpl
   private final MonthlyBomSnapshotDetailService monthlyDetails;
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
   private final com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing monthlyPricing;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.OutsourceScrapPreparation outsourceScrap;
 
   public QuoteProductBomCostingBuildServiceImpl(
       BomSettlementRuleQueryService settlementRuleQueryService,
@@ -440,8 +442,7 @@ public class QuoteProductBomCostingBuildServiceImpl
         byproductSettlementAdapter.read(
             nodes, quoteDate, organization.priceOrgCode(), settlementScope, "主制造");
     byproductRead = manufacturingInputs.byproducts(record.getOaFormItemId(), periodMonth, settlementScope, nodes, byproductRead);
-    BomSettlementRowBuildResult built = buildEngine.build(
-        new BomSettlementBuildRequest(
+    var settlementRequest = new BomSettlementBuildRequest(
             record.getOaNo(),
             record.getQuoteProductCode(),
             quoteDate,
@@ -454,11 +455,16 @@ public class QuoteProductBomCostingBuildServiceImpl
             settlementRuleQueryService.listEnabledCandidates(),
             byproductRead.byproducts(),
             byproductRead.scrapRefs(),
-            byproductRuleQueryService.listEnabledCandidates()),
-        pricing.scope().household().stream().map(use ->
+            byproductRuleQueryService.listEnabledCandidates());
+    var householdPaths = pricing.scope().household().stream().map(use ->
             com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(use.path()))
-            .collect(java.util.stream.Collectors.toSet()));
+            .collect(java.util.stream.Collectors.toSet());
+    var shapePricePaths = outsourceScrap==null ? java.util.Set.<String>of()
+        : outsourceScrap.selectedPricePaths(record,settlementScope,periodMonth,nodes);
+    BomSettlementRowBuildResult built = shapePricePaths.isEmpty() ? buildEngine.build(settlementRequest,householdPaths)
+        : buildEngine.build(settlementRequest,householdPaths,shapePricePaths);
     monthlyPricing.stamp(built, pricing);
+    if(outsourceScrap!=null) built=outsourceScrap.add(record,nodes,built,settlementScope,periodMonth,priceAsOfTime);
 
     List<BomCostingRow> costingRows = stampRowsForQuoteItem(record, built.costingRows());
     for (var row : costingRows) {
@@ -599,6 +605,7 @@ public class QuoteProductBomCostingBuildServiceImpl
       if (costingRowMapper.insert(row) <= 0) {
         continue;
       }
+      if(outsourceScrap!=null) outsourceScrap.save(row);
       rowsWritten++;
       costingRowIdByPath.put(row.getPath(), row.getId());
     }

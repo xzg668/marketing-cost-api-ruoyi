@@ -91,6 +91,8 @@ public final class MonthlyQuotationPrices {
   private final MonthlyMaterialPrices prices;
   private final HouseholdMonthlyPriceSource household;
   private final BomSpecificationPriceIdentity specifications;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs materialShapes;
 
   public MonthlyQuotationPrices(MonthlyMaterialPrices prices, HouseholdMonthlyPriceSource household) {
     this(prices, household, null);
@@ -128,8 +130,9 @@ public final class MonthlyQuotationPrices {
     for (var demand : stable) {
       var inputs = new LinkedHashMap<Item, List<MonthlyPriceRequest>>();
       var issues = new LinkedHashMap<Item, Problem>();
+      var shapeScopes = materialShapes==null ? Map.<Item,String>of() : materialShapes.priceScopes(demand.context(),demand.items());
       for (var item : demand.items()) {
-        try { inputs.putIfAbsent(item, requestsFor(demand.context(), item)); }
+        try { inputs.putIfAbsent(item, requestsFor(demand.context(), item,shapeScopes.get(item))); }
         catch (MonthlyPriceProblem missing) { issues.put(item, new Problem(missing.reason(), missing.getMessage())); }
       }
       requested.add(inputs); failures.add(issues);
@@ -187,8 +190,9 @@ public final class MonthlyQuotationPrices {
   /** Reads saved types and household candidates only; ordinary gaps belong to later preparation. */
   public Batch probeHousehold(Context context, Collection<Item> items) {
     var requests = new LinkedHashMap<Item, List<MonthlyPriceRequest>>();
+    var shapeScopes = materialShapes==null ? Map.<Item,String>of() : materialShapes.priceScopes(context,items);
     for (var item : items) {
-      try { requests.putIfAbsent(item, requestsFor(context, item)); }
+      try { requests.putIfAbsent(item, requestsFor(context, item,shapeScopes.get(item))); }
       catch (MonthlyPriceProblem missing) {
         // A code-less, unpriced child may be suppressed by a priced parent. Its ordinary
         // preparation reports this gap only if the settlement engine actually uses it.
@@ -203,7 +207,7 @@ public final class MonthlyQuotationPrices {
     requests.forEach((item, variants) -> {
       if (item.purpose() == Purpose.MATERIAL && variants.stream().noneMatch(found::containsKey)) missing.addAll(variants);
     });
-    var householdCandidates = household.read(context, missing);
+    var householdCandidates = MaterialShapePriceScope.read("HOUSEHOLD_INQUIRY",missing,batch -> household.read(context,batch));
     found.putAll(householdCandidates.values());
     return bind(requests, found, householdCandidates.problems(), true);
   }
@@ -254,6 +258,13 @@ public final class MonthlyQuotationPrices {
   }
 
   List<MonthlyPriceRequest> requestsFor(Context context, Item item) {
+    String scope=materialShapes==null ? null : materialShapes.priceScopes(context,List.of(item)).get(item);
+    return requestsFor(context,item,scope);
+  }
+
+  private List<MonthlyPriceRequest> requestsFor(Context context,Item item,String scope) {
+    if(scope!=null) return requestsFor(context,new Item(item.materialCode(),item.organization(),item.unit(),item.specification(),item.taxBasis(),
+        item.supplier(),item.conditions().withMaterialShapeScope(scope),item.basisQuantity(),item.purpose()),null);
     Objects.requireNonNull(item.purpose(), "Price purpose is required");
     if (item.materialCode() != null && !item.materialCode().isBlank()) return requests(context, item);
     if (specifications == null)

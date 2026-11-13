@@ -164,6 +164,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final CostRunCacheLookupService cacheLookup;
   private final CostBusinessRuleProvider businessRuleProvider;
   @Autowired private CmsCompositionReader cmsCompositionReader;
+  @Autowired(required=false) private com.sanhua.marketingcost.service.QuotationMaterialShapeInputs quoteShapeInputs;
+  @Autowired(required=false) private com.sanhua.marketingcost.service.costing.CmsShapeCostAdjustment cmsShapeAdjustment;
 
   @Autowired
   public CostRunCostItemServiceImpl(
@@ -902,6 +904,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       String productCode,
       CostRunContext context,
       List<CostRunPartItemDto> currentPartItems) {
+    var resolved=resolveBaseCostSourceContext(oaNo,productCode,context,currentPartItems);
+    if(context!=null && quoteShapeInputs!=null) {
+      resolved.shapeChanges=quoteShapeInputs.cmsExclusions(context);
+      context.setCmsShapeExclusions(resolved.shapeChanges);
+    }
+    return resolved;
+  }
+
+  private CostSourceContext resolveBaseCostSourceContext(
+      String oaNo,String productCode,CostRunContext context,List<CostRunPartItemDto> currentPartItems) {
     var selected = context == null ? null : context.getQuotationInput();
     if (selected != null) selected.requireFor(context, oaNo, productCode);
     String materialOrganizationCode =
@@ -1993,6 +2005,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       if(costSourceContext.prepared==null) com.sanhua.marketingcost.service.costing.SinteredBaseSurfaceCosts.apply(
           cmsItems,costSourceContext.businessUnitType,auxCostItemMapper);
       for (AuxCostItemDto cmsItem : cmsItems) {
+        if(cmsShapeAdjustment!=null && !costSourceContext.shapeChanges.isEmpty())
+          cmsItem=cmsShapeAdjustment.auxiliary(cmsItem,costSourceContext.businessUnitType,costSourceContext.shapeChanges);
         if (isExcludedAuxSubject(cmsItem)) {
           continue;
         }
@@ -2099,6 +2113,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_DIRECT, materialCode));
       CmsCostSourceEffective indirectEffective =
           effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_INDIRECT, materialCode));
+      if(cmsShapeAdjustment!=null && !costSourceContext.shapeChanges.isEmpty()) {
+        if(directEffective!=null) directEffective=cmsShapeAdjustment.salary(directEffective,costSourceContext.businessUnitType,costSourceContext.shapeChanges);
+        if(indirectEffective!=null) indirectEffective=cmsShapeAdjustment.salary(indirectEffective,costSourceContext.businessUnitType,costSourceContext.shapeChanges);
+      }
 
       if (directEffective != null) {
         result.directSources.add(directEffective);
@@ -2735,6 +2753,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   }
 
   private static class CostSourceContext {
+    private java.util.Map<String,BigDecimal> shapeChanges=java.util.Map.of();
     private com.sanhua.marketingcost.service.costing.CostRunPreparedInputs prepared;
     private final Integer costYear;
     private final String pricingMonth;

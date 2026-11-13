@@ -35,6 +35,8 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
   private final MaterialMasterMapper materialMasterMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
   private final com.sanhua.marketingcost.service.costing.ProductPartCostRuleStore partCostRules;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs quoteShapes;
 
   public PricePrepareItemClassifierImpl(
       PackageComponentIdentifyService packageComponentIdentifyService,
@@ -66,6 +68,7 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
 
     List<PricePreparePlanItem> result = new ArrayList<>(rows.size());
     var configured = new java.util.HashMap<String, List<com.sanhua.marketingcost.service.costing.ProductPartCostRule>>();
+    var selectedShapes=new java.util.HashMap<String,com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs.Catalog>();
     for (BomCostingRow row : rows) {
       QuoteDataOrganization organization = requiredOrganization(row);
       var item = classifyOne(row, organization, packageFlags, masters, rawMasters);
@@ -77,9 +80,17 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
         var rule = com.sanhua.marketingcost.service.costing.ProductPartCostRule.match(rules,
             row.getMaterialCode(), master == null ? null : master.getMaterialModel());
         if (rule != null) {
+          if(quoteShapes!=null) {
+            String scope=row.getBusinessUnitType()+"|"+row.getOaFormItemId()+"|"+row.getPeriodMonth();
+            var catalog=selectedShapes.computeIfAbsent(scope,ignored -> quoteShapes.read(row.getBusinessUnitType(),
+                row.getPeriodMonth(),row.getOaFormItemId(),codes));
+            var selected=catalog.choice(row.getPriceOrgCode(),row.getMaterialCode());
+            if(selected!=null && selected.selectedShape()!=null)
+              rule=rule.withQuotationShape(com.sanhua.marketingcost.enums.QuoteMaterialShape.valueOf(selected.selectedShape()).getLabel());
+          }
           item.setSeparateRule(rule);
           item.setStatus(STATUS_READY);
-          item.setItemType("制造件".equals(rule.shape()) ? ITEM_TYPE_MAKE_PART : ITEM_TYPE_NORMAL);
+          item.setItemType("制造件".equals(rule.pricingShape()) ? ITEM_TYPE_MAKE_PART : ITEM_TYPE_NORMAL);
           item.setMessage("按成品零件成本配置取基础价格");
         }
       }

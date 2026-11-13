@@ -344,6 +344,8 @@ class QuoteProductBomPreparationServiceImplTest {
 
     assertThat(preview.bodyBomReady()).isTrue();
     assertThat(preview.packageReferenceReady()).isFalse();
+    assertThat(preview.ready()).as("已有本体应能生成计价树，包装由技术资料检查独立拦截成本").isTrue();
+    assertThat(preview.preparationStatus()).isEqualTo("READY");
     assertThat(preview.needTechnicianTask()).isTrue();
     assertThat(preview.missingScopes()).containsExactly("PACKAGE_REFERENCE");
     verify(supplementBomReadService, never()).readApproved(any(), any(), any(), any());

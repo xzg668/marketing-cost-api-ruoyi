@@ -23,8 +23,15 @@ public class MonthlyCostVersionService {
   public record PreparationBinding(long financialItemId, long customerItemId) {}
   public record Snapshot(int schemaVersion, String businessUnitType, long versionId, String costRunNo,
       String oaNo, long oaFormItemId, String productCode, String pricingMonth, Result calculation,
-      List<MonthlyPriceScenarios.Pair> priceScenarios, Map<String, PreparationBinding> preparations) {
+      List<MonthlyPriceScenarios.Pair> priceScenarios, Map<String, PreparationBinding> preparations,
+      com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomResponse pricingBom) {
     public Snapshot { priceScenarios = List.copyOf(priceScenarios); preparations = Map.copyOf(preparations); }
+    public Snapshot(int schemaVersion,String businessUnitType,long versionId,String costRunNo,
+        String oaNo,long oaFormItemId,String productCode,String pricingMonth,Result calculation,
+        List<MonthlyPriceScenarios.Pair> priceScenarios,Map<String,PreparationBinding> preparations) {
+      this(schemaVersion,businessUnitType,versionId,costRunNo,oaNo,oaFormItemId,productCode,pricingMonth,
+          calculation,priceScenarios,preparations,null);
+    }
   }
   /** Legacy values are returned as saved, without inventing new monthly/fee/algorithm facts. */
   public record Stored(QuoteCostRunVersion version, Snapshot snapshot,
@@ -41,6 +48,10 @@ public class MonthlyCostVersionService {
   private final MonthlyPriceScenarios scenarios;
   private final MonthlyCostSnapshotDocuments documents;
   private final TransactionTemplate transaction;
+  @org.springframework.beans.factory.annotation.Autowired
+  private org.springframework.beans.factory.ObjectProvider<com.sanhua.marketingcost.service.QuoteEffectiveBomApplicationService> pricingBoms;
+  @org.springframework.beans.factory.annotation.Autowired
+  private org.springframework.beans.factory.ObjectProvider<com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs> shapeInputs;
 
   public MonthlyCostVersionService(QuoteCostRunVersionMapper versions, MonthlyCostVersionMapper locks,
       PricePrepareItemMapper preparations, CostRunPartItemMapper parts, CostRunCostItemMapper costs,
@@ -205,7 +216,9 @@ public class MonthlyCostVersionService {
       var snapshot = new Snapshot(MonthlyProductCost.SNAPSHOT_VERSION, unit, versionId, version.getCostRunNo(),
           version.getOaNo(), Objects.requireNonNull(version.getOaFormItemId()), version.getProductCode(),
           version.getPricingMonth(), calculated, pairedPrices.values().stream()
-              .sorted(Comparator.comparingLong(MonthlyPriceScenarios.Pair::monthlyPriceId)).toList(), stableBindings);
+              .sorted(Comparator.comparingLong(MonthlyPriceScenarios.Pair::monthlyPriceId)).toList(), stableBindings,
+          pricingBoms==null || shapeInputs==null || !shapeInputs.getObject().installed() ? null
+              : pricingBoms.getObject().getEffectiveBom(version.getOaNo(),version.getOaFormItemId()));
       storage.saveVersionSnapshot(unit, versionId, calculated.feePolicyVersion(), 1,
           documents.write(snapshot, shared != null));
       int partCount = saveParts(version, calculated, bound);

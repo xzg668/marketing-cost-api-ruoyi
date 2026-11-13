@@ -15,6 +15,48 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 
 class MonthlyPriceSourcesTest {
+  private MonthlyPriceRequest shaped(String code,String shape,Set<String> types) {
+    var original=request(code);
+    return new MonthlyPriceRequest(original.family(),original.priceOrgCode(),original.conditions().withMaterialShapeScope(
+        MaterialShapePriceScope.of(shape,types,"a".repeat(64))),original.priceBasisQuantity(),original.annualUsagePieces());
+  }
+  @Test void purchaseUsesOnlyClassifiedSourcesAndDoesNotStopAtTheScrapProbe() {
+    var r=shaped("shape-purchase","PURCHASE",Set.of("FIXED","ORDER"));
+    when(fixed.read(any(),anySet())).thenReturn(found(r,"PURCHASE_FIXED"));
+    var result=read(Set.of(r));
+    assertThat(result.problems()).isEmpty();
+    assertThat(result.values().get(r).selection().fact().evidence().json()).contains("PURCHASE_FIXED");
+    assertThat(result.values().get(r).selection().applicability().matches(r)).isTrue();
+    assertThat(result.values().get(r).selection().applicability().matches(request("shape-purchase"))).isFalse();
+    verifyNoInteractions(linked,originalLinked,scrap,household);
+  }
+  @Test void outsourceCanReachOrderPriceWithoutTryingPurchaseFixedPrice() {
+    var r=shaped("shape-outsource","OUTSOURCE",Set.of("ORDER"));
+    when(ods.orders(any(),anySet())).thenReturn(found(r,"ODS_ORDER"));
+    assertThat(read(Set.of(r)).values().get(r).selection().fact().evidence().json()).contains("ODS_ORDER");
+    verifyNoInteractions(fixed,linked,originalLinked,scrap,household);
+  }
+  @Test void severalSourcesOfTheSameShapeRetainExistingSourceOrder() {
+    var r=shaped("shape-priority","PURCHASE",Set.of("LINKED","FIXED"));
+    when(linked.read(any(),anySet(),any())).thenReturn(found(r,"LINKED"));
+    when(fixed.read(any(),anySet())).thenReturn(found(r,"PURCHASE_FIXED"));
+    assertThat(read(Set.of(r)).values().get(r).selection().fact().evidence().json()).contains("LINKED");
+    verifyNoInteractions(fixed);
+    when(linked.read(any(),anySet(),any())).thenAnswer(call->missing(call.getArgument(1)));
+    assertThat(read(Set.of(r)).values().get(r).selection().fact().evidence().json()).contains("PURCHASE_FIXED");
+  }
+  @Test void fixedProcessingFeeDesignationDoesNotPreventIndependentSrmWeightLookup() {
+    manual=true;order=List.of(MaterialPriceSourceType.FIXED,MaterialPriceSourceType.LINKED,MaterialPriceSourceType.RANGE,MaterialPriceSourceType.SETTLE_FIXED,MaterialPriceSourceType.SETTLE_LINKED);
+    var r=shaped("shape-weight","OUTSOURCE_WEIGHT",Set.of("LINKED","RANGE"));
+    when(linked.read(any(),anySet(),any())).thenReturn(found(r,"LINKED"));
+    assertThat(read(Set.of(r)).values()).containsKey(r);verifyNoInteractions(fixed);
+  }
+  @Test void aShapeWithoutAnEligibleSourceReportsMissingInsteadOfUsingAnUnclassifiedPrice() {
+    var r=shaped("shape-unclassified","PURCHASE",Set.of());
+    var result=read(Set.of(r));assertThat(result.values()).isEmpty();
+    assertThat(result.problems().get(r).reason()).isEqualTo(Failure.MISSING);
+    verifyNoInteractions(fixed,linked,originalLinked,ods,invoices,inquiries,household,scrap);
+  }
   final MaterialPricePriorityService priorities=fake(MaterialPricePriorityService.class);
   final HouseholdMonthlyPriceSource household=fake(HouseholdMonthlyPriceSource.class);
   final MonthlyFixedPriceSource fixed=fake(MonthlyFixedPriceSource.class);

@@ -79,6 +79,8 @@ import org.springframework.util.StringUtils;
 public class QuoteEffectiveBomApplicationServiceImpl
     implements QuoteEffectiveBomApplicationService {
   private final QuotePricingPeriod pricingPeriods;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs quoteShapeInputs;
 
   private static final int ACTIVE = 1;
   private static final int MAX_DEPTH = 128;
@@ -382,9 +384,11 @@ public class QuoteEffectiveBomApplicationServiceImpl
                     Function.identity(),
                     (first, ignored) -> first,
                     LinkedHashMap::new));
+    var priceShapeCatalog = shapeCatalog(context);
     List<QuoteEffectiveBomNodeResponse> nodes =
+        // Classification does not choose a shape: only this quotation's explicit selection does.
         built.nodes().stream()
-            .map(node -> toNode(node, selectionByGroup.get(node.alternativeGroupKey())))
+            .map(node -> toNode(node, selectionByGroup.get(node.alternativeGroupKey()), priceShapeCatalog))
             .toList();
     if (built.blocked()) {
       return blockedEvaluation(
@@ -894,7 +898,11 @@ public class QuoteEffectiveBomApplicationServiceImpl
         decisions.put(materialCode, EffectiveBomShapeDecision.from(resolution));
       }
     }
-    return Map.copyOf(decisions);
+    if (quoteShapeInputs == null) return Map.copyOf(decisions);
+    var organizations = new LinkedHashMap<String,String>();
+    for (var request : requests) organizations.put(request.materialCode(),
+        com.sanhua.marketingcost.enums.MaterialOrganization.fromCode(request.materialOrgCode()).getPriceOrgCode());
+    return quoteShapeInputs.apply(context.businessUnit(),context.costPeriodMonth(),context.oaFormItemId(),decisions,organizations);
   }
 
   private static boolean isShapeLessStructureRoot(
@@ -979,8 +987,16 @@ public class QuoteEffectiveBomApplicationServiceImpl
         distinctWarnings(warnings));
   }
 
+  private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs.Catalog shapeCatalog(QueryContext context) {
+    return quoteShapeInputs == null
+        ? new com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs.Catalog(List.of(),List.of())
+        : quoteShapeInputs.read(context.businessUnit(),context.costPeriodMonth(),context.oaFormItemId());
+  }
+
   private QuoteEffectiveBomNodeResponse toNode(
-      EffectiveBomNodeDraft node, QuoteEffectiveBomAlternativeResponse selection) {
+      EffectiveBomNodeDraft node, QuoteEffectiveBomAlternativeResponse selection,
+      com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs.Catalog catalog) {
+    var choice = catalog.choice(node.priceOrgCode(),node.materialCode());
     return new QuoteEffectiveBomNodeResponse(
         node.nodeKey(),
         node.parentNodeKey(),
@@ -1008,7 +1024,12 @@ public class QuoteEffectiveBomApplicationServiceImpl
         node.sourceBomType(),
         node.sourceBomBatchId(),
         node.sourceHierarchyId(),
-        node.sourceNodePath());
+        node.sourceNodePath(),
+        node.priceOrgCode(),
+        !catalog.sources(node.priceOrgCode(),node.materialCode()).isEmpty()
+            && node.shapeResolutionSource()!=MaterialQuoteShapeSource.STRUCTURE_ROOT,
+        catalog.shapes(node.priceOrgCode(),node.materialCode()).stream().sorted().toList(),
+        choice==null ? 0 : choice.version());
   }
 
   private QuoteEffectiveBomIssueResponse toIssue(EffectiveBomBlockIssue issue) {

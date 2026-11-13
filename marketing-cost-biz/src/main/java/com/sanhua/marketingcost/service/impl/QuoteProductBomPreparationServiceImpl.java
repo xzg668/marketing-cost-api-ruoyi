@@ -413,7 +413,9 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
             productCode, organization.priceOrgCode(), organization.materialOrganizationCode());
     boolean packageReady = packageResult.found();
     List<PackageComponentStructureLineDto> packageLines = packageReady ? packageResult.lines() : List.of();
-    boolean ready = bodyReady && packageReady;
+    // 本体可用就允许生成计价树和检查全部用价；包装缺口仍由技术资料门禁阻止成本发布。
+    // 已生效的补录包装会在 TechnicalBomContributions 中合并，不能要求先维护旧包装参考。
+    boolean ready = bodyReady;
     List<String> missingScopes = new ArrayList<>();
     List<String> gaps = new ArrayList<>();
     if (!bodyReady) {
@@ -462,7 +464,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
         record,
         status,
         ready,
-        !ready,
+        !missingScopes.isEmpty(),
         false,
         bodySource,
         bodyReady,

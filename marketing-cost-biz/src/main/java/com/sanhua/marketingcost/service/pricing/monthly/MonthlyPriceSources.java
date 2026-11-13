@@ -13,6 +13,8 @@ import org.springframework.stereotype.Component;
 /** Read-only routing: household, existing per-material price order, then supplemental fixed. */
 @Component
 public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs materialShapes;
   private final MaterialPricePriorityService priorities;
   private final HouseholdMonthlyPriceSource household;
   private final MonthlyFixedPriceSource fixed;
@@ -50,9 +52,9 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
     var orders=orders(context,requests);
     var local=resolveOrganization(context,requests,dependencies,orders);
-    return withOtherOrganization(requests,local,alternatives->{
+    return withOtherOrganization(context,requests,local,alternatives->{
       var alternativeOrders=new LinkedHashMap<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>>();
-      for(var request:requests)alternativeOrders.put(otherOrganization(request),orders.get(request));
+      for(var request:requests)alternativeOrders.put(otherOrganization(context,request),orders.get(request));
       return resolveOrganization(context,alternatives,dependencies,alternativeOrders);
     });
   }
@@ -64,16 +66,19 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     var pending=new LinkedHashSet<>(requests);
     var automatic=new LinkedHashSet<MonthlyPriceRequest>();pending.stream().filter(request->orders.get(request).size()>1).forEach(automatic::add);
-    if(!automatic.isEmpty())accept(household.read(context,automatic),pending,values,problems);
+    if(!automatic.isEmpty())accept(MaterialShapePriceScope.read("HOUSEHOLD_INQUIRY",automatic,b -> household.read(context,b)),pending,values,problems);
     // Existing scrap rules retain priority; a genuinely missing scrap price may use inquiry.
     automatic.retainAll(pending);
     if (!automatic.isEmpty()) {
-      var registeredScrap = scrap.read(context, Set.copyOf(automatic));
+      var scrapCandidates=automatic.stream().filter(r -> MaterialShapePriceScope.allows(r.conditions().materialShapeScope(),"SCRAP"))
+          .collect(java.util.stream.Collectors.toSet());
+      var registeredScrap = scrapCandidates.isEmpty() ? new Candidates(Map.of(),Map.of())
+          : MaterialShapePriceScope.read("SCRAP",scrapCandidates,b -> scrap.read(context,b));
       accept(registeredScrap,pending,values,problems);
       var missingScrap=new LinkedHashSet<MonthlyPriceRequest>();
       registeredScrap.problems().forEach((request,problem)->{if(problem.reason()==Failure.MISSING)missingScrap.add(request);});
       if(!missingScrap.isEmpty()) {
-        var inquiry=inquiries.read(context,missingScrap);requireComplete(missingScrap,inquiry);
+        var inquiry=MaterialShapePriceScope.read("INQUIRY",missingScrap,b -> inquiries.read(context,b));requireComplete(missingScrap,inquiry);
         accept(inquiry,pending,values,problems);
         for(var request:missingScrap)if(pending.remove(request))problems.put(request,registeredScrap.problems().get(request));
       }
@@ -83,14 +88,17 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       for(var request:pending)groups.computeIfAbsent(orders.get(request).get(rank).type(),ignored->new LinkedHashSet<>()).add(request);
       for(var group:groups.entrySet()) {
         Candidates found=switch(group.getKey()) {
-          case FIXED -> fixed.read(context,group.getValue());
+          case FIXED -> MaterialShapePriceScope.read("FIXED",group.getValue(),b -> fixed.read(context,b));
           case SETTLE_FIXED,SETTLE_LINKED -> {
             var types=new LinkedHashMap<MonthlyPriceRequest,SettlementPriceType>();
             group.getValue().forEach(request->types.put(request,SettlementPriceType.valueOf(group.getKey().name())));
-            yield settlement.read(context,types);
+            yield MaterialShapePriceScope.read(group.getKey().name(),group.getValue(),b -> {
+              var allowed=new LinkedHashMap<MonthlyPriceRequest,SettlementPriceType>();
+              b.forEach(r -> allowed.put(r,types.get(r)));return settlement.read(context,allowed);
+            });
           }
-          case LINKED -> chain(group.getValue(),batch->linked.read(context,batch,dependencies),batch->originalLinked.read(context,batch));
-          case RANGE -> range(context,group.getValue());
+          case LINKED -> MaterialShapePriceScope.read("LINKED",group.getValue(),b -> chain(b,batch->linked.read(context,batch,dependencies),batch->originalLinked.read(context,batch)));
+          case RANGE -> MaterialShapePriceScope.read("RANGE",group.getValue(),b -> range(context,b));
         };
         requireComplete(group.getValue(),found);
         accept(found,pending,values,problems);
@@ -100,24 +108,26 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       }
     }
     if(!pending.isEmpty()) {
-      var found=ods.tiers(context,Set.copyOf(pending));requireComplete(pending,found);
+      var found=MaterialShapePriceScope.read("TIER",Set.copyOf(pending),b -> ods.tiers(context,b));requireComplete(pending,found);
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
-      var found=invoices.read(context,Set.copyOf(pending));requireComplete(pending,found);
+      var found=MaterialShapePriceScope.read("INVOICE",Set.copyOf(pending),b -> invoices.read(context,b));requireComplete(pending,found);
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
-      var found=ods.orders(context,Set.copyOf(pending));requireComplete(pending,found);
+      var found=MaterialShapePriceScope.read("ORDER",Set.copyOf(pending),b -> ods.orders(context,b));requireComplete(pending,found);
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
-      var found=inquiries.read(context,Set.copyOf(pending));requireComplete(pending,found);
+      var found=MaterialShapePriceScope.read("INQUIRY",Set.copyOf(pending),b -> inquiries.read(context,b));requireComplete(pending,found);
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
-      var currentSupplemental=supplemental.read(context,Set.copyOf(pending));requireComplete(pending,currentSupplemental);
-      var found=historicalSupplemental.fill(context,currentSupplemental);
+      var found=MaterialShapePriceScope.read("FIXED",Set.copyOf(pending),b -> {
+        var currentSupplemental=supplemental.read(context,b);requireComplete(b,currentSupplemental);
+        return historicalSupplemental.fill(context,currentSupplemental);
+      });
       accept(found,pending,values,problems);
       // A last, empty supplemental lookup says nothing about earlier source restrictions.
       pending.forEach(request->problems.computeIfAbsent(request,ignored->
@@ -126,7 +136,7 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     return new Candidates(values,problems);
   }
 
-  private Candidates withOtherOrganization(Set<MonthlyPriceRequest> requests,Candidates local,
+  private Candidates withOtherOrganization(Context context,Set<MonthlyPriceRequest> requests,Candidates local,
       Function<Set<MonthlyPriceRequest>,Candidates> lookup) {
     var aliases=new LinkedHashMap<MonthlyPriceRequest,MonthlyPriceRequest>();
     var localResults=new HashSet<MonthlyPriceRequest>();
@@ -138,7 +148,7 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       if(problem==null || problem.reason()!=Failure.MISSING)continue;
       // A valid local tax basis or actual public-source blocker retains priority.
       // Unsubmitted technical supplements are ignored by their own source adapter.
-      if(!localResults.contains(taxGroup(request)))aliases.put(request,otherOrganization(request));
+      if(!localResults.contains(taxGroup(request)))aliases.put(request,otherOrganization(context,request));
     }
     if(aliases.isEmpty())return local;
     var foreign=lookup.apply(new LinkedHashSet<>(aliases.values()));
@@ -176,10 +186,17 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     return new Candidates(values,problems);
   }
 
-  private static MonthlyPriceRequest otherOrganization(MonthlyPriceRequest request) {
+  private MonthlyPriceRequest otherOrganization(Context context,MonthlyPriceRequest request) {
     String organization="210".equals(request.priceOrgCode())?"220":"210";
+    String scope=request.conditions().materialShapeScope();
+    if(scope!=null && materialShapes!=null && !"OUTSOURCE_WEIGHT".equals(MaterialShapePriceScope.shape(scope))) {
+      String shape=MaterialShapePriceScope.shape(scope);
+      var catalog=materialShapes.read(context.businessUnitType(),context.month().toString(),context.oaFormItemId(),Set.of(request.materialCode()));
+      String foreign=catalog.priceScope(organization,request.materialCode(),shape);
+      scope=foreign==null ? MaterialShapePriceScope.of(shape,Set.of(),MonthlyPriceDocumentCodec.sha256(scope+"|UNCLASSIFIED|"+organization)) : foreign;
+    }
     return new MonthlyPriceRequest(request.family(),organization,
-        "220".equals(organization)?request.conditions():NonCuConditions.empty(),
+        ("220".equals(organization)?request.conditions():NonCuConditions.empty()).withMaterialShapeScope(scope),
         request.priceBasisQuantity(),request.annualUsagePieces());
   }
 
@@ -194,7 +211,7 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
   @Override public Candidates resolveScrap(Context context,Set<MonthlyPriceRequest> requests,
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
     var local=resolveScrapOrganization(context,requests);
-    return withOtherOrganization(requests,local,alternatives->resolveScrapOrganization(context,alternatives));
+    return withOtherOrganization(context,requests,local,alternatives->resolveScrapOrganization(context,alternatives));
   }
 
   private Candidates resolveScrapOrganization(Context context,Set<MonthlyPriceRequest> requests) {
@@ -225,7 +242,9 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
         var names=new LinkedHashMap<String,String>();all.subList(start,Math.min(start+256,all.size())).forEach(code->names.put(code,code));
         var scope=new MaterialPricePriorityService.Scope(context.businessUnitType(),context.month().toString(),org,names.keySet().iterator().next());
         priorities.readBatch(scope,names,false).forEach((code,configuration)->codes.get(code).forEach(request->result.put(request,
-            configuration.manual()?List.of(configuration.order().getFirst()):configuration.order())));
+            "OUTSOURCE_WEIGHT".equals(MaterialShapePriceScope.shape(request.conditions().materialShapeScope()))
+                ? MaterialPriceSourceType.DEFAULT_ORDER.stream().map(type->new MaterialPricePriorityService.Entry(type,type.getDefaultPriority())).toList()
+                : configuration.manual()?List.of(configuration.order().getFirst()):configuration.order())));
       }
     });
     return result;

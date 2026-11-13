@@ -18,6 +18,8 @@ public class JjbReadService {
   private final MonthlyCostVersionService versions;
   private final JjbProjection projection;
   private final JjbMeasurementUnits units;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs materialShapes;
   private final com.sanhua.marketingcost.mapper.CostRunTraceSnapshotMapper traces;
   private final com.sanhua.marketingcost.mapper.PricePrepareItemMapper preparations;
   public JjbReadService(JjbVersionAccess access, MonthlyCostVersionService versions, JjbProjection projection,
@@ -57,7 +59,16 @@ public class JjbReadService {
         frozenPreparations.add(row);
       }
     }
-    return new View(units.complete(projection.project(saved,owned.form(),owned.item(),frozenDetails,frozenPreparations),saved.parts()),
+    var sheet=units.complete(projection.project(saved,owned.form(),owned.item(),frozenDetails,frozenPreparations),saved.parts());
+    if(materialShapes!=null) {
+      var catalog=materialShapes.read(owned.businessUnit(),saved.version().getPricingMonth(),saved.version().getOaFormItemId());
+      var codes=catalog.sources().stream().map(com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs.Source::materialCode)
+          .collect(java.util.stream.Collectors.toSet());
+      if(!codes.isEmpty()) sheet=new JjbReadModel(sheet.identity(),sheet.header(),sheet.rows().stream()
+          .map(row -> codes.contains(row.code()) ? row.toBuilder().multiPriceSource(true).build() : row).toList(),
+          sheet.monthlyPrices(),sheet.totals(),sheet.warnings());
+    }
+    return new View(sheet,
         saved.parts().stream().map(row->{var dto=new CostRunPartItemDto();BeanUtils.copyProperties(row,dto);dto.setPartQty(row.getQty());return dto;}).toList(),
         saved.costs().stream().map(row->{var dto=new CostRunCostItemDto();BeanUtils.copyProperties(row,dto);return dto;}).toList());
   }

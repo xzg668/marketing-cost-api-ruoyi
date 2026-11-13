@@ -87,7 +87,7 @@ public class JjbProjection {
           var input = calc.ordinaryInputs();
           var rule = line.separateRule();
           moved.amount(money(com.sanhua.marketingcost.service.costing.SeparatePartCost.amount(line, input, false)))
-              .baseAmount(money(line.financeAmount())).rate(decimal(rule.manufactureRate())).shape(rule.shape())
+              .baseAmount(money(line.financeAmount())).rate(decimal(rule.manufactureRate())).shape(rule.pricingShape())
               .separateCalculation(Map.of("ruleId", String.valueOf(rule.id()), "revision", String.valueOf(rule.revision()),
                   "baseAmount", money(line.financeAmount()), "lossRate", decimal(input.lossRate()),
                   "manufactureRate", decimal(rule.manufactureRate()),
@@ -226,6 +226,8 @@ public class JjbProjection {
     var header = new Header(item.getProductName(),item.getSunlModel(),form.getCustomer(),item.getCustomerCode(),item.getCustomerDrawing(),
         "表头取报价需求单；核算金额、费率及财务Cu取所选保存版本",money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation);
     rows = new JjbPricePresentation(json).apply(rows, calc, preparations);
+    rows = new JjbBomOrder(snapshot == null || snapshot.pricingBom() == null
+        ? List.of() : snapshot.pricingBom().nodes()).apply(rows);
     return new JjbReadModel(identity,header,rows,calc==null?List.of():monthly(calc, snapshot.priceScenarios()),
         new Totals(money(t1),money(v.getCuMaterialAdjustment()),money(v.getFinalQuoteAmount())),warnings);
   }
@@ -242,10 +244,26 @@ public class JjbProjection {
     for(var row:rows) {
       var prepared=row.sources().stream().filter(source->"lp_price_prepare_item".equals(source.table()))
           .map(source->byId.get(source.id())).filter(Objects::nonNull).findFirst().orElse(null);
-      if(prepared==null || !"MAKE_PART_PRICE".equals(prepared.getResultRefType())) {result.add(row);continue;}
+      if(prepared==null) {result.add(row);continue;}
       var snapshot=tree(prepared.getInputSnapshotJson());
       if(snapshot.has("document")) snapshot=tree(new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(json)
           .unwrap(prepared.getInputSnapshotJson()));
+      var shape=snapshot.path("materialShapeEvidence");
+      if("OUTSOURCE_SCRAP_V1".equals(shape.path("kind").asText())) {
+        var detail=new LinkedHashMap<String,String>();
+        for(var key:List.of("parentMaterialCode","rawMaterialCode","grossWeightMaterialCode","grossWeightG",
+            "grossWeightSource","netWeightMaterialCode","netWeightG","netWeightSource","scrapCode","scrapWeightG","formula"))
+          if(!shape.path(key).isMissingNode()) detail.put(key,shape.path(key).asText());
+        detail.put("processType","委外废料回收");
+        detail.put("childMaterialNo",shape.path("rawMaterialCode").asText());
+        detail.put("scrapUnitPrice",row.unitPrice());
+        detail.put("scrapWeightKg",new BigDecimal(shape.path("scrapWeightG").asText()).movePointLeft(3).toPlainString());
+        detail.put("scrapDeduction",row.amount());
+        result.add(row.toBuilder().manufacturing(List.of(detail))
+            .grossWeight(shape.path("grossWeightG").asText()).netWeight(shape.path("netWeightG").asText())
+            .scrapUnitPrice(row.unitPrice()).build());continue;
+      }
+      if(!"MAKE_PART_PRICE".equals(prepared.getResultRefType())) {result.add(row);continue;}
       if(!"MAKE_PART_V1".equals(snapshot.path("calculatorVersion").asText())
           || !Objects.equals(prepared.getMaterialCode(),snapshot.path("materialCode").asText())
           || !snapshot.path("rows").isArray()) {result.add(row);continue;}

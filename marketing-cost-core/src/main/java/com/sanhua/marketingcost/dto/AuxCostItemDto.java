@@ -8,6 +8,8 @@ public class AuxCostItemDto {
   @lombok.Getter @lombok.Setter private String sourcePeriod;
   @lombok.Getter @lombok.Setter private BigDecimal excludedSurfaceAmount;
   @lombok.Getter @lombok.Setter private String exclusionEvidence;
+  @lombok.Getter @lombok.Setter private BigDecimal shapeExcludedAmount;
+  @lombok.Getter @lombok.Setter private java.util.List<java.util.Map<String,String>> shapeExclusionRows;
   private String materialCode;
   private String refMaterialCode;
   private String auxSubjectCode;

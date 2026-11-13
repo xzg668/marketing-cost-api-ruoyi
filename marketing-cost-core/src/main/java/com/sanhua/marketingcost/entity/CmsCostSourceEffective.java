@@ -34,4 +34,8 @@ public class CmsCostSourceEffective {
 
   @TableField(exist = false)
   private String unapprovedItems;
+  @TableField(exist = false)
+  private BigDecimal shapeExcludedAmount;
+  @TableField(exist = false)
+  private java.util.List<java.util.Map<String,String>> shapeExclusionRows;
 }

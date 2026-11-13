@@ -39,6 +39,56 @@ class JjbReadIntegrationTest {
   @AfterEach void logout(){SecurityContextHolder.clearContext();}
   static void auth(String unit){var auth=new UsernamePasswordAuthenticationToken("jjb-read-test","unused",List.of(new SimpleGrantedAuthority("ingest:quote:list")));auth.setDetails(Map.of("businessUnitType",unit));SecurityContextHolder.getContext().setAuthentication(auth);}
   static JjbReadModel.Row row(JjbReadModel model,String code){return model.rows().stream().filter(r->code.equals(r.code())).findFirst().orElseThrow();}
+  @Test void savedMaterialsFollowBomBranchesInApiAndExcelWithoutChangingStoredFacts() throws Exception {
+    var original=fixture("2","92000",true);
+    var first=original.ordinary().materials().getFirst();
+    var use=original.plan().uses().stream().filter(u->u.path().equals(first.path())).findFirst().orElseThrow();
+    var uses=new ArrayList<>(original.plan().uses());
+    var lines=new ArrayList<>(original.ordinary().materials());
+    var bindings=new HashMap<>(original.bindings());
+    for(String path:List.of("root/SECOND@100", "root/FIRST@20/CHILD@10", "root/FIRST@20")) {
+      var quantity=d(path.contains("SECOND") ? "4" : path.contains("CHILD") ? "2" : "3");
+      uses.add(new MonthlyAdoptionPlan.Use(path,use.request(),quantity));
+      lines.add(new MonthlyProductCost.MaterialLine(path,first.materialCode(),quantity,
+          first.monthlyPriceIds(),first.financeAmount().multiply(quantity),first.customerAmount().multiply(quantity),null));
+      bindings.put(path,new com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.PreparationBinding(
+          prepare(original.version(),use.request(),original.version().getFinancePricePrepareNo(),path,quantity,d("100")),
+          prepare(original.version(),use.request(),original.version().getOaPricePrepareNo(),path,quantity,d("92"))));
+    }
+    var o=original.ordinary();
+    var ordinary=new MonthlyProductCost.Ordinary(lines,o.nonBomMaterial(),o.directLabor(),o.indirectLabor(),
+        o.lossRate(),o.manufactureRate(),o.coefficient(),o.managementRate(),o.salesRate(),o.financeRate(),o.otherIndependentFees(),o.details());
+    var expanded=new Fixture(original.version(),new MonthlyAdoptionPlan(original.plan().selections(),uses,
+        original.plan().suppressedPaths(),original.plan().ordinaryScopeRequests()),ordinary,original.technical(),
+        original.copper(),Map.copyOf(bindings),original.linkedRuleId());
+    var saved=saveCompleted(expanded);
+    var storedRows=jdbc.queryForList("SELECT * FROM lp_cost_run_part_item WHERE cost_run_version_id=? ORDER BY id",saved.version().getId());
+    var storedVersion=jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",saved.version().getId());
+    var expected=List.of("root/FIRST@20","root/FIRST@20/CHILD@10","root/SECOND@100","root/CU");
+    var model=new CostRunDetailController(reader).getDetail(saved.version().getOaNo(),"TOP",saved.version().getCostRunNo(),1L,saved.version().getId()).getData().getSheet();
+    var materialRows=model.rows().stream().filter(r->r.kind().equals("PART")).toList();
+    assertThat(materialRows).extracting(r->r.paths().getFirst()).containsExactlyElementsOf(expected);
+    assertThat(materialRows).hasSize(4).extracting(r->r.partItemIds().getFirst()).doesNotHaveDuplicates();
+    var bytes=new java.io.ByteArrayOutputStream();
+    new com.sanhua.marketingcost.service.JjbExportService(reader,new JjbExcelRenderer()).exportVersion(
+        saved.version().getOaNo(),1L,saved.version().getId(),bytes);
+    try(var workbook=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
+      int count=0;
+      for(var excelRow:workbook.getSheetAt(0)) if(excelRow.getCell(0)!=null && first.materialCode().equals(excelRow.getCell(0).toString())) {
+        assertThat(excelRow.getCell(6).getNumericCellValue()).isEqualTo(new BigDecimal(materialRows.get(count++).amount()).doubleValue());
+      }
+      assertThat(count).isEqualTo(4);
+    }
+    for(int i=0;i<3;i++) assertThat(reader.read(saved.version().getOaNo(),1L,saved.version().getId()).sheet()).isEqualTo(model);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_cost_run_part_item WHERE cost_run_version_id=? ORDER BY id",saved.version().getId())).isEqualTo(storedRows);
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",saved.version().getId())).isEqualTo(storedVersion);
+    String output=System.getProperty("jjb.bom.order.output");
+    if(output!=null) {
+      var directory=java.nio.file.Path.of(output);java.nio.file.Files.createDirectories(directory);
+      java.nio.file.Files.writeString(directory.resolve("saved-api-sheet.json"),new ObjectMapper().writeValueAsString(model));
+      java.nio.file.Files.write(directory.resolve("saved-export.xlsx"),bytes.toByteArray());
+    }
+  }
   @Test void materialAndShapeAreCapturedByOrganizationAndHistoricalReadDoesNotFollowMasterChanges() throws Exception {
     var f=fixture("1","100000",false);
     var request=f.plan().selections().keySet().stream().filter(r->f.plan().selections().get(r).fact().type()==MonthlyAdoptionPlan.PricingType.NORMAL).findFirst().orElseThrow();

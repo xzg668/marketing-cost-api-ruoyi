@@ -102,7 +102,7 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
         if (stored.applicability().fragments().stream().anyMatch(fragment -> !fragment.annualUsage().equals(AnnualUsageDomain.any())))
           annual = currentAnnual;
         var current = new MonthlyPriceRequest(request.family(), request.priceOrgCode(),
-            conditions(form, request.priceOrgCode()), request.priceBasisQuantity(), annual);
+            conditions(form, request.priceOrgCode()).withMaterialShapeScope(request.conditions().materialShapeScope()), request.priceBasisQuantity(), annual);
         if (!month.equals(request.family().month().toString())
             || !stored.applicability().matches(current)) applicable = false;
         if (MonthlyPreparationPrice.KIND.equals(row.getResultRefType()) && root != null

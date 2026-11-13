@@ -41,6 +41,8 @@ public class CostRunContext {
   private java.util.Map<String, java.math.BigDecimal> priceVariableOverrides = java.util.Map.of();
   /** 当前报价产品/月份经审核生效的技术资料；为空时按既有 CMS/标准包装规则计算。 */
   private EffectiveTechnicalDataInput effectiveTechnicalData;
+  /** Material -> actual BOM quantity whose own CMS costs are excluded by this quote's shape choice. */
+  private java.util.Map<String,java.math.BigDecimal> cmsShapeExclusions = java.util.Map.of();
   /** 调价已选定的完整OA资料；只供本次执行使用，不重复写入成本快照。 */
   @JsonIgnore
   private CostRunQuotationInput quotationInput;

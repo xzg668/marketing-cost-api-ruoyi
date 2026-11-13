@@ -30,4 +30,8 @@ public record QuoteEffectiveBomNodeResponse(
     String sourceBomType,
     String sourceBomBatchId,
     Long sourceHierarchyId,
-    String sourceNodePath) {}
+    String sourceNodePath,
+    String priceOrgCode,
+    boolean multiPriceSource,
+    java.util.List<String> availableMaterialShapes,
+    long shapeSelectionVersion) {}
