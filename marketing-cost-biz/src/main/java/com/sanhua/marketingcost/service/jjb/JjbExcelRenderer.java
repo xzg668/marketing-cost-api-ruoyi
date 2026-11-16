@@ -15,7 +15,7 @@ public class JjbExcelRenderer {
   private static final String MONEY = "0.000000", DECIMAL = "0.########################",
       PERCENT = "0.########################%";
   private static final String[] COLUMNS = {
-    "子件编码", "部品名", "部品图号", "部品单价", "部品用量", "计量单位", "部品价格", "毛重", "净重",
+    "子件编码", "部品名", "部品图号／规格", "部品单价", "部品用量", "计量单位", "部品价格", "毛重", "净重",
     "原材料\n单价", "废料\n单价", "材质", "形态属性", "价格来源", "备注\n（手填）", "备注-CMS\n来源信息"
   };
 
@@ -139,16 +139,20 @@ public class JjbExcelRenderer {
 
     void detail(JjbReadModel.Row v) {
       int prototype = prototype(v);
-      boolean multilineCode = "EXPLANATION".equals(v.kind()) && text(v.code()).contains("\n");
-      float height = multilineCode ? Math.max(heights[prototype], (text(v.code()).split("\n", -1).length * 13) + 4) : heights[prototype];
+      String displayCode=v.displayCode()==null?v.code():v.displayCode();
+      String displayName=v.displayName()==null?v.name():v.displayName();
+      int lines=Math.max(text(displayCode).split("\n",-1).length,text(displayName).split("\n",-1).length);
+      boolean multilineCode = lines>1;
+      float height = multilineCode ? Math.max(heights[prototype], lines * 13 + 4) : heights[prototype];
       reserve(height);
       Row row = create(prototype);
       row.setHeightInPoints(height);
-      boolean part = List.of("PART", "HOUSEHOLD", "EXPLANATION").contains(v.kind());
+      boolean part = List.of("PART", "HOUSEHOLD", "EXPLANATION").contains(v.kind())
+          || List.of("OTHER_EXP_PACKAGE", "BOM_BUCKET_PACKAGE").contains(text(v.code())) && v.displayCode() != null;
       boolean grouped = List.of("THREE_EXPENSES", "PRODUCT_FEES").contains(v.section());
       if (part) {
-        string(row, 0, v.code()); string(row, 1, v.name()); string(row, 2, v.drawingNo());
-        if (multilineCode) row.getCell(0).setCellStyle(formatted(row.getCell(0).getCellStyle(), "@", false));
+        string(row, 0, displayCode); string(row, 1, displayName); string(row, 2, v.drawingNo());
+        if (multilineCode) for(int column:List.of(0,1)) row.getCell(column).setCellStyle(formatted(row.getCell(column).getCellStyle(), "@", false));
       } else if ("PROPERTY".equals(v.kind())) {
         string(row, 0, "产品属性");
         string(row, 2, "产品属性".equals(v.name()) ? v.remark() : v.name());

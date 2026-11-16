@@ -20,6 +20,69 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 class CostInputRevisionServiceImplTest {
 
+  @Test void alternativeAndRestoreInvalidateOnlyTheirProductAndMonthWhileRepeatRemainsStable() {
+    var jdbc=mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service=new CostInputRevisionServiceImpl(jdbc,(form,item,month)->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved",java.util.Set.of(),java.util.Set.of(),true));
+    var form=form();var affected=item(11L,"P1");var other=item(12L,"P2");
+    String original=service.currentRevision(form,affected,"2026-11"), otherOriginal=service.currentRevision(form,other,"2026-11");
+    String oldMonth=service.currentRevision(form,affected,"2026-10");
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.ALTERNATIVE_SELECTION_SQL,"COMMERCIAL",form.getOaNo(),11L,"2026-11"))
+        .thenReturn(List.of(Map.of("selected_material_code","ALT","selection_version",2,"selection_status","ACTIVE")));
+    String alternative=service.currentRevision(form,affected,"2026-11");assertThat(alternative).isNotEqualTo(original);
+    assertThat(service.currentRevision(form,affected,"2026-11")).isEqualTo(alternative);
+    assertThat(service.currentRevision(form,other,"2026-11")).isEqualTo(otherOriginal);
+    assertThat(service.currentRevision(form,affected,"2026-10")).isEqualTo(oldMonth);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.ALTERNATIVE_SELECTION_SQL,"COMMERCIAL",form.getOaNo(),11L,"2026-11"))
+        .thenReturn(List.of(Map.of("selected_material_code","STD","selection_version",3,"selection_status","ACTIVE")));
+    String restored=service.currentRevision(form,affected,"2026-11");assertThat(restored).isNotEqualTo(alternative);
+    assertThat(service.currentRevisions(form,List.of(affected,other),"2026-11")).containsEntry(11L,restored).containsEntry(12L,otherOriginal);
+    assertThat(CostInputRevisionServiceImpl.ALTERNATIVE_SELECTION_SQL).contains("current_slot=1", "selection_source<>'AUTO_STANDARD'");
+  }
+
+  @Test void purchasedLayerPolicyInvalidatesOldPurchaseResultsOnlyAndStaysStableAfterRebuild() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service = new CostInputRevisionServiceImpl(jdbc, (form, item, month) ->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved", java.util.Set.of(), java.util.Set.of(), true));
+    var affected = item(11L, "P-1"); var other = item(12L, "P-2");
+    String before = service.currentRevision(form(), affected, "2026-11");
+    String otherBefore = service.currentRevision(form(), other, "2026-11");
+    String sql = "SELECT 1 FROM lp_quote_costing_workspace w JOIN lp_quote_effective_bom_node n"
+        + " ON n.build_batch_id=w.current_bom_build_batch_id WHERE w.oa_form_item_id=? AND w.period_month=?"
+        + " AND n.shape_resolution_source='QUOTATION_SELECTION'"
+        + " AND n.effective_material_shape='PURCHASE' LIMIT 1";
+    when(jdbc.queryForList(sql, 11L, "2026-11")).thenReturn(List.of(Map.of("1", 1)));
+    String corrected = service.currentRevision(form(), affected, "2026-11");
+    assertThat(corrected).isNotEqualTo(before);
+    assertThat(service.currentRevision(form(), affected, "2026-11")).isEqualTo(corrected);
+    assertThat(service.currentRevision(form(), other, "2026-11")).isEqualTo(otherBefore);
+    assertThat(service.currentRevisions(form(), List.of(affected, other), "2026-11"))
+        .containsEntry(11L, corrected).containsEntry(12L, otherBefore);
+  }
+
+  @Test void correctedSinteredFeePolicyInvalidatesOnlyAffectedProductsAndStaysStableAfterRebuild() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service = new CostInputRevisionServiceImpl(jdbc, (form, item, month) ->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved", java.util.Set.of(), java.util.Set.of(), true));
+    var affected = item(11L, "P-1"); var other = item(12L, "P-2");
+    var old = service.currentRevision(form(), affected, "2026-11");
+    var otherBefore = service.currentRevision(form(), other, "2026-11");
+    String sql = "SELECT 1 FROM lp_quote_costing_workspace w JOIN lp_quote_effective_bom_node n"
+        + " ON n.build_batch_id=w.current_bom_build_batch_id WHERE w.oa_form_item_id=? AND w.period_month=?"
+        + " AND n.material_name LIKE '%烧结基座%' AND n.material_name NOT LIKE '%毛坯%'"
+        + " AND n.effective_material_shape IN ('MANUFACTURE','PURCHASE') LIMIT 1";
+    when(jdbc.queryForList(sql, 11L, "2026-11")).thenReturn(List.of(Map.of("1", 1)));
+    String corrected = service.currentRevision(form(), affected, "2026-11");
+    assertThat(corrected).isNotEqualTo(old);
+    assertThat(service.currentRevision(form(), other, "2026-11")).isEqualTo(otherBefore);
+    assertThat(service.currentRevision(form(), affected, "2026-11")).isEqualTo(corrected);
+    var batch = service.currentRevisions(form(), List.of(affected, other), "2026-11");
+    assertThat(batch).containsEntry(11L, corrected).containsEntry(12L, otherBefore);
+  }
+
   @Test void configuredPartChangesOnlyItsProductRevisionAndDeletionRestoresOrdinaryInputs() {
     var jdbc=mock(JdbcTemplate.class);
     when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));

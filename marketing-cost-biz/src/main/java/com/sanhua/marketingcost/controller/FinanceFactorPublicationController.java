@@ -48,7 +48,7 @@ public class FinanceFactorPublicationController {
     this.exports = exports;
   }
 
-  @PreAuthorize("@ss.hasPermi('price:finance-base:import')")
+  @PreAuthorize("@ss.hasPermi('price:finance-base:import') || @ss.hasAnyRole('bu_staff', 'bu_director', 'admin')")
   @GetMapping("/export")
   public ResponseEntity<byte[]> exportMonth(@RequestParam String priceMonth, @RequestParam String priceOrgCode) {
     var file = exports.selectedMonth(context(priceMonth, priceOrgCode, null, null));
@@ -93,7 +93,7 @@ public class FinanceFactorPublicationController {
 
   public record CuPreview(String previewFingerprint) {}
 
-  @PreAuthorize("@ss.hasPermi('cost:finance-cu-base:query')")
+  @PreAuthorize("@ss.hasPermi('cost:finance-cu-base:query') || @ss.hasAnyRole('bu_staff', 'bu_director', 'admin')")
   @GetMapping("/cu")
   public CommonResult<FactorPriceSnapshot> readCu(
       @RequestParam String priceMonth,
@@ -105,7 +105,7 @@ public class FinanceFactorPublicationController {
     return CommonResult.success(snapshot == null ? null : snapshot.copperOnly());
   }
 
-  @PreAuthorize("@ss.hasPermi('price:finance-base:list')")
+  @PreAuthorize("@ss.hasPermi('price:finance-base:list') || @ss.hasAnyRole('bu_staff', 'bu_director', 'admin')")
   @GetMapping
   public CommonResult<FactorPriceSnapshot> read(
       @RequestParam String priceMonth,

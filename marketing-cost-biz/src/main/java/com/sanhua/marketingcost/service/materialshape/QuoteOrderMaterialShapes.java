@@ -59,7 +59,7 @@ public class QuoteOrderMaterialShapes {
     var detail=requests.getRequestDetail(oaNo); // Existing quotation visibility and business-unit authorization.
     if(!inputs.orderInstalled()) throw new IllegalStateException("整单物料形态功能尚未安装，请先完成版本升级");
     String unit=BusinessUnitContext.getCurrentBusinessUnitType();
-    boolean sourceSelectionSupported=inputs.sourceChoiceInstalled();
+    boolean sourceSelectionSupported=false;
     var scopes=new ArrayList<Scope>();var problems=new ArrayList<Problem>();
     for(var item:detail.getItems()) {
       try {
@@ -136,23 +136,21 @@ public class QuoteOrderMaterialShapes {
     var current=collect(oaNo,false,null);
     if(!Objects.equals(current.fingerprint(),change.expectedFingerprint())) throw new IllegalArgumentException("本单物料、来源或形态已变化，请刷新后重新选择");
     var byKey=new HashMap<Key,Row>();current.rows().forEach(r -> byKey.put(new Key(r.periodMonth(),r.organization(),r.materialCode()),r));
+    boolean sourceChoiceInstalled=inputs.sourceChoiceInstalled();
     var selected=new TreeMap<Key,Selection>();
     for(var selection:change.selections()) {
       if(selection==null || selection.expectedVersion()==null || selection.expectedVersion()<0)
         throw new IllegalArgumentException("缺少物料选择版本");
       var key=new Key(selection.periodMonth(),selection.organization(),selection.materialCode());var row=byKey.get(key);
       if(row==null) throw new IllegalArgumentException("料号"+selection.materialCode()+"不在本单可调整形态的多源物料中；原采购件不能调整形态");
-      String chosen=selection.selectedSourceType()==null || selection.selectedSourceType().isBlank()?null:selection.selectedSourceType().trim();
-      if(chosen==null && selection.selectedShape()!=null && Objects.equals(row.selectedShape(),selection.selectedShape())) chosen=row.selectedSourceType();
-      var normalized=new Selection(selection.periodMonth(),selection.organization(),selection.materialCode(),selection.selectedShape(),selection.expectedVersion(),chosen);
-      if(selected.putIfAbsent(key,normalized)!=null) throw new IllegalArgumentException("批量选择包含重复料号");
+      if(selection.selectedSourceType()!=null && !selection.selectedSourceType().isBlank())
+        throw new IllegalArgumentException("价格来源由财务在物料多形态属性价格表维护，本单只能选择采用形态");
+      if(selected.putIfAbsent(key,selection)!=null) throw new IllegalArgumentException("批量选择包含重复料号");
       if(row.version()!=selection.expectedVersion()) throw new IllegalArgumentException("形态已被其他人修改，请刷新");
-      if(chosen!=null && !current.sourceSelectionSupported()) throw new IllegalArgumentException("当前版本尚未支持本单价格源选择，请先完成升级");
-      if(chosen!=null && selection.selectedShape()==null) throw new IllegalArgumentException("选用价格源时请同时选择本单采用形态");
       if(selection.selectedShape()!=null) {
         if(!row.allowedShapes().contains(selection.selectedShape())) throw new IllegalArgumentException("料号"+key.code()+"不允许所选形态；原采购件不能改成委外加工件或自制件，原委外加工件不能改成自制件");
         var catalog=new QuoteMaterialShapeInputs.Catalog(row.sources().stream().map(s -> new QuoteMaterialShapeInputs.Source(s.organization(),s.materialCode(),s.sourceType(),s.materialAttribute(),s.version())).toList(),
-            chosen==null?List.of():List.of(new QuoteMaterialShapeInputs.Choice(key.organization(),key.code(),selection.selectedShape(),row.version(),chosen)));
+            List.of());
         String problem=catalog.selectionProblem(key.organization(),key.code(),selection.selectedShape());
         if(problem!=null) throw new IllegalArgumentException(problem);
       }
@@ -164,14 +162,14 @@ public class QuoteOrderMaterialShapes {
       var parameters=new ArrayList<Object>();
       if(row.version()==0) {
         Collections.addAll(parameters,unit,detail.getId(),key.month(),key.organization(),key.code(),selection.selectedShape(),actor);
-        if(current.sourceSelectionSupported()) parameters.add(selection.selectedSourceType());
+        if(sourceChoiceInstalled) parameters.add(null);
         jdbc.update("INSERT INTO lp_quote_order_material_shape(business_unit_type,oa_form_id,period_month,price_org_code,material_code,selected_shape,row_version,updated_by"
-            +(current.sourceSelectionSupported()?",selected_source_type":"")+") VALUES(?,?,?,?,?,?,1,?"
-            +(current.sourceSelectionSupported()?",?":"")+")",parameters.toArray());
+            +(sourceChoiceInstalled?",selected_source_type":"")+") VALUES(?,?,?,?,?,?,1,?"
+            +(sourceChoiceInstalled?",?":"")+")",parameters.toArray());
       } else {
-        parameters.add(selection.selectedShape());if(current.sourceSelectionSupported()) parameters.add(selection.selectedSourceType());
+        parameters.add(selection.selectedShape());if(sourceChoiceInstalled) parameters.add(null);
         Collections.addAll(parameters,actor,unit,detail.getId(),key.month(),key.organization(),key.code(),selection.expectedVersion());
-        if(jdbc.update("UPDATE lp_quote_order_material_shape SET selected_shape=?,"+(current.sourceSelectionSupported()?"selected_source_type=?,":"")+"""
+        if(jdbc.update("UPDATE lp_quote_order_material_shape SET selected_shape=?,"+(sourceChoiceInstalled?"selected_source_type=?,":"")+"""
           row_version=row_version+1,updated_by=?,updated_at=CURRENT_TIMESTAMP(6)
           WHERE business_unit_type=? AND oa_form_id=? AND period_month=? AND price_org_code=? AND material_code=? AND row_version=?
           """,parameters.toArray())!=1) throw new IllegalArgumentException("形态已被其他人修改，请刷新");

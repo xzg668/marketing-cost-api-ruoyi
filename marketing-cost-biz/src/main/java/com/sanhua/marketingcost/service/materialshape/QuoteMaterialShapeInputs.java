@@ -41,20 +41,11 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
     public boolean multiple(String org,String code) { return sources(org,code).stream().map(Source::sourceType).distinct().count()>1; }
     public String selectionProblem(String org,String code,String shape) {
       if(!multiple(org,code)) return "料号"+code+"未进入公共多源价格表，不能调整形态";
-      var choice=choice(org,code);
-      if(choice!=null && choice.selectedSourceType()!=null) {
-        String selected=choice.selectedSourceType();
-        if("MANUFACTURE".equals(shape)) return "MAKE".equals(selected) && sources(org,code).stream().anyMatch(s->"MAKE".equals(s.sourceType()))
-            ? null : "料号"+code+"的自制形态只能选用自制计算来源";
-        if("MAKE".equals(selected)) return "料号"+code+"的采购或委外形态不能选用自制计算来源";
-        return priceSources(org,code).stream().anyMatch(s->selected.equals(s.sourceType()))
-            ? null : "料号"+code+"本单选用的"+selected+"价格来源已不可用，请重新选择";
-      }
       if("MANUFACTURE".equals(shape)) return null;
       var rows=priceSources(org,code);
       if(rows.isEmpty()) return "料号"+code+"按原取价条件未找到价格来源，请补齐价格";
       if(rows.stream().anyMatch(s -> s.shape()==null || s.shape().isBlank()))
-        return "料号"+code+"存在多个价格来源，请先由报价员在公共多源价格表填写各来源的形态属性后再报价";
+        return "料号"+code+"调整形态前，请先由财务在物料多形态属性价格表维护各价格来源的形态属性";
       if(rows.stream().noneMatch(s -> shape.equals(s.shape())))
         return "料号"+code+"的公共多源价格表没有本次选用形态对应的来源，请核对形态属性";
       return null;
@@ -62,16 +53,12 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
     public String priceScope(String org,String code,String shape) {
       var rows=priceSources(org,code);
       if(rows.isEmpty()) return null;
-      var choice=choice(org,code);String selected=choice==null?null:choice.selectedSourceType();
-      var types=selectionProblem(org,code,shape)!=null ? List.<String>of() : selected!=null ? List.of(selected) : rows.stream()
+      var types=selectionProblem(org,code,shape)!=null ? List.<String>of() : rows.stream()
           .filter(s -> shape.equals(s.shape())).map(Source::sourceType).toList();
       String revision=MonthlyPriceDocumentCodec.sha256(sources.stream().filter(s -> code.equals(s.materialCode()))
           .sorted(Comparator.comparing(Source::organization).thenComparing(Source::sourceType)).map(s -> s.organization()+":"+s.sourceType()+"="+s.shape()+":"+s.version())
           .collect(java.util.stream.Collectors.joining("|")));
-      return selected==null || types.isEmpty()?MaterialShapePriceScope.of(shape,types,revision)
-          // Choice versions invalidate costing inputs, but must not replace this source's adopted monthly price.
-          : MaterialShapePriceScope.pinned(shape,selected,MonthlyPriceDocumentCodec.sha256(
-              String.join("|","ORDER_PRICE_SOURCE_V1",org,code,shape,selected)));
+      return MaterialShapePriceScope.of(shape,types,revision);
     }
     public String fingerprint() {
       return MonthlyPriceDocumentCodec.sha256(sources.toString()+choices.toString());
@@ -86,7 +73,6 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
   private static final class ReadSnapshot {
     final Catalog base;
     final List<Choice> legacy, order;
-    Map<String,String> original;
     ReadSnapshot(Catalog base,List<Choice> legacy,List<Choice> order) {
       this.base=base;this.legacy=legacy;this.order=order;
     }
@@ -244,6 +230,13 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
 
   public Map<String,EffectiveBomShapeDecision> apply(String unit,String month,Long itemId,
       Map<String,EffectiveBomShapeDecision> original,Map<String,String> organizations) {
+    return apply(unit,month,itemId,original,organizations,Map.of());
+  }
+
+  /** A quotation overrides the shape, while material-specific child rules still follow that shape. */
+  public Map<String,EffectiveBomShapeDecision> apply(String unit,String month,Long itemId,
+      Map<String,EffectiveBomShapeDecision> original,Map<String,String> organizations,
+      Map<String,String> policyActions) {
     var catalog=read(unit,month,itemId,original.keySet());
     if(catalog.choices().isEmpty()) return original;
     var result=new LinkedHashMap<>(original);
@@ -263,9 +256,13 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
         result.put(code,EffectiveBomShapeDecision.blocked(code,problem));
         return;
       }
+      String action=policyActions.getOrDefault(code,decision.actionConfigJson());
+      String fingerprint=MonthlyPriceDocumentCodec.sha256(choice.toString()
+          +(decision.shapePolicyFingerprint()==null?"":"|"+decision.shapePolicyFingerprint())
+          +(action==null?"":"|"+action));
       result.put(code,new EffectiveBomShapeDecision(code,decision.sourceMaterialShape(),
           QuoteMaterialShape.valueOf(choice.selectedShape()),MaterialQuoteShapeSource.QUOTATION_SELECTION,
-          null,MonthlyPriceDocumentCodec.sha256(choice.toString()),null,null,null,null,null,null));
+          decision.shapePolicyId(),fingerprint,null,null,null,null,action,null));
     });
     return Map.copyOf(result);
   }
@@ -277,25 +274,13 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
     if(items.isEmpty()) return Map.of();
     var catalog=read(context.businessUnitType(),context.month().toString(),context.oaFormItemId(),items.stream().map(MonthlyQuotationPrices.Item::materialCode).toList());
     if(catalog.sources().isEmpty()) return Map.of();
-    var snapshot=readonlySnapshot(context.businessUnitType(),context.month().toString(),context.oaFormItemId());
-    Map<String,String> original=snapshot==null?null:snapshot.original;
-    if(original==null) {
-      var loaded=new HashMap<String,String>();
-      for(var row:jdbc.queryForList("""
-        SELECT n.price_org_code,n.material_code,n.effective_material_shape FROM lp_quote_effective_bom_node n
-        JOIN lp_quote_costing_workspace w ON w.current_bom_build_batch_id=n.build_batch_id
-        WHERE w.oa_form_item_id=? AND w.period_month=? AND w.business_unit_type=?
-        """,context.oaFormItemId(),context.month().toString(),context.businessUnitType())) {
-        loaded.put(row.get("price_org_code")+"|"+row.get("material_code"),Objects.toString(row.get("effective_material_shape"),""));
-      }
-      original=Map.copyOf(loaded);if(snapshot!=null) snapshot.original=original;
-    }
     var result=new HashMap<MonthlyQuotationPrices.Item,String>();
     for(var item:items) {
       if(item.purpose()!=MonthlyQuotationPrices.Purpose.MATERIAL || item.conditions().materialShapeScope()!=null) continue;
       var choice=catalog.choice(item.organization(),item.materialCode());
-      String shape=choice==null || choice.selectedShape()==null
-          ? original.get(item.organization()+"|"+item.materialCode()) : choice.selectedShape();
+      // Default BOM shapes retain the original source order and adopted monthly price scope.
+      // Finance classification is required only for an explicit quotation shape decision.
+      String shape=choice==null ? null : choice.selectedShape();
       if(!Set.of("PURCHASE","OUTSOURCE").contains(Objects.toString(shape,""))) continue;
       if(!catalog.multiple(item.organization(),item.materialCode())) continue;
       String scope=catalog.priceScope(item.organization(),item.materialCode(),shape);
@@ -318,7 +303,12 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
     var sources=catalog.sources().stream().filter(s -> codes.contains(s.materialCode())
         && (s.version()>0 || catalog.choices().stream().anyMatch(c -> c.materialCode().equals(s.materialCode()) && c.selectedShape()!=null))).toList();
     if(sources.isEmpty() && catalog.choices().isEmpty()) return null;
-    return new Catalog(sources,catalog.choices()).fingerprint();
+    String fingerprint=new Catalog(sources,catalog.choices()).fingerprint();
+    // Recheck previous explicit choices under finance classification on the next user calculation.
+    String childPolicy=catalog.choices().stream().anyMatch(c -> "OUTSOURCE".equals(c.selectedShape()))
+        ? "|OUTSOURCE_CHILD_POLICY_V1" : "";
+    return catalog.choices().stream().anyMatch(c -> c.selectedShape()!=null)
+        ? MonthlyPriceDocumentCodec.sha256("FINANCE_SHAPE_V2|"+fingerprint+childPolicy) : fingerprint;
   }
 
   @Override public Map<String,java.math.BigDecimal> cmsExclusions(com.sanhua.marketingcost.dto.CostRunContext context) {

@@ -60,7 +60,7 @@ final class JjbCalculationExplanation {
       formula += "\n差异：" + n(customer) + "−(" + n(financial) + ")=" + n(customer.subtract(financial));
       String unit = row == null ? null : row.unit();
       if (unit == null && direct != null) unit = direct.request().family().unit();
-      materials.add(new Material(line.materialCode(), row == null ? line.materialCode() : row.name(),
+      materials.add(new Material(row == null || row.displayCode()==null ? line.materialCode() : row.displayCode(), row == null ? line.materialCode() : row.displayName()==null ? row.name() : row.displayName(),
           n(line.quantity()), unit, line.monthlyPriceIds().stream().map(notes::get).filter(Objects::nonNull).toList(),
           formula, n(financial), n(customer), n(customer.subtract(financial))));
       order.put(materials.getLast(), row == null ? Integer.MAX_VALUE : rows.indexOf(row));
@@ -69,7 +69,7 @@ final class JjbCalculationExplanation {
       var row = rows.stream().filter(r -> "HOUSEHOLD".equals(r.kind()) && r.monthlyPriceIds().contains(line.monthlyPriceId())).findFirst().orElse(null);
       String factor = "÷(1+" + n(line.householdRate()) + ")×(1+" + n(line.householdRate()) + "+" + n(line.salesRate()) + ")×" + n(line.quantity());
       var price = notes.get(line.monthlyPriceId());
-      materials.add(new Material(line.materialCode(), row == null ? line.materialCode() : row.name(), n(line.quantity()), line.pricingUnit(),
+      materials.add(new Material(row == null || row.displayCode()==null ? line.materialCode() : row.displayCode(), row == null ? line.materialCode() : row.displayName()==null ? row.name() : row.displayName(), n(line.quantity()), line.pricingUnit(),
           price == null ? List.of() : List.of(price),
           "基准："+n(line.price())+factor+"="+n(line.amount())+"\n客户："+n(line.effectiveCustomerPrice())+factor+"="+n(line.effectiveCustomerAmount())
               +"\n差异："+n(line.effectiveCustomerAmount())+"−("+n(line.amount())+")="+n(line.effectiveCustomerAmount().subtract(line.amount())),

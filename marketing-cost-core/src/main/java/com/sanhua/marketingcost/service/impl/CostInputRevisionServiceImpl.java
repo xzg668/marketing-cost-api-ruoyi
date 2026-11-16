@@ -41,6 +41,23 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
   static final String SOURCE_CHECKSUM_SQL = "CHECKSUM TABLE " + SOURCE_TABLES.stream()
       .map(table -> "`" + table + "`").collect(java.util.stream.Collectors.joining(","));
 
+  // Keep the corrected policy in the revision after rebuilding removes the old
+  // fee row. Products without an affected occurrence retain their exact revision.
+  static final String PROCESS_FEE_SHAPE_SCOPE_SQL =
+      "SELECT 1 FROM lp_quote_costing_workspace w JOIN lp_quote_effective_bom_node n"
+          + " ON n.build_batch_id=w.current_bom_build_batch_id WHERE w.oa_form_item_id=? AND w.period_month=?"
+          + " AND n.material_name LIKE '%烧结基座%' AND n.material_name NOT LIKE '%毛坯%'"
+          + " AND n.effective_material_shape IN ('MANUFACTURE','PURCHASE') LIMIT 1";
+
+  // Explicit purchase selections present in this product's current BOM need a
+  // one-time rebuild under the corrected processing-layer recovery rule. Keep
+  // the marker after the old recovery disappears so later retries reuse it.
+  static final String PURCHASE_LAYER_SCRAP_SCOPE_SQL =
+      "SELECT 1 FROM lp_quote_costing_workspace w JOIN lp_quote_effective_bom_node n"
+          + " ON n.build_batch_id=w.current_bom_build_batch_id WHERE w.oa_form_item_id=? AND w.period_month=?"
+          + " AND n.shape_resolution_source='QUOTATION_SELECTION'"
+          + " AND n.effective_material_shape='PURCHASE' LIMIT 1";
+
   // 这些表按料号定价。其他产品的补价不应使本产品的成本版本失效。
   private static final List<String> MATERIAL_PRICE_TABLES =
       List.of(
@@ -93,6 +110,11 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       """;
 
   private final JdbcTemplate jdbcTemplate;
+  static final String ALTERNATIVE_SELECTION_SQL = "SELECT price_org_code,alternative_group_key,standard_material_code,"
+      + "selected_material_code,selection_version,selection_status FROM lp_quote_bom_alternative_selection"
+      + " WHERE business_unit_type=? AND oa_no=? AND oa_form_item_id=? AND period_month=? AND current_slot=1"
+      + " AND (selection_source<>'AUTO_STANDARD' OR selected_material_code<>standard_material_code)"
+      + " ORDER BY price_org_code,alternative_group_key,id";
   private final EffectiveTechnicalDataQueryService effectiveTechnicalDataQueryService;
   private final QuotationMonthlyPriceInputs monthlyInputs;
   @Autowired(required=false)
@@ -205,6 +227,12 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "materialDifferencePolicy",
         com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);
+    if (!jdbcTemplate.queryForList(PROCESS_FEE_SHAPE_SCOPE_SQL, item.getId(), pricingMonth).isEmpty()) {
+      append(canonical, "processingFeeShapePolicy", "ACTUAL_OUTSOURCE_ONLY_V1");
+    }
+    if (!jdbcTemplate.queryForList(PURCHASE_LAYER_SCRAP_SCOPE_SQL, item.getId(), pricingMonth).isEmpty()) {
+      append(canonical, "purchaseLayerScrapPolicy", "SOLE_QUOTATION_PURCHASE_NO_PROCESSING_RECOVERY_V1");
+    }
     var partCostRules = jdbcTemplate.queryForList(
         "SELECT id,revision,product_code,part_code,part_model,shape,manufacture_rate FROM lp_product_part_cost_rule"
             + " WHERE business_unit_type=? AND product_code=? ORDER BY id",
@@ -213,6 +241,11 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     if (!partCostRules.isEmpty()) append(canonical, "productPartCostRules", partCostRules);
     String shapeRevision=materialShapes==null ? null : materialShapes.revision(item,pricingMonth);
     if(shapeRevision!=null) append(canonical,"quotationMaterialShapes",shapeRevision);
+    // A saved branch switch must invalidate same-day prepared prices as well as costs.
+    // Automatic standard defaults do not change existing unaffected product revisions.
+    var alternatives = jdbcTemplate.queryForList(ALTERNATIVE_SELECTION_SQL,
+        item.getBusinessUnitType(), form.getOaNo(), item.getId(), pricingMonth);
+    if (!alternatives.isEmpty()) append(canonical, "quotationBomAlternatives", alternatives);
     var monthly = monthlyInputs.read(form, item, pricingMonth);
     append(canonical, "monthlyPrices", monthly.evidence());
     append(canonical, "materialPrices", materialPriceRevision(item, pricingMonth, monthly));

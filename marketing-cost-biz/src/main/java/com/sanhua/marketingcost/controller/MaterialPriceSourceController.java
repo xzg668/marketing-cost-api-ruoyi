@@ -28,7 +28,7 @@ public class MaterialPriceSourceController {
   }
 
   @PatchMapping("/attribute")
-  @PreAuthorize("(@ss.hasAnyRole('admin','bu_director','finance_reviewer') and @ss.hasPermi('price:material-sources:edit')) or (@ss.hasPermi('price:material-sources:list') and @ss.hasPermi('quote:costing:bom:alternative-select'))")
+  @PreAuthorize("@ss.hasAnyRole('admin','bu_director','bu_staff') or (@ss.hasRole('finance_reviewer') and @ss.hasPermi('price:material-sources:edit')) or (@ss.hasPermi('price:material-sources:list') and @ss.hasPermi('quote:costing:bom:alternative-select'))")
   public CommonResult<Entry> change(@RequestBody Change change, Principal principal) {
     return CommonResult.success(service.change(BusinessUnitContext.getCurrentBusinessUnitType(), change, principal.getName()));
   }
@@ -44,7 +44,7 @@ public class MaterialPriceSourceController {
   }
 
   @PatchMapping("/attribute/batch")
-  @PreAuthorize("(@ss.hasAnyRole('admin','bu_director','finance_reviewer') and @ss.hasPermi('price:material-sources:edit')) or (@ss.hasPermi('price:material-sources:list') and @ss.hasPermi('quote:costing:bom:alternative-select'))")
+  @PreAuthorize("@ss.hasAnyRole('admin','bu_director','bu_staff') or (@ss.hasRole('finance_reviewer') and @ss.hasPermi('price:material-sources:edit')) or (@ss.hasPermi('price:material-sources:list') and @ss.hasPermi('quote:costing:bom:alternative-select'))")
   public CommonResult<java.util.List<Entry>> changeBatch(@RequestBody java.util.List<Change> changes,Principal principal) {
     return CommonResult.success(service.changeBatch(BusinessUnitContext.getCurrentBusinessUnitType(),changes,principal.getName()));
   }

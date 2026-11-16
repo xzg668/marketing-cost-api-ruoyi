@@ -932,7 +932,15 @@ public class QuoteEffectiveBomApplicationServiceImpl
     var organizations = new LinkedHashMap<String,String>();
     for (var request : requests) organizations.put(request.materialCode(),
         com.sanhua.marketingcost.enums.MaterialOrganization.fromCode(request.materialOrgCode()).getPriceOrgCode());
-    return quoteShapeInputs.apply(context.businessUnit(),context.costPeriodMonth(),context.oaFormItemId(),decisions,organizations);
+    // A supplier fallback deliberately omits actions for the untouched default. An explicit
+    // quotation shape must still receive the matched material policy's conditional child rules.
+    var policyActions = new LinkedHashMap<String,String>();
+    resolutions.forEach((code,resolution) -> {
+      if (resolution != null && resolution.actionConfigJson() != null)
+        policyActions.put(code,resolution.actionConfigJson());
+    });
+    return quoteShapeInputs.apply(context.businessUnit(),context.costPeriodMonth(),context.oaFormItemId(),
+        decisions,organizations,policyActions);
   }
 
   private static boolean isShapeLessStructureRoot(

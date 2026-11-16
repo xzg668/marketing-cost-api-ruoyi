@@ -114,7 +114,8 @@ public class JjbProjection {
       if ("OTHER_INDEPENDENT".equals(cost.getCostCode()) && cost.getAmount() != null && BigDecimal.ZERO.compareTo(cost.getAmount()) == 0) continue;
       rows.add(cost(cost, "MATERIAL_DETAIL").build());
     }
-    rows = packagingDetails(rows, preparations, traces, warnings);
+    rows = packagingDetails(rows, preparations, traces, warnings,
+        snapshot == null || snapshot.pricingBom() == null ? List.of() : snapshot.pricingBom().nodes());
     for (String code : ORDINARY) addCost(rows, costMap, code, "ORDINARY", calc, warnings);
     for (String code : THREE) addCost(rows, costMap, code, "THREE_EXPENSES", calc, warnings);
     rows.add(subtotal("THREE_SUBTOTAL", "THREE_EXPENSES", "三项费用小计", THREE.stream()
@@ -273,7 +274,10 @@ public class JjbProjection {
       children.forEach(child->manufacturing.add(JjbManufacturingEvidence.describe(child)));
       row=row.toBuilder().manufacturing(manufacturing).build();
       if(children.size()==1) {
-        result.add(weights(row.toBuilder(),children.get(0)).build());
+        var child=children.get(0);
+        result.add(weights(row.toBuilder(),child)
+            .displayCode(parentChild(row.code(),text(child,"childMaterialNo")))
+            .displayName(parentChild(first(row.name(),row.code()),first(text(child,"childMaterialName"),text(child,"childMaterialNo")))).build());
       } else {
         result.add(row);int index=0;
         for(var child:children) {
@@ -281,7 +285,7 @@ public class JjbProjection {
           result.add(weights(Row.builder(),child).key(row.key()+":MAKE:"+(++index))
               .manufacturing(List.of(JjbManufacturingEvidence.describe(child)))
               .section("ORDINARY_PARTS").kind("EXPLANATION").code(row.code()+"\n【"+code+"】")
-              .name(first(text(child,"childMaterialName"),code)).drawingNo(text(child,"childMaterialSpec"))
+              .name(parentChild(first(row.name(),row.code()),first(text(child,"childMaterialName"),code))).drawingNo(text(child,"childMaterialSpec"))
               .unitPrice(number(child,"costPrice")).partItemIds(row.partItemIds()).sources(row.sources())
               .remark("母件 "+row.code()+" 的制造明细；金额已计入母件，不重复汇总").build());
         }
@@ -297,7 +301,8 @@ public class JjbProjection {
 
   /** 包装母件是取价依据，包装费才是含系数后的材料贡献；读取保存依据，不重算历史。 */
   private ArrayList<Row> packagingDetails(List<Row> rows, List<PricePrepareItem> preparations,
-      List<CostRunTraceSnapshot> traces, List<String> warnings) {
+      List<CostRunTraceSnapshot> traces, List<String> warnings,
+      List<com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomNodeResponse> savedBom) {
     var fees = rows.stream().filter(row -> "OTHER_EXP_PACKAGE".equals(row.code())).toList();
     var buckets = rows.stream().filter(row -> "BOM_BUCKET_PACKAGE".equals(row.code())).toList();
     Row fee = fees.size() == 1 ? fees.getFirst() : fees.isEmpty() && buckets.size() == 1 ? buckets.getFirst() : null;
@@ -334,11 +339,13 @@ public class JjbProjection {
             || row.paths().stream().anyMatch(path -> componentPaths.stream().anyMatch(parent -> path.startsWith(parent + "/")))))
         .toList();
     var evidence = new ArrayList<Row>(hidden); evidence.add(fee);
+    var identities = JjbPackagingIdentity.from(componentRows, savedBom);
     var result = new ArrayList<Row>();
     for (var row : rows) {
       if (hidden.contains(row)) continue;
       if (row == fee) {
         result.add(row.toBuilder().name("包装费用")
+            .displayCode(identities.codes()).drawingNo(identities.specifications())
             .costItemIds(evidence.stream().flatMap(value -> value.costItemIds().stream()).distinct().sorted().toList())
             .partItemIds(evidence.stream().flatMap(value -> value.partItemIds().stream()).distinct().toList())
             .monthlyPriceIds(evidence.stream().flatMap(value -> value.monthlyPriceIds().stream()).distinct().toList())
@@ -361,7 +368,7 @@ public class JjbProjection {
     var result = new ArrayList<Row>();
     for (var row : rows) {
       result.add(row);
-      if (row.partItemIds().size()!=1) continue;
+      if (!"PART".equals(row.kind()) || !row.manufacturing().isEmpty() || row.partItemIds().size()!=1) continue;
       var trace = byPart.get(row.partItemIds().getFirst());
       if (trace == null) continue;
       var source = tree(trace.getSourceSnapshotJson());
@@ -374,7 +381,7 @@ public class JjbProjection {
         String code = text(child,rollup?"childMaterialCode":"childMaterialNo");
         if (code == null) continue;
         result.add(Row.builder().key(row.key()+":EXPLANATION:"+(++index)).section("ORDINARY_PARTS").kind("EXPLANATION")
-            .code(row.code()+"\n【"+code+"】").name(first(text(child,"childMaterialName"),code))
+            .code(row.code()+"\n【"+code+"】").name(parentChild(first(row.name(),row.code()),first(text(child,"childMaterialName"),code)))
             .drawingNo(text(child,"childMaterialSpec")).unitPrice(number(child,rollup?"childUnitCost":"costPrice"))
             .quantity(rollup?text(child,"childQtyPerTop"):null)
             .grossWeight(decimalNumber(child,"grossWeightG")).netWeight(decimalNumber(child,"netWeightG"))
@@ -386,6 +393,10 @@ public class JjbProjection {
       }
     }
     return result;
+  }
+  private static String parentChild(String parent,String child) {
+    if(child==null || child.isBlank()) return parent;
+    return Objects.toString(parent,"")+"\n【"+child+"】";
   }
   private static String number(JsonNode node,String field) {
     String value=text(node,field);return value==null?null:money(new BigDecimal(value));

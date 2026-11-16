@@ -9,6 +9,12 @@ import java.util.List;
 /** 报价物料明细标准/替代选择 API 的应用层入口。 */
 public interface QuoteBomAlternativeApplicationService {
 
+  /** Read current candidates without creating or reconciling saved selections. */
+  record Inspection(String periodMonth, String organization,
+      List<com.sanhua.marketingcost.dto.quotebom.QuoteBomAlternativeGroupResponse> groups) {}
+
+  Inspection inspectAlternativeGroups(String oaNo, Long oaFormItemId, String periodMonth);
+
   QuoteBomAlternativeSummaryResponse getAlternativeGroups(
       String oaNo, Long oaFormItemId, String periodMonth);
 

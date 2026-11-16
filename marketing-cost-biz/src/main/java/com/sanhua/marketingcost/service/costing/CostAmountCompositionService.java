@@ -150,7 +150,8 @@ public class CostAmountCompositionService {
     if(!evidence.sources().isEmpty() && evidence.sources().stream().allMatch(s->s.rowIds()!=null && !s.rowIds().isBlank())) {
       if(code.startsWith("AUX_")) reference=decimal(evidence.sourceAmount()).subtract(decimal(evidence.excludedAmount()))
           .setScale(6,RoundingMode.HALF_UP).multiply(rate==null?BigDecimal.ONE:rate).setScale(6,RoundingMode.HALF_UP);
-      else if(Set.of("DIRECT_LABOR","INDIRECT_LABOR").contains(code)) reference=decimal(evidence.sourceAmount()).setScale(6,RoundingMode.HALF_UP);
+      else if(Set.of("DIRECT_LABOR","INDIRECT_LABOR").contains(code)) reference=decimal(evidence.sourceAmount())
+          .subtract(decimal(evidence.excludedAmount())).setScale(6,RoundingMode.HALF_UP);
     }
     String calculation="";
     if (Set.of("OTHER_EXP_PACKAGE","BOM_BUCKET_PACKAGE").contains(code)) {
@@ -161,7 +162,8 @@ public class CostAmountCompositionService {
       var adoptedBase=decimal(evidence.sourceAmount()).subtract(decimal(evidence.excludedAmount())).setScale(6,RoundingMode.HALF_UP);
       calculation=evidence.sourceAmount()+" − "+evidence.excludedAmount()+" = "+number(adoptedBase)+" 元；"
           +number(adoptedBase)+" × "+number(rate==null?BigDecimal.ONE:rate)+" = "+number(reference)+" 元";
-    } else if (reference!=null) calculation="CMS生效来源合计 = "+number(reference)+" 元";
+    } else if (reference!=null) calculation="CMS来源合计 "+evidence.sourceAmount()+" − 本单剔除 "
+        +number(decimal(evidence.excludedAmount()))+" = 实际计入人工 "+number(reference)+" 元";
     else if (base!=null && rate!=null && amount!=null) {
       var displayed=base.multiply(rate).setScale(6,RoundingMode.HALF_UP);
       calculation=number(base)+" × "+number(rate)+" = "+number(displayed)+" 元";

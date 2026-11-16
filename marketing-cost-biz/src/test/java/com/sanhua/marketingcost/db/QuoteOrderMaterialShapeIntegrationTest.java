@@ -155,7 +155,7 @@ class QuoteOrderMaterialShapeIntegrationTest extends OriginalPricingIntegrationT
     for(int i=2;i<=50;i++)consumers.add(sharedConsumer(first,true,String.valueOf(i)));
     var view=collect(first);assertThat(view.path("problems")).as(view.toString()).isEmpty();
     assertThat(row(view,first.parent()).path("products").size()).isEqualTo(50);
-    var saved=chooseSource(first,"PURCHASE","FIXED");assertThat(saved.path("affectedItemIds").size()).isEqualTo(50);
+    classifyPurchase(first);var saved=choose(first,"PURCHASE");assertThat(saved.path("affectedItemIds").size()).isEqualTo(50);
     for(int i=0;i<consumers.size();i++) {
       var consumer=consumers.get(i);var result=calculate(consumer);
       assertThat(result.path("pipelineStatus").asText()).as("consumer "+i+" "+result).isEqualTo("SUCCESS");
@@ -166,52 +166,53 @@ class QuoteOrderMaterialShapeIntegrationTest extends OriginalPricingIntegrationT
     assertThat(part(latest(later),first.parent())).isEqualByComparingTo("80");
   }
 
-  @Test void explicitSourceChangesAloneRecostEveryConsumerWithoutClassifyingThePublicCatalog() throws Exception {
+  @Test void financeClassificationControlsSourcesAndLegacyOrderOverridesAreIgnored() throws Exception {
     var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);var second=sharedConsumer(s,true,"5");var other=sharedConsumer(s,false,"1");
-    chooseSource(s,"PURCHASE","FIXED");
+    collect(s);classifyPurchase(s);choose(s,"PURCHASE");
+    jdbc.update("UPDATE lp_quote_order_material_shape SET selected_source_type='LINKED' WHERE material_code=?",s.parent());
     assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
     assertThat(calculate(second).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
     long old=latest(s),oldSecond=latest(second);
     assertThat(part(old,s.parent())).isEqualByComparingTo("50");assertThat(part(oldSecond,s.parent())).isEqualByComparingTo("100");
-    assertThat(chooseSource(s,"PURCHASE","LINKED").path("affectedItemIds").size()).isEqualTo(2);
+    jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=99 WHERE material_code=?",s.parent());
+    choose(s,"PURCHASE");assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    assertThat(part(latest(s),s.parent())).as("相同财务分类和形态仍采用本月固定价20").isEqualByComparingTo("50");
+    for(var source:catalog.quotationSources("COMMERCIAL",s.month(),"210",s.parent())) if(!source.automatic())
+      catalog.change("COMMERCIAL",new MaterialPriceSourceCatalog.Change(s.month(),"210",s.parent(),source.sourceType(),source.sourceType().equals("LINKED")?"PURCHASE":"OUTSOURCE",source.version()),"finance");
     assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
     assertThat(calculate(second).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
-    assertThat(latest(s)).isNotEqualTo(old);assertThat(part(latest(s),s.parent())).isEqualByComparingTo("7.5");
+    assertThat(part(latest(s),s.parent())).isEqualByComparingTo("7.5");
     assertThat(part(latest(second),s.parent())).isEqualByComparingTo("15");
     assertThat(part(old,s.parent())).isEqualByComparingTo("50");assertThat(part(oldSecond,s.parent())).isEqualByComparingTo("100");
-    jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=99 WHERE material_code=?",s.parent());
-    chooseSource(s,"PURCHASE","FIXED");assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
-    assertThat(part(latest(s),s.parent())).as("切回同来源沿用本月已采用的固定价20，不改用后来原始价99").isEqualByComparingTo("50");
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_price_attribute WHERE material_code=?",Integer.class,s.parent())).isZero();
     assertThat(calculate(other).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
     assertThat(part(latest(other),s.parent())).isEqualByComparingTo("9");
-    var view=collect(s);assertThat(row(view,s.parent()).path("selectedSourceType").asText()).isEqualTo("FIXED");
+    var view=collect(s);assertThat(view.path("sourceSelectionSupported").asBoolean()).isFalse();
+    assertThat(row(view,s.parent()).path("selectedSourceType").isNull()).isTrue();
   }
 
   @Test void chosenMissingSourceDoesNotFallBackAndZeroSourcePricesRemainValid() throws Exception {
     var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
-    chooseSource(s,"PURCHASE","FIXED");jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",s.parent());
+    collect(s);classifyPurchase(s);choose(s,"PURCHASE");jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",s.parent());
     var result=calculate(s);assertThat(result.path("pipelineStatus").asText()).as(result.toString()).isNotEqualTo("SUCCESS");
-    assertThat(result.toString()).contains("FIXED");
     var zero=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
     jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=0 WHERE material_code=?",zero.parent());
-    chooseSource(zero,"PURCHASE","FIXED");assertThat(calculate(zero).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    collect(zero);classifyPurchase(zero);choose(zero,"PURCHASE");assertThat(calculate(zero).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
     assertThat(part(latest(zero),zero.parent())).isEqualByComparingTo("0");
   }
 
-  @Test void sourceMustBelongToTheMaterialAndMatchItsExplicitShape() throws Exception {
+  @Test void quotationCannotOverrideFinanceSourcesAndDefaultRestoresOriginalPricing() throws Exception {
     var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);
-    for(var invalid:List.of(new String[]{"PURCHASE","MAKE"},new String[]{"MANUFACTURE","FIXED"},new String[]{"PURCHASE","UNKNOWN"}))
+    for(var invalid:List.of(new String[]{"PURCHASE","FIXED"},new String[]{"PURCHASE","LINKED"},new String[]{"PURCHASE","MAKE"},new String[]{"MANUFACTURE","FIXED"},new String[]{"PURCHASE","UNKNOWN"}))
       assertThatThrownBy(()->chooseSource(s,invalid[0],invalid[1])).isInstanceOf(AssertionError.class);
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_order_material_shape",Integer.class)).isZero();
-    chooseSource(s,"PURCHASE","FIXED");chooseSource(s,null,null);
+    collect(s);classifyPurchase(s);choose(s,"PURCHASE");choose(s,null);
     assertThat(jdbc.queryForObject("SELECT selected_source_type FROM lp_quote_order_material_shape WHERE material_code=?",String.class,s.parent())).isNull();
   }
 
   @Test void batchIsAtomicAndStaleViewsCannotOverwriteChoicesOrUseTheLegacyProductEndpoint() throws Exception {
     var s=MaterialShapeSwitchTestData.create(jdbc,hierarchy,rules);String second=MaterialShapeSwitchTestData.secondParent(jdbc,hierarchy,s);
     collect(s);
-    assertThatThrownBy(()->choose(s,"PURCHASE")).hasMessageContaining("填写各来源的形态属性");
+    assertThatThrownBy(()->choose(s,"PURCHASE")).hasMessageContaining("财务");
     classifyPurchase(s);
     for(var source:catalog.list("COMMERCIAL",new MaterialPriceSourceCatalog.Filter(s.month(),second,"210","",1,100)).rows())
       if(!source.automatic())catalog.change("COMMERCIAL",new MaterialPriceSourceCatalog.Change(s.month(),"210",second,source.sourceType(),"PURCHASE",source.version()),"finance");
@@ -241,7 +242,7 @@ class QuoteOrderMaterialShapeIntegrationTest extends OriginalPricingIntegrationT
           assertThatThrownBy(()->call(HttpMethod.PATCH,order(s),Map.of("expectedFingerprint",view.path("fingerprint").asText(),"selections",List.of(fake))))
               .hasMessageContaining("原采购件不能调整形态");
         }
-        classifyPurchase(s);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_price_attribute WHERE material_code=?",Integer.class,s.parent())).isZero();
         assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
       } else {
         assertThat(row(view,s.parent()).path("allowedShapes").toString()).doesNotContain("MANUFACTURE");

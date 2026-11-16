@@ -142,9 +142,9 @@ class QuoteOrderMaterialShapesTest {
   }
 
   @Test
-  void choosingTheSameSourceAgainKeepsItsAdoptedMonthlyPriceScope() {
-    var sources = List.of(new QuoteMaterialShapeInputs.Source("210", "A", "FIXED", null, 0),
-        new QuoteMaterialShapeInputs.Source("210", "A", "LINKED", null, 0));
+  void reselectingTheSameFinanceClassifiedShapeKeepsItsMonthlyPriceScope() {
+    var sources = List.of(new QuoteMaterialShapeInputs.Source("210", "A", "FIXED", "PURCHASE", 0),
+        new QuoteMaterialShapeInputs.Source("210", "A", "LINKED", "OUTSOURCE", 0));
     var first = new QuoteMaterialShapeInputs.Catalog(sources,
         List.of(new QuoteMaterialShapeInputs.Choice("210", "A", "PURCHASE", 1, "FIXED")));
     var returned = new QuoteMaterialShapeInputs.Catalog(sources,

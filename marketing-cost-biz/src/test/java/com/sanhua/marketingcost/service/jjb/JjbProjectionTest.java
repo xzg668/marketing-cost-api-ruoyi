@@ -99,7 +99,7 @@ class JjbProjectionTest {
     var model=projection.project(new Stored(version(),null,List.of(p),List.of()),new OaForm(),new OaFormItem(),List.of(trace));
     assertThat(model.rows().get(0).amount()).isEqualTo("6.000000");
     var explanation=model.rows().get(1);assertThat(explanation.kind()).isEqualTo("EXPLANATION");assertThat(explanation.code()).isEqualTo("PARENT\n【CHILD】");
-    assertThat(explanation.drawingNo()).isEqualTo("OLD-DRAW");assertThat(explanation.amount()).isNull();assertThat(explanation.partItemIds()).containsExactly(20L);
+    assertThat(explanation.name()).isEqualTo("母件\n【子件】");assertThat(explanation.drawingNo()).isEqualTo("OLD-DRAW");assertThat(explanation.amount()).isNull();assertThat(explanation.partItemIds()).containsExactly(20L);
   }
 
   @Test void monthlyManufacturedPartDisplaysItsAlreadySavedWeightsAndPricesWithoutLegacyTraces() {
@@ -110,6 +110,9 @@ class JjbProjectionTest {
     prepared.setInputSnapshotJson("{\"calculatorVersion\":\"MAKE_PART_V1\",\"materialCode\":\"7218501041211\",\"rows\":[{\"parentMaterialNo\":\"7218501041211\",\"childMaterialNo\":\"201850068\",\"grossWeightG\":24.8,\"netWeightG\":14,\"rawUnitPrice\":0.66070796460177,\"scrapUnitPrice\":7.21238938053097}]}");
     var model=projection.project(new Stored(version(),null,List.of(part),List.of()),new OaForm(),new OaFormItem(),List.of(),List.of(prepared));
     var row=model.rows().getFirst();
+    assertThat(row.code()).isEqualTo("7218501041211");
+    assertThat(row.displayCode()).isEqualTo("7218501041211\n【201850068】");
+    assertThat(row.displayName()).isEqualTo("7218501041211\n【201850068】");
     assertThat(row.grossWeight()).isEqualTo("24.8");assertThat(row.netWeight()).isEqualTo("14");
     assertThat(row.rawUnitPrice()).isEqualTo("0.660708");assertThat(row.scrapUnitPrice()).isEqualTo("7.212389");
     assertThat(row.amount()).isEqualTo("0.582814");
@@ -153,6 +156,7 @@ class JjbProjectionTest {
     });
     assertThat(packaging).singleElement().satisfies(r->{
       assertThat(r.name()).isEqualTo("包装费用");
+      assertThat(r.displayCode()).isEqualTo("9830000025711");
       assertThat(r.partItemIds()).containsExactly(652L);
       assertThat(r.sources()).anyMatch(ref->"lp_price_prepare_item".equals(ref.table()) && ref.id()==3154L);
     });
@@ -167,7 +171,11 @@ class JjbProjectionTest {
       for(var row:sheet) {
         var cell=row.getCell(6);
         if(cell!=null && cell.getCellType()==org.apache.poi.ss.usermodel.CellType.NUMERIC
-            && Math.abs(cell.getNumericCellValue()-0.324345)<0.0000001) amounts++;
+            && Math.abs(cell.getNumericCellValue()-0.324345)<0.0000001) {
+          amounts++;
+          assertThat(row.getCell(0).getStringCellValue()).isEqualTo("9830000025711");
+          assertThat(row.getCell(1).getStringCellValue()).isEqualTo("包装费用");
+        }
       }
       assertThat(amounts).isEqualTo(1);
     }

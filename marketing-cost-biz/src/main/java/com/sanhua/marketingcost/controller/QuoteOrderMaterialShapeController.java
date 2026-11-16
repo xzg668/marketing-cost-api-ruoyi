@@ -18,7 +18,7 @@ public class QuoteOrderMaterialShapeController {
   @PreAuthorize("@ss.hasPermi('ingest:quote:list')")
   public CommonResult<QuoteOrderMaterialShapes.View> prepare(@PathVariable String oaNo,Principal actor) {return CommonResult.success(service.prepare(oaNo,actor.getName()));}
   @PatchMapping
-  @PreAuthorize("@ss.hasPermi('ingest:quote:list') and @ss.hasAnyRole('admin','bu_director','finance_reviewer') and (@ss.hasPermi('price:material-sources:edit') or @ss.hasPermi('quote:costing:bom:alternative-select'))")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:list') and (@ss.hasAnyRole('admin','bu_director','bu_staff') or @ss.hasPermi('quote:costing:bom:alternative-select') or (@ss.hasRole('finance_reviewer') and @ss.hasPermi('price:material-sources:edit')))")
   public CommonResult<QuoteOrderMaterialShapes.Saved> change(@PathVariable String oaNo,@RequestBody QuoteOrderMaterialShapes.Change change,Principal actor) {
     return CommonResult.success(service.change(oaNo,change,actor.getName()));
   }

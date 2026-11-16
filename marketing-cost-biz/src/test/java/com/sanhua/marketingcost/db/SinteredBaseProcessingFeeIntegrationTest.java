@@ -35,7 +35,7 @@ class SinteredBaseProcessingFeeIntegrationTest extends MonthlyRepriceCostingFixt
     new ResourceDatabasePopulator(resource).execute(jdbc.getDataSource());
   }
 
-  @Test void ancestorFeeUsesItsOwnCodeOnceAndKeepsAllExistingMaterialRows() {
+  @Test void manufacturedAncestorKeepsExistingMaterialRowsWithoutInventingAnOutsourceFee() {
     var nodes = List.of(node("P", null, "成品", "制造件", "1"),
         node("201850113", "P", "烧结基座", "制造件", "1"),
         node("201850157", "P/201850113", "烧结基座毛坯", "制造件", "1"),
@@ -44,21 +44,13 @@ class SinteredBaseProcessingFeeIntegrationTest extends MonthlyRepriceCostingFixt
         node("PIN", "P/201850113/201850157", "导针", "采购件", "2"));
     var before = engine.build(request(nodes, activeRules().stream().filter(r -> !RULE.equals(r.getRuleCode())).toList()));
     var after = engine.build(request(nodes, activeRules()));
-    assertThat(after.costingRows()).filteredOn(r -> "OUTSOURCED_PROCESS_FEE".equals(r.getSettlementRowType()))
-        .singleElement().satisfies(row -> {
-          assertThat(row.getMaterialCode()).isEqualTo("201850113");
-          assertThat(row.getMaterialName()).isEqualTo("烧结基座-委外加工费");
-          assertThat(row.getQtyPerTop()).isEqualByComparingTo("1");
-          assertThat(row.getShapeAttr()).isEqualTo("委外加工件");
-          assertThat(row.getSubtreeCostRequired()).isZero();
-        });
-    assertThat(after.costingRows().stream().filter(r -> !"OUTSOURCED_PROCESS_FEE".equals(r.getSettlementRowType())).toList())
-        .usingRecursiveComparison().isEqualTo(before.costingRows());
+    assertThat(after.costingRows()).noneMatch(r -> "OUTSOURCED_PROCESS_FEE".equals(r.getSettlementRowType()));
+    assertThat(after.costingRows()).usingRecursiveComparison().isEqualTo(before.costingRows());
   }
 
   @Test void nameScopeIsNotAConfiguredMaterialCodeAndBlankRemainsAPricedMaterial() {
     var nodes = List.of(node("P", null, "成品", "制造件", "1"),
-        node("ANOTHER-CODE", "P", "定制烧结基座组件", "制造件", "2.5"),
+        node("ANOTHER-CODE", "P", "定制烧结基座组件", "委外加工件", "2.5"),
         node("BLANK", "P/ANOTHER-CODE", "烧结基座毛坯", "采购件", "2.5"),
         node("OTHER", "P", "普通制造组件", "制造件", "1"),
         node("OTHER-RAW", "P/OTHER", "普通原料", "采购件", "1"));
@@ -81,9 +73,9 @@ class SinteredBaseProcessingFeeIntegrationTest extends MonthlyRepriceCostingFixt
         node("RAW-B", "P/B/BASE", "原料B", "采购件", "3"));
     var fees = engine.build(request(nodes, activeRules())).costingRows().stream()
         .filter(r -> "OUTSOURCED_PROCESS_FEE".equals(r.getSettlementRowType())).toList();
-    assertThat(fees).hasSize(2).extracting(BomCostingRow::getMaterialCode).containsOnly("BASE");
+    assertThat(fees).hasSize(1).extracting(BomCostingRow::getMaterialCode).containsOnly("BASE");
     assertThat(fees.stream().map(BomCostingRow::getQtyPerTop).reduce(BigDecimal.ZERO, BigDecimal::add))
-        .isEqualByComparingTo("5");
+        .isEqualByComparingTo("2");
   }
 
   @Test void wholeAssemblyHouseholdPriceStillStopsItsSubtreeAndFee() {
@@ -97,7 +89,7 @@ class SinteredBaseProcessingFeeIntegrationTest extends MonthlyRepriceCostingFixt
     });
   }
 
-  @Test void freshCostAddsTheFeeAdoptsItsMonthlyPriceAndPreservesSavedHistory() throws Exception {
+  @Test void manufacturedCostIgnoresNameOnlyFeeRulePreservesHistoryAndExportsActualMaterials() throws Exception {
     unit = "COMMERCIAL"; priceOrg = "210"; materialOrg = "COMMERCIAL";
     String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
     repriceProperties.setGoLiveMonths(Map.of(unit, month));
@@ -144,15 +136,12 @@ class SinteredBaseProcessingFeeIntegrationTest extends MonthlyRepriceCostingFixt
       assertThat(after.getCostVersionId()).isNotEqualTo(before.getCostVersionId());
       var parts = jdbc.queryForList("SELECT part_code AS material_code,part_name,unit_price,amount AS material_cost FROM lp_cost_run_part_item WHERE cost_run_version_id=? ORDER BY part_code", after.getCostVersionId());
       var fee = parts.stream().filter(p -> base.equals(p.get("material_code"))).toList();
-      assertThat(fee).hasSize(1);
-      assertThat(fee.getFirst().get("part_name")).isEqualTo("烧结基座-委外加工费");
-      assertThat((BigDecimal) fee.getFirst().get("unit_price")).isCloseTo(new BigDecimal("2.87610619"), org.assertj.core.data.Offset.offset(new BigDecimal("0.000001")));
-      assertThat(parts.stream().filter(p -> !base.equals(p.get("material_code"))).toList()).isEqualTo(oldParts);
-      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?", Integer.class, base)).isEqualTo(1);
+      assertThat(fee).isEmpty();
+      assertThat(parts).isEqualTo(oldParts);
+      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?", Integer.class, base)).isZero();
       assertThat(jdbc.queryForMap("SELECT id,total_cost,final_quote_amount,jianji_snapshot_json FROM lp_quote_cost_run_version WHERE id=?", before.getCostVersionId())).isEqualTo(old);
       var saved = jdbc.queryForMap("SELECT id,total_cost,final_quote_amount,jianji_snapshot_json FROM lp_quote_cost_run_version WHERE id=?", after.getCostVersionId());
-      assertThat(saved.get("jianji_snapshot_json").toString()).contains(base);
-      assertThat((BigDecimal) saved.get("total_cost")).isGreaterThan((BigDecimal) old.get("total_cost"));
+      assertThat((BigDecimal) saved.get("total_cost")).isEqualByComparingTo((BigDecimal) old.get("total_cost"));
       var repeated = pipeline.execute(request);
       assertThat(repeated.isReusedSuccess()).isTrue();
       assertThat(repeated.getCostVersionId()).isEqualTo(after.getCostVersionId());
@@ -161,7 +150,7 @@ class SinteredBaseProcessingFeeIntegrationTest extends MonthlyRepriceCostingFixt
       try (var book = new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(workbook.toByteArray()))) {
         var text = new StringBuilder(); var formatter = new org.apache.poi.ss.usermodel.DataFormatter();
         for (var sheet : book) for (var row : sheet) for (var cell : row) text.append(formatter.formatCellValue(cell)).append('\n');
-        assertThat(text.toString()).contains(base, "烧结基座-委外加工费");
+        assertThat(text.toString()).contains(material).doesNotContain("烧结基座-委外加工费");
       }
       String evidence = System.getProperty("sintered.test.evidence");
       if (evidence != null) {

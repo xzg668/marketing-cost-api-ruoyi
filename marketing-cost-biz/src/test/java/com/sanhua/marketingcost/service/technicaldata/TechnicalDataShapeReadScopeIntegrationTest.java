@@ -50,6 +50,7 @@ class TechnicalDataShapeReadScopeIntegrationTest extends OriginalPricingIntegrat
   void setFixed(String value){jdbc.update("UPDATE lp_material_price_attribute SET material_attribute=?,row_version=row_version+1 WHERE material_code=? AND price_source_type='FIXED'",value,code);}
   @Test void repeatedBasePriceReadsWithinOnePreviewDoNotReloadTheSameShapeInputs() {
     var context=new MonthlyMaterialPrices.Context("COMMERCIAL","READ-OA",itemId,"CAT-TOP",YearMonth.of(2026,11),LocalDateTime.of(2026,11,13,0,0),"admin","210");
+    jdbc.update("INSERT INTO lp_quote_material_shape_selection(business_unit_type,oa_form_item_id,period_month,price_org_code,material_code,selected_shape,row_version,updated_by) VALUES('COMMERCIAL',?,'2026-11','210',?,'PURCHASE',1,'TEST')",itemId,code);
     clearInvocations(measured);
     transaction(true,false).execute(status->{
       for(int i=1;i<=120;i++) {

@@ -38,10 +38,13 @@ public class OutsourceScrapPreparation {
     var rows=new ArrayList<>(built.costingRows());
     var removed=new HashSet<String>();
     for(var parent:nodes) {
-      if(!outsource(parent) || catalog.priceScope(parent.priceOrgCode(),parent.materialCode(),"OUTSOURCE")==null) continue;
+      var choice=catalog.choice(parent.priceOrgCode(),parent.materialCode());
+      if(!outsource(parent) || choice==null || !"OUTSOURCE".equals(choice.selectedShape())) continue;
       var children=nodes.stream().filter(n -> Objects.equals(parentPath(n.path()),path(parent.path()))).toList();
-      if(children.size()!=1 || !purchase(children.getFirst()))
-        throw missing(parent.materialCode(),parent.materialName(),"委外材料结构未明确，需要唯一直接采购材料来确定废料重量归属");
+      // Changing to outsource preserves the existing assembly. The SRM gross-minus-net
+      // strategy only applies to a single purchased input; assemblies retain the existing
+      // per-node material and byproduct calculation, without inventing a shared raw weight.
+      if(children.size()!=1 || !purchase(children.getFirst())) continue;
       var child=children.getFirst();
       var mappings=scraps.listMappings(child.materialCode(),unit);
       if(mappings==null || mappings.size()!=1)
@@ -129,7 +132,7 @@ public class OutsourceScrapPreparation {
     for(var node:nodes) {
       var choice=catalog.choice(node.priceOrgCode(),node.materialCode());
       String shape=outsource(node)?"OUTSOURCE":purchase(node)?"PURCHASE":null;
-      if(shape==null || (choice==null && catalog.priceScope(node.priceOrgCode(),node.materialCode(),shape)==null)) continue;
+      if(shape==null || choice==null || !shape.equals(choice.selectedShape())) continue;
       result.add(path(node.path()));
       if("OUTSOURCE".equals(shape)) nodes.stream()
           .filter(child -> path(node.path()).equals(parentPath(child.path())) && purchase(child))

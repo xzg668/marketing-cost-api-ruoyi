@@ -114,7 +114,7 @@ class MaterialShapeSwitchIntegrationTest extends OriginalPricingIntegrationTestB
     var response=rest.exchange("http://127.0.0.1:"+port+base(s)+"/effective-bom/material-shape",HttpMethod.PATCH,new HttpEntity<>(body,headers),String.class);
     var rejected=json.readTree(response.getBody());
     assertThat(rejected.path("code").asInt()).isNotZero();
-    assertThat(rejected.path("msg").asText()).contains("公共", "形态");
+    assertThat(rejected.path("msg").asText()).contains("财务", "形态");
     assertThat(jdbc.queryForList("SELECT price_source_type FROM lp_material_price_source_row WHERE material_code=? AND price_source_type<>'MAKE'",String.class,s.parent()))
         .containsExactlyInAnyOrder("FIXED","LINKED");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_material_shape_selection WHERE oa_form_item_id=?",Integer.class,s.itemId())).isZero();
@@ -205,7 +205,13 @@ class MaterialShapeSwitchIntegrationTest extends OriginalPricingIntegrationTestB
     jdbc.update("UPDATE lp_bom_raw_hierarchy SET shape_attr='委外加工件' WHERE top_product_code=? AND material_code=?",s.product(),s.parent());
     preparations.prepareByOaFormItem(s.itemId(),java.time.LocalDate.now(),s.month());
     assertThat(bom(s).path("nodes").toString()).contains("委外加工件");
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    long defaultCost=latest(s);
+    var defaultParts=jdbc.queryForList("SELECT part_code,qty,unit_price,amount FROM lp_cost_run_part_item WHERE cost_run_version_id=? ORDER BY part_code",defaultCost);
     classify(s);
+    assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
+    assertThat(jdbc.queryForList("SELECT part_code,qty,unit_price,amount FROM lp_cost_run_part_item WHERE cost_run_version_id=? ORDER BY part_code",latest(s))).isEqualTo(defaultParts);
+    choose(s,"OUTSOURCE");
     assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
     long outsourced=latest(s);assertThat(part(outsourced,s.parent())).isEqualByComparingTo("7.5");
     assertThat(part(outsourced,s.raw())).isEqualByComparingTo("25");assertThat(part(outsourced,s.scrap())).isEqualByComparingTo("-2.5");

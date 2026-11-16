@@ -165,6 +165,14 @@ public class BomSettlementRowBuildEngine {
         continue;
       }
 
+      // An explicitly outsourced assembly has its own processing price even when
+      // its direct children are manufactured parts. Retain all child processing;
+      // the shared emitted-path guard prevents a later purchased child adding it twice.
+      if (isOutsourcedNode(node) && shapePricePaths.contains(
+          com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(node.path()))) {
+        appendProcessFeeRow(request, node, null, extraRows, sourceRefs, emittedProcessFeePaths);
+      }
+
       if (isPackageComponentParent(node) && !children.isEmpty()
           && children.stream().allMatch(child -> householdPaths.contains(
               com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(child.path())))) {
@@ -172,6 +180,14 @@ public class BomSettlementRowBuildEngine {
         continue;
       }
 
+      // A name-based legacy rule may identify a process, but cannot change the
+      // actual quotation shape into outsourcing. Ineligible fee rules must not
+      // hide a later material/rollup rule or consume the ordinary pricing path.
+      List<BomSettlementRule> applicableRules = isOutsourcedNode(node)
+          ? nonExcludeRules
+          : nonExcludeRules.stream()
+              .filter(rule -> !ACTION_ADD_PROCESS_FEE.equals(normalize(rule.getSettlementAction())))
+              .toList();
       Optional<BomSettlementRule> hit = shapePricePaths.contains(
           com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(node.path()))
           ? Optional.empty() : ruleMatcher.match(
@@ -180,7 +196,7 @@ public class BomSettlementRowBuildEngine {
           childContexts,
           requestedBomPurpose(request, node),
           request.asOfDate(),
-          nonExcludeRules);
+          applicableRules);
 
       // 排除完成后，再做上卷、包装/停止边界、额外附加行，最后才落到默认叶子。
       if (hit.isPresent()) {
@@ -258,6 +274,7 @@ public class BomSettlementRowBuildEngine {
         nodeByPath,
         childrenByParentPath,
         rollupBuckets.keySet(),
+        purchasedPassThroughLayers(normalRows, nodeByPath, childrenByParentPath, shapePricePaths),
         extraRows,
         warnings);
     costingRows.addAll(extraRows);
@@ -530,6 +547,7 @@ public class BomSettlementRowBuildEngine {
       Map<String, BomSettlementNode> nodeByPath,
       Map<String, List<BomSettlementNode>> childrenByParentPath,
       Set<String> rollupParentPaths,
+      Set<String> purchasedPassThroughLayers,
       List<BomCostingRow> extraRows,
       List<String> warnings) {
     if (request.byproducts().isEmpty() || request.byproductRules().isEmpty()) {
@@ -561,10 +579,58 @@ public class BomSettlementRowBuildEngine {
         continue;
       }
       for (BomSettlementNode parent : parentNodes) {
+        if (purchasedPassThroughLayers.contains(parent.path())) {
+          continue;
+        }
         appendOneByproductExtraRow(
             request, childrenByParentPath, parent, byproduct, extraRows);
       }
     }
+  }
+
+  /**
+   * A layer settled solely by a quotation-selected whole purchased part has no
+   * separate processing recovery. Ordinary raw purchases keep their existing
+   * rules. Stop at the nearest manufacturing layer: its ancestors and siblings
+   * may still perform independent processing. Virtual wrappers do not process.
+   *
+   * shapePricePaths also includes the raw input of a selected outsourced part;
+   * the outsource boundary below deliberately prevents treating it as a buyout.
+   */
+  private static Set<String> purchasedPassThroughLayers(
+      List<BomCostingRow> ordinaryRows,
+      Map<String, BomSettlementNode> nodes,
+      Map<String, List<BomSettlementNode>> children,
+      Set<String> shapePricePaths) {
+    Set<String> result = new HashSet<>();
+    for (BomCostingRow row : ordinaryRows) {
+      if (!ROW_TYPE_DEFAULT_LEAF.equals(row.getSettlementRowType())
+          || !shapePricePaths.contains(
+              com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(row.getPath()))) {
+        continue;
+      }
+      BomSettlementNode child = nodes.get(row.getPath());
+      if (child == null || !isTerminalPurchasedNode(child)) {
+        continue;
+      }
+      BomSettlementNode parent = nodes.get(parentPathOf(child.path()));
+      while (parent != null && isNonPackageVirtualNode(parent)
+          && hasOnlyChild(parent, child, children)) {
+        child = parent;
+        parent = nodes.get(parentPathOf(parent.path()));
+      }
+      if (parent != null && isManufacturedNode(parent)
+          && hasOnlyChild(parent, child, children)) {
+        result.add(parent.path());
+      }
+    }
+    return result;
+  }
+
+  private static boolean hasOnlyChild(BomSettlementNode parent, BomSettlementNode child,
+      Map<String, List<BomSettlementNode>> children) {
+    List<BomSettlementNode> direct = children.getOrDefault(parent.path(), List.of());
+    return direct.size() == 1 && direct.getFirst().path().equals(child.path());
   }
 
   private static Map<String, List<BomSettlementNode>> byproductCandidateNodes(

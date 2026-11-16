@@ -17,6 +17,8 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.annotation.*;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.access.AccessDeniedException;
@@ -83,6 +85,42 @@ class FinanceFactorPublicationControllerTest {
       assertThat(response.getData()).isNull();
     }
     verifyNoInteractions(publisher, copper, exports);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"bu_staff", "bu_director", "admin", "BU_STAFF"})
+  void quotationRolesCanReadAndExportBothOrganizationsWithoutGrantingMaintenance(String role) {
+    authenticate("ROLE_" + role);
+    for (String organization : List.of("210", "220")) {
+      var condition = "210".equals(organization) ? Condition.GENERAL : Condition.NON_TENDER;
+      var scope = new FinanceFactorImportContext("HOUSEHOLD", organization, "2026-11", null, null);
+      when(exports.selectedMonth(scope)).thenReturn(new FinanceFactorWorkbookExportService.ExportFile(
+          "财务基价.xlsx", "2026-11", 2, new byte[] {1, 2, 3}));
+      assertThat(controller.read("2026-11", organization, null, condition, null).isSuccess()).isTrue();
+      assertThat(controller.readCu("2026-11", organization, null, condition, null).isSuccess()).isTrue();
+      assertThat(controller.exportMonth("2026-11", organization).getBody())
+          .containsExactly((byte) 1, (byte) 2, (byte) 3);
+      verify(reader, times(2)).read(scope, condition, null);
+      verify(exports).selectedMonth(scope);
+      assertThatThrownBy(() -> controller.preview(file, "2026-11", organization, null, null))
+          .isInstanceOf(AccessDeniedException.class);
+      assertThatThrownBy(() -> controller.publish(file, "2026-11", organization, null, null, "hash", () -> "quote"))
+          .isInstanceOf(AccessDeniedException.class);
+    }
+    assertThatThrownBy(() -> controller.previewCu(1L, adjustment())).isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> controller.publishCu(1L, adjustment(), () -> "quote")).isInstanceOf(AccessDeniedException.class);
+    verifyNoInteractions(publisher, copper);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"ROLE_viewer", "ROLE_bu_staff_other", "cost:finance-cu-base:query"})
+  void unrelatedRolesAndCopperOnlyPermissionCannotReadAllFactorsOrExport(String authority) {
+    authenticate(authority);
+    assertThatThrownBy(() -> controller.read("2026-11", "210", null, Condition.GENERAL, null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> controller.exportMonth("2026-11", "220"))
+        .isInstanceOf(AccessDeniedException.class);
+    verifyNoInteractions(reader, exports, publisher, copper);
   }
 
   @Test

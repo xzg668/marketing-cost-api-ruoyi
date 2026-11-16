@@ -120,6 +120,35 @@ public class QuoteBomAlternativeApplicationServiceImpl
   }
 
   @Override
+  @Transactional(readOnly = true, noRollbackFor = QuoteBomAlternativeSelectionException.class)
+  public Inspection inspectAlternativeGroups(String oaNo, Long oaFormItemId, String periodMonth) {
+    ApiContext context = requireContext(oaNo, oaFormItemId, periodMonth);
+    GroupSnapshot snapshot = loadReachableGroups(context);
+    var groups = new ArrayList<QuoteBomAlternativeGroupResponse>();
+    for (var group : snapshot.groups()) {
+      var current = selectionService.findCurrent(context.selectionScope(), group.alternativeGroupKey());
+      boolean valid = current != null && !current.reviewRequired()
+          && QuoteBomAlternativeSelection.STATUS_ACTIVE.equals(current.selectionStatus())
+          && sameText(current.standardMaterialCode(), group.standardCandidate().materialCode())
+          && group.candidates().stream().anyMatch(candidate -> sameText(candidate.materialCode(), current.selectedMaterialCode()));
+      if (valid) {
+        groups.add(toGroupResponse(group, current, snapshot.rows()));
+      } else {
+        var latest = selectionRepository.findLatest(context.selectionScope(), group.alternativeGroupKey());
+        var standard = group.standardCandidate();
+        var fallback = new QuoteBomAlternativeSelectionResult(null, group.alternativeGroupKey(),
+            standard.materialCode(), standard.materialCode(), BomChildType.STANDARD,
+            QuoteBomAlternativeSelection.SOURCE_AUTO_STANDARD,
+            current != null ? current.selectionVersion() : latest == null ? 0 : latest.getSelectionVersion(),
+            "PREVIEW", false, current != null || latest != null, false,
+            standard.sourceImportBatchId(), standard.sourceBuildBatchId());
+        groups.add(toGroupResponse(group, fallback, snapshot.rows()));
+      }
+    }
+    return new Inspection(context.periodMonth(), context.organization().priceOrgCode(), List.copyOf(groups));
+  }
+
+  @Override
   @Transactional(rollbackFor = Exception.class)
   public QuoteBomAlternativeSummaryResponse getAlternativeGroups(
       String oaNo, Long oaFormItemId, String periodMonth) {
@@ -557,6 +586,7 @@ public class QuoteBomAlternativeApplicationServiceImpl
     if (current != null
         && !current.reviewRequired()
         && current.persisted()
+        && sameText(current.standardMaterialCode(), group.standardCandidate().materialCode())
         && QuoteBomAlternativeSelection.STATUS_ACTIVE.equals(
             current.selectionStatus())
         && group.candidates().stream()

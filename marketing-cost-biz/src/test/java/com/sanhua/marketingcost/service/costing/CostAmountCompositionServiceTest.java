@@ -33,6 +33,32 @@ class CostAmountCompositionServiceTest {
   void stored(MonthlyCostVersionService.Snapshot snapshot,List<CostRunPartItem> parts) {
     when(versions.read("COMMERCIAL",101L)).thenReturn(new MonthlyCostVersionService.Stored(version,snapshot,parts,List.of(item)));
   }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "DIRECT_LABOR,4.601193,.562232,4.038961",
+      "DIRECT_LABOR,.469222,.469222,.000000",
+      "DIRECT_LABOR,-.060165,-.022562,-.037603",
+      "INDIRECT_LABOR,.091700,0,.091700",
+      "INDIRECT_LABOR,.091700,.010000,.081700"})
+  void SavedLaborReconcilesOriginalMinusSavedExclusionsWithoutRecalculatingHistory(
+      String code,String original,String excluded,String adopted) {
+    item.setCostCode(code);item.setAmount(new BigDecimal(adopted));
+    var evidence=new CostAmountComposition("SAVED","CMS原始工资来源",original,excluded,"已保存的形态剔除",
+        List.of(new CostAmountComposition.Source("cms_workshop_labor_raw","104173834",version.getProductCode(),"2026-01","0301",original)),
+        List.of(Map.of("sourceId","104173834","excludedAmountYuan",excluded)));
+    var zero=BigDecimal.ZERO;
+    var ordinary=new MonthlyProductCost.Ordinary(List.of(),zero,zero,zero,zero,zero,BigDecimal.ONE,zero,zero,zero,zero,
+        List.of(new MonthlyProductCost.OrdinaryDetail(code,"人工",item.getBaseAmount(),item.getRate(),item.getAmount(),null,null,null,"EXPENSE",evidence)));
+    var calculation=new MonthlyProductCost.Result("V3","FEE",ordinary,null,List.of(),List.of(),Set.of(),List.of(),List.of(),zero,zero,zero,zero,zero,zero,zero,null);
+    stored(new MonthlyCostVersionService.Snapshot(1,"COMMERCIAL",101,"SAVED-101","OA",1,version.getProductCode(),"2026-11",calculation,List.of(),Map.of()),List.of());
+    var result=service.read("SAVED-101",2695L,null);
+    assertThat(new BigDecimal(result.referenceAmount())).isEqualByComparingTo(adopted);
+    assertThat(new BigDecimal(result.difference())).isZero();
+    assertThat(result.amount()).isEqualTo(item.getAmount().toPlainString());
+    assertThat(result.calculation()).contains(original,new BigDecimal(excluded).toPlainString(),"剔除","实际计入人工");
+    assertThat(result.composition()).isEqualTo(evidence);
+    verifyNoInteractions(salaries,auxiliary,raw);
+  }
   @Test void FrozenCompositionNeverQueriesTodaysCmsEvenAfterItsSourcesChange() {
     var evidence=new CostAmountComposition("SAVED","来源合计×1.05",".221096","0",null,List.of(),List.of(Map.of("sourceId","57853080","amountYuan",".221096")));
     var zero=BigDecimal.ZERO;

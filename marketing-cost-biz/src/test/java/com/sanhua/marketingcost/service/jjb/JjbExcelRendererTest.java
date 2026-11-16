@@ -15,6 +15,20 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 public class JjbExcelRendererTest {
+  @Test void parentChildDisplayMatchesBomWithoutChangingSavedAmountsOrIdentity() throws Exception {
+    var base=model(1,0,0);var rows=new ArrayList<>(base.rows());
+    rows.set(0,rows.getFirst().toBuilder().displayCode("202445\n【33001】").displayName("母件\n【子件】").build());
+    var model=new JjbReadModel(base.identity(),base.header(),rows,base.monthlyPrices(),base.totals(),base.warnings());
+    var bytes=new ByteArrayOutputStream();new JjbExcelRenderer().write(model,bytes);
+    try(var book=new XSSFWorkbook(new ByteArrayInputStream(bytes.toByteArray()))) {
+      var row=java.util.stream.StreamSupport.stream(book.getSheetAt(0).spliterator(),false)
+          .filter(r->r.getCell(0)!=null && r.getCell(0).toString().equals("202445\n【33001】")).findFirst().orElseThrow();
+      assertThat(row.getCell(1).getStringCellValue()).isEqualTo("母件\n【子件】");
+      assertThat(row.getCell(6).getNumericCellValue()).isEqualTo(3.086418);
+      assertThat(row.getHeightInPoints()).isGreaterThanOrEqualTo(30);
+      assertThat(rows.getFirst().code()).isEqualTo(base.rows().getFirst().code());
+    }
+  }
   @Test void blankWeightKeepsNumericCellAndDisplaysSavedSourceInParentheses() throws Exception {
     var base = model(1,0,0);
     var rows = new ArrayList<>(base.rows());
