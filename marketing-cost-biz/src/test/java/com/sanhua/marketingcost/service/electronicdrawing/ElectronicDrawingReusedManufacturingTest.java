@@ -101,9 +101,66 @@ class ElectronicDrawingReusedManufacturingTest {
     assertThat(result.get("/P/ED:17/").material()).isSameAs(input);
   }
 
+  @Test void approvedCopyOfReferencedDraftIsUsedForTheIdenticalApprovedBomMaterial() {
+    var draft = new QuoteTechDataVersion(); draft.setId(83L); draft.setProductId(9L); draft.setVersionStatus("DRAFT");
+    var approved = new QuoteTechDataVersion(); approved.setId(84L); approved.setProductId(9L); approved.setVersionStatus("SUBMITTED");
+    when(technical.selectById(83L)).thenReturn(draft);
+    when(technical.selectSubmittedManufacturingForDraft(83L, 2L, "2026-11")).thenReturn(approved);
+    when(codec.manufacturing(approved)).thenReturn(new Manufacturing(List.of(input),
+        new ManufacturingEvidence(2L, "2026-11", 10L, "a".repeat(64), java.time.LocalDateTime.now())));
+
+    var result = service.read(context);
+
+    assertThat(result).hasSize(1);
+    assertThat(result.getFirst().technicalVersionId()).isEqualTo(84L);
+    assertThat(result.getFirst().input()).isSameAs(input);
+  }
+
+  @Test void anotherProductCannotSupplyTheApprovedSuccessorOfADraft() {
+    var draft = new QuoteTechDataVersion(); draft.setId(83L); draft.setProductId(9L); draft.setVersionStatus("DRAFT");
+    var other = new QuoteTechDataVersion(); other.setId(84L); other.setProductId(99L); other.setVersionStatus("SUBMITTED");
+    when(technical.selectById(83L)).thenReturn(draft);
+    when(technical.selectSubmittedManufacturingForDraft(83L, 2L, "2026-11")).thenReturn(other);
+
+    assertThatThrownBy(() -> service.read(context)).hasMessageContaining("归属");
+  }
+
+  @Test void repeatedApprovedCopiesRetainTheSubmittedManufacturingFromTheirVerifiedAncestor() {
+    var intermediate = version(15L, 10L, 2L, "APPROVED");
+    current.setDrawingResultId(3L); current.setReusedFromVersionId(15L);
+    when(versions.selectById(15L)).thenReturn(intermediate);
+    when(nodes.findByVersionId(15L)).thenReturn(List.of(node(12L, 7L)));
+    copied.setCorrectedFromSourceNodeId(12L);
+    var parent = detail("/P/ED:7/", 1, "MAKE", "E_DRAWING", "2", "2", 12L);
+    var retainedRaw = detail("/P/ED:7/TECH:83:RAW:7/", 2, "RAW", "TECH_RAW", ".015", ".030", 12L);
+    when(details.selectList(any())).thenReturn(List.of(parent, retainedRaw));
+    var draft = new QuoteTechDataVersion(); draft.setId(83L); draft.setProductId(9L); draft.setVersionStatus("DRAFT");
+    var approved = new QuoteTechDataVersion(); approved.setId(84L); approved.setProductId(9L); approved.setVersionStatus("SUBMITTED");
+    when(technical.selectById(83L)).thenReturn(draft);
+    when(technical.selectSubmittedManufacturingForDraft(83L, 2L, "2026-11")).thenReturn(approved);
+    when(codec.manufacturing(approved)).thenReturn(new Manufacturing(List.of(input),
+        new ManufacturingEvidence(2L, "2026-11", 10L, "a".repeat(64), java.time.LocalDateTime.now())));
+
+    var result = service.read(context);
+
+    assertThat(result).hasSize(1);
+    assertThat(result.getFirst().technicalVersionId()).isEqualTo(84L);
+  }
+
+  @Test void approvedBomCopiedWithOriginalNodeIdentityStillUsesItsActualPathAndQuantity() {
+    var retainedParent = detail("/P/ED:7/", 1, "MAKE", "E_DRAWING", "3", "3", 7L);
+    var retainedRaw = detail("/P/ED:7/TECH:83:RAW:7/", 2, "RAW", "TECH_RAW", ".015", ".045", 7L);
+    when(details.selectList(any())).thenReturn(List.of(detail("/P/ED:7/", 1, "MAKE", "E_DRAWING", "2", "2", 7L), raw), List.of(retainedParent, retainedRaw));
+
+    var result = service.costingInputs(2L, "2026-11");
+
+    assertThat(result).containsOnlyKeys("/P/ED:7/");
+    assertThat(result.get("/P/ED:7/").material()).isSameAs(input);
+  }
+
   private QuoteBomSupplementVersion version(Long id, Long previous, Long result, String status) {
     var row = new QuoteBomSupplementVersion(); row.setId(id); row.setReusedFromVersionId(previous);
-    row.setDrawingResultId(result); row.setVersionStatus(status); row.setQuoteProductCode("P"); row.setMaterialOrgCode("COMMERCIAL"); return row;
+    row.setDrawingResultId(result); row.setVersionStatus(status); row.setQuoteProductCode("P"); row.setMaterialOrgCode("COMMERCIAL"); row.setOaFormItemId(2L); row.setPeriodMonth("2026-11"); return row;
   }
   private ElectronicDrawingSourceNode node(Long id, Long previous) {
     var row = new ElectronicDrawingSourceNode(); row.setId(id); row.setCorrectedFromSourceNodeId(previous); row.setResolvedMaterialCode("MAKE"); return row;

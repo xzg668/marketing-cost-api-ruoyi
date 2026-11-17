@@ -145,6 +145,7 @@ public class TechnicalDataManufacturingApplicationService {
     return new MaterialOption(row.getMaterialCode(), row.getMaterialName(), row.getDrawingNo(), row.getMaterialSpec(), row.getUnit());
   }
 
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"MANUFACTURING","PRICE"},productArgument=0)
   public TechnicalDataManufacturingResponse save(Long productId, TechnicalDataManufacturingSaveRequest request, TechnicalDataActor actor) {
     boolean changed = Boolean.TRUE.equals(transaction.execute(status -> saveDraft(productId, request, actor)));
     var saved = read(productId, null, actor);

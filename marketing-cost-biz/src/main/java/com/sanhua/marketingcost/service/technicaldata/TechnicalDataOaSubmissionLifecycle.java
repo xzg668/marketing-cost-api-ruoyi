@@ -52,6 +52,7 @@ public class TechnicalDataOaSubmissionLifecycle {
   }
 
   /** 只有 I03 成功回执才能发布冻结内容；此处不生成技术领导审批结论。 */
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","DRAWING_BOM","MANUFACTURING","PACKAGE","AUXILIARY","SOLDER","SALARY","NET_LOSS","PRICE"},taskArgument=0)
   public void publishSubmitted(QuoteTechTask task, QuoteTechSubmission submission, long actorId) {
     var person = requireCurrent(task, submission);
     if (!TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus())
@@ -86,6 +87,7 @@ public class TechnicalDataOaSubmissionLifecycle {
     }
   }
 
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","DRAWING_BOM","MANUFACTURING","PACKAGE","AUXILIARY","SOLDER","SALARY","NET_LOSS","PRICE"},taskArgument=0)
   public void returned(QuoteTechTask task, QuoteTechSubmission submission, long messageId, TechnicalDataActor operator, String reason) {
     var person = requireCurrent(task, submission);
     workflow.decision(submission.getId(), "RETURNED", messageId);
@@ -99,6 +101,7 @@ public class TechnicalDataOaSubmissionLifecycle {
   }
 
   /** 财务定向退回经 OA 确认后调用；原提交保留当时的冻结内容。 */
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","DRAWING_BOM","MANUFACTURING","PACKAGE","AUXILIARY","SOLDER","SALARY","NET_LOSS","PRICE"},taskArgument=0)
   public void financeReturned(QuoteTechTask task, QuoteTechSubmission submission, long operatorId, String reason) {
     var person = requireCurrent(task, submission);
     if (!TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus())) throw conflict("报价员退回须关联已成功提交资料");

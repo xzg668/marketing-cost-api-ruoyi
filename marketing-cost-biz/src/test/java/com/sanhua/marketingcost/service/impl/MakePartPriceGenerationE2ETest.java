@@ -233,6 +233,8 @@ class MakePartPriceGenerationE2ETest {
           return priceFor(invocation.getArgument(0));
         });
 
+    var manufacturingInputs = mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
+    when(manufacturingInputs.completeBomChildren(any())).thenReturn(null);
     return new MakePartPriceGenerationServiceImpl(
         sourceDataService,
         mock(BomCostingRowSubRefMapper.class),
@@ -243,7 +245,7 @@ class MakePartPriceGenerationE2ETest {
         new MakePartPriceCalculator(),
         mock(com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService.class),
         calcRowMapper,
-        mock(MakePartPriceGapItemMapper.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class), new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
+        mock(MakePartPriceGapItemMapper.class), manufacturingInputs, new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
   }
 
   private CostRunPartItemServiceImpl buildCostRunService(MakePartPriceCalcRowMapper calcRowMapper) {

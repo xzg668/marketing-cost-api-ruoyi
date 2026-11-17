@@ -106,6 +106,7 @@ public class SysUserServiceImpl implements SysUserService {
         return menus.stream()
                 .map(SysMenu::getPerms)
                 .filter(StringUtils::hasText)
+                .filter(permission -> !isQuoteImportPermission(permission))
                 .collect(Collectors.toSet());
     }
 
@@ -150,7 +151,12 @@ public class SysUserServiceImpl implements SysUserService {
         }
         boolean canMaintainPartCosts = isAdmin || roles.stream().anyMatch(r -> "bu_director".equalsIgnoreCase(r.getRoleKey()));
         return sysMenuMapper.selectList(wrapper).stream()
+                .filter(menu -> isAdmin || !isQuoteImportPermission(menu.getPerms()))
                 .filter(menu -> canMaintainPartCosts || !"rules:product-part-cost:list".equals(menu.getPerms())).toList();
+    }
+
+    private static boolean isQuoteImportPermission(String permission) {
+        return "ingest:quote:import".equals(permission) || "ingest:quote:mock-create".equals(permission);
     }
 
     @Override

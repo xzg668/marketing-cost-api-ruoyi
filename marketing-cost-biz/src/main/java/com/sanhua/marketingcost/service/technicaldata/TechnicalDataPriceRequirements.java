@@ -296,7 +296,7 @@ public class TechnicalDataPriceRequirements {
       List<String> issues, boolean requireCompleteBasis) {
     var batches =
         jdbc.queryForList(
-            "SELECT current_bom_build_batch_id FROM lp_quote_costing_workspace WHERE"
+            "SELECT current_bom_build_batch_id,product_code FROM lp_quote_costing_workspace WHERE"
                 + " oa_form_item_id=? AND period_month=?",
             product.getOaFormItemId(),
             product.getAccountingMonth());
@@ -306,7 +306,15 @@ public class TechnicalDataPriceRequirements {
     }
     var request = new PricePrepareGenerateRequest();
     request.setOaNo(task.getOaNo()); request.setOaFormItemId(product.getOaFormItemId());
-    request.setTopProductCode(product.getMaterialNo()); request.setTopProductCodes(List.of(product.getMaterialNo()));
+    String costingCode = product.getMaterialNo();
+    if (costingCode == null || costingCode.isBlank()) {
+      costingCode = Objects.toString(batches.getFirst().get("product_code"), null);
+    }
+    if (costingCode == null || costingCode.isBlank()) {
+      issues.add("本产品缺少已准备的核算身份，请重新检查BOM");
+      return;
+    }
+    request.setTopProductCode(costingCode); request.setTopProductCodes(List.of(costingCode));
     request.setPeriodMonth(product.getAccountingMonth()); request.setBusinessUnitType(task.getBusinessUnitType());
     request.setScenarioType(QuotePriceScenarioType.OA_LOCKED);
     try {
@@ -344,7 +352,7 @@ public class TechnicalDataPriceRequirements {
     // Supplier review remains in the finance pricing workflow; it is not a missing price
     // for the technician to enter and must not prevent dispatching other missing materials.
     var reviews = prepared.getSupplierPriceReviews();
-    return prepared.getGaps().stream().filter(gap -> !(("MISSING_PRICE".equals(gap.getGapType())
+    return prepared.getGaps().stream().filter(gap -> !"SPECIAL_PRICE_REQUIRED".equals(gap.getReasonCode())).filter(gap -> !(("MISSING_PRICE".equals(gap.getGapType())
         && "WAITING".equals(gap.getReasonCode()) || "PRICE_SOURCE_ERROR".equals(gap.getGapType())
         && Set.of("RAW_PRICE_ERROR", "SCRAP_PRICE_ERROR").contains(Objects.toString(gap.getReasonCode(), "")))
         && reviews != null && reviews.stream().anyMatch(review ->

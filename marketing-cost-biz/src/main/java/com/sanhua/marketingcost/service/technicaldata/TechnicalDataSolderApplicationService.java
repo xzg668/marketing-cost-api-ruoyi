@@ -67,6 +67,7 @@ public class TechnicalDataSolderApplicationService {
   }
 
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SOLDER","PRICE"},productArgument=0)
   public TechnicalDataSolderResponse save(Long productId, TechnicalDataSolderSaveRequest request, TechnicalDataActor actor) {
     if (request == null || request.getExpectedVersion() == null || request.getExpectedVersion() < 0
         || !request.getUnknownFields().isEmpty() || request.getItems() == null || request.getItems().size() > 500

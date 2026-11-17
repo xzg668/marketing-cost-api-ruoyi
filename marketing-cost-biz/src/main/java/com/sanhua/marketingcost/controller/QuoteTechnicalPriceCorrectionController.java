@@ -34,7 +34,7 @@ public class QuoteTechnicalPriceCorrectionController {
       throws IOException {
     var view = service.get(oaNo, itemId, periodMonth);
     if (view == null || view.items().isEmpty())
-      throw new IllegalArgumentException("本产品当前没有待修正的自行公式");
+      throw new IllegalArgumentException("本产品当前没有待处理的补录联动公式");
     var scope =
         service.require(
             new TechnicalPriceImportContext(oaNo, itemId, technicalVersionId),

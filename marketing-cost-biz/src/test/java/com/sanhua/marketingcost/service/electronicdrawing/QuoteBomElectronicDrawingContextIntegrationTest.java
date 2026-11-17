@@ -100,7 +100,7 @@ class QuoteBomElectronicDrawingContextIntegrationTest extends BomMapperTestBase 
         .satisfies(
             node -> {
               assertThat(node.getReferenceWeight()).isEqualByComparingTo("12");
-              assertThat(node.getReferenceWeightUnit()).isNull();
+              assertThat(node.getReferenceWeightUnit()).isEqualTo("g");
               assertThat(node.getQty()).isEqualByComparingTo("2");
             });
   }

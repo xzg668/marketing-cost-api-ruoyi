@@ -59,6 +59,14 @@ public final class MonthlyInquiryPriceSource {
   }
 
   public Candidates read(Context context, Set<MonthlyPriceRequest> requests) {
+    return read(context,requests,null);
+  }
+
+  public Candidates readSpecial(Context context, Set<MonthlyPriceRequest> requests, boolean currentMonthOnly) {
+    return read(context,requests,currentMonthOnly);
+  }
+
+  private Candidates read(Context context, Set<MonthlyPriceRequest> requests, Boolean currentMonthOnly) {
     var values = new LinkedHashMap<MonthlyPriceRequest, Candidate>();
     var problems = new LinkedHashMap<MonthlyPriceRequest, Problem>();
     var organizations = new TreeMap<String, List<MonthlyPriceRequest>>();
@@ -86,8 +94,9 @@ public final class MonthlyInquiryPriceSource {
         var keys = new TreeSet<String>();
         chunk.forEach(code -> keys.add(InquiryNames.normalize(code)));
         var found =
-            repository.matching(
-                context.businessUnitType(), context.month().toString(), keys, specifications);
+            currentMonthOnly==null ? repository.matching(
+                context.businessUnitType(), context.month().toString(), keys, specifications)
+                : repository.matchingPolicy(context.businessUnitType(),context.month().toString(),keys,currentMonthOnly);
         if (found.isEmpty()) {
           scoped.forEach(request -> problems.put(request, new Problem(Failure.MISSING, "没有匹配的询价")));
           continue;

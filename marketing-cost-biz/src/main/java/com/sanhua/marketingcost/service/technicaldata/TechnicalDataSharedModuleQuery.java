@@ -33,6 +33,7 @@ public class TechnicalDataSharedModuleQuery {
   }
 
   /** 列表只刷新共享资料状态，不重新核算、不写任务，也不暴露他人的草稿内容。 */
+  @org.springframework.transaction.annotation.Transactional(readOnly = true)
   public List<TechnicalDataSharedModuleInfo> current(Long itemId, String month,
       List<TechnicalDataModuleRequirement> requirements) {
     if (requirements.stream().noneMatch(row -> row.required() || Objects.toString(row.reasonCode(), "").startsWith("SHARED_MODULE_")

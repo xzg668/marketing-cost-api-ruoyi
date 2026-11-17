@@ -114,6 +114,27 @@ class ElectronicDrawingSourceImportServiceTest {
   }
 
   @Test
+  void previouslyFailedSingleUnknownResponseImportsFromSavedRequestWithoutFetchingOrChangingIt() {
+    var raw = DrawingVerificationFixtures.drawing("external", "DRAW-01", List.of(
+        List.of("1", "PART-01", "部件", "2.5000", "钢", "B", "C", "", "原文")));
+    var data = (com.fasterxml.jackson.databind.node.ObjectNode) raw.get("data");
+    data.set("_unknown_1", data.remove("DRAW-01"));
+    result.setRawSummaryJson(raw.toString());
+    task.setConsumptionState("FAILED");
+    task.setErrorMessage("已接收明细中没有本产品图号的有效行：DRAW-01");
+    String original = result.getRawSummaryJson();
+
+    var imported = service.importSource(scope, 601L);
+
+    assertThat(imported.sourceNodeCount()).isEqualTo(1);
+    verify(nodes).insertAll(eq(701L), argThat(rows -> rows.size() == 1
+        && rows.getFirst().getDrawingCode().equals("PART-01")
+        && rows.getFirst().getQty().toPlainString().equals("2.5000")));
+    verify(tasks).completeConsumption(eq(501L), eq(601L), any());
+    assertThat(result.getRawSummaryJson()).isEqualTo(original);
+  }
+
+  @Test
   void importsOnlyVerifiedGroupWithDistinctRowsAndRealJsonEvidence() {
     var imported = service.importSource(scope, 601L);
     var capture = ArgumentCaptor.forClass(QuoteBomSupplementVersion.class);
@@ -134,11 +155,13 @@ class ElectronicDrawingSourceImportServiceTest {
                     rows.size() == 2
                         && rows.get(0).getSourceSequence().equals("G1:R1")
                         && rows.get(1).getSourceSequence().equals("G1:R2")
+                        && rows.get(0).getReferenceWeight().compareTo(new java.math.BigDecimal("0.50")) == 0
+                        && "g".equals(rows.get(0).getReferenceWeightUnit())
+                        && rows.get(1).getReferenceWeightUnit() == null
                         && rows.stream()
                             .allMatch(
                                 row ->
-                                    row.getParentSourceSequence() == null
-                                        && row.getReferenceWeightUnit() == null)));
+                                    row.getParentSourceSequence() == null)));
     assertThat(result.getRawSummaryJson()).contains("DRAW-02", "PART-002");
     verify(tasks).completeConsumption(eq(501L), eq(601L), any());
   }

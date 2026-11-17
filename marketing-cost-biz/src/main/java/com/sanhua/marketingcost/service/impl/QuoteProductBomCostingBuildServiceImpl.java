@@ -75,6 +75,7 @@ public class QuoteProductBomCostingBuildServiceImpl
   private final MonthlyBomSnapshotDetailService monthlyDetails;
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
   private final com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing monthlyPricing;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom;
   @org.springframework.beans.factory.annotation.Autowired
   private com.sanhua.marketingcost.service.materialshape.OutsourceScrapPreparation outsourceScrap;
 
@@ -93,7 +94,9 @@ public class QuoteProductBomCostingBuildServiceImpl
       BomRawHierarchyMapper rawHierarchyMapper,
       MonthlyBomSnapshotDetailService monthlyDetails,
       com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs,
-      com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing monthlyPricing) {
+      com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing monthlyPricing,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom) {
+    this.completeBom = completeBom;
     this.settlementRuleQueryService = settlementRuleQueryService;
     this.byproductRuleQueryService = byproductRuleQueryService;
     this.byproductSettlementAdapter = byproductSettlementAdapter;
@@ -671,6 +674,7 @@ public class QuoteProductBomCostingBuildServiceImpl
 
   private void requireBuildable(QuoteBomPreparationRecord record, List<QuoteEffectiveBomNode> nodes) {
     if (PREPARATION_READY.equals(record.getPreparationStatus())) return;
+    if (completeBom.matchesSavedPreparation(record, nodes)) return;
     // 本产品已组树草稿可检查缺价；它仍未发布，正式成本会再核验审批和财务确认。
     String draftPrefix = "ED_DRAFT:" + record.getElectronicSourceVersionId() + ":";
     boolean composedDraft = record.getElectronicSourceVersionId() != null

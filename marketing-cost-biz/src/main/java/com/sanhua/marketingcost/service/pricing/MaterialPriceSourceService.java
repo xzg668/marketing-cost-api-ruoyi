@@ -173,6 +173,7 @@ public class MaterialPriceSourceService {
   }
 
   @Transactional(rollbackFor=Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},unitArgument=0)
   public List<Entry> changeBatch(String unit,List<Change> changes,String actor) {
     if(changes==null || changes.isEmpty() || changes.size()>1000) throw new IllegalArgumentException("请选择1至1000条价格来源");
     var keys=new HashSet<String>();var result=new ArrayList<Entry>();
@@ -201,6 +202,7 @@ public class MaterialPriceSourceService {
   }
 
   @Transactional(rollbackFor=Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},unitArgument=0)
   public Entry change(String unit,Change change,String actor) {
     if (change==null || change.expectedVersion()==null || change.expectedVersion()<0 || text(change.materialCode()).isEmpty()
         || text(change.organization()).isEmpty() || text(change.sourceType()).isEmpty() || text(actor).isEmpty())

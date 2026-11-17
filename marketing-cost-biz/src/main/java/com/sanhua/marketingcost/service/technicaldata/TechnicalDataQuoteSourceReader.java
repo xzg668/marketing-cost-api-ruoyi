@@ -72,7 +72,7 @@ public class TechnicalDataQuoteSourceReader {
     return check(context.form(), context.item(), context.month(), context.workspace());
   }
 
-  /** 单产品来源检查用独立只读事务，来源失败不能使整个工作台查询回滚。 */
+  /** 待办列表只复核原缺项；混合价格异常保留完整检查和原指纹规则。 */
   @Transactional(readOnly = true, propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
   public TechnicalDataSourceCheckResponse preview(Long itemId, String month) {
     var item = itemMapper.selectById(itemId);
@@ -86,7 +86,15 @@ public class TechnicalDataQuoteSourceReader {
         || !Objects.equals(workspace.getBusinessUnitType(), form.getBusinessUnitType())) {
       throw error(TechnicalDataTaskErrorCode.INVALID_REQUEST, "未找到本产品、本月份的核算检查");
     }
-    return inspect(form, item, month, workspace).source().check();
+    var saved = store.read(workspace);
+    if (!Objects.equals(saved.oaFormItemId(), itemId) || !Objects.equals(saved.accountingMonth(), month)) {
+      throw error(TechnicalDataTaskErrorCode.VERSION_CONFLICT, "补录检查与当前产品、月份不一致");
+    }
+    boolean mixedPrice = saved.modules().stream().anyMatch(row -> "PRICE".equals(row.moduleType())
+        && "PRICE_BASIS_UNCONFIRMED".equals(row.reasonCode()));
+    var selected = saved.modules().stream().filter(row -> row.required() && !"DRAWING_BOM".equals(row.moduleType()))
+        .map(row -> TechnicalDataModuleType.valueOf(row.moduleType())).collect(java.util.stream.Collectors.toUnmodifiableSet());
+    return inspect(form, item, month, workspace, mixedPrice ? null : selected, true).source().check();
   }
 
   /** 进入补录只使用一键核算已固化的检查结果，不再重复访问九个资料源。 */
@@ -152,12 +160,17 @@ public class TechnicalDataQuoteSourceReader {
   }
 
   private Inspection inspect(OaForm form, OaFormItem item, String month, QuoteCostingWorkspace workspace) {
+    return inspect(form, item, month, workspace, null, false);
+  }
+
+  private Inspection inspect(OaForm form, OaFormItem item, String month, QuoteCostingWorkspace workspace,
+      java.util.Set<TechnicalDataModuleType> selected, boolean technicalPreview) {
     TechnicalDataProductSource product = product(form, item);
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var context = new QuoteBomReadContext(form.getId(), item.getId(), form.getOaNo(), month,
         form.getBusinessUnitType(), QuoteProductIdentityUtils.resolveCostingCode(item), item.getProductName(), item.getSpec(),
         item.getSunlModel(), product.applicableOrgCode(), product.materialOrganizationCode(), now.toLocalDate(), now);
-    var checked = checks.check(context, workspace);
+    var checked = technicalPreview ? checks.preview(context, workspace, selected) : checks.check(context, workspace);
     var shared = sharedSources.describe(product, month, checked.facts());
     var requirements = TechnicalDataSharedModuleQuery.applySharedSources(evaluator.evaluate(checked.facts()), shared);
     String fingerprint = codec.canonicalHash(Map.of("product", snapshots.create(product).fingerprint(), "month", month, "sharedModules", shared,

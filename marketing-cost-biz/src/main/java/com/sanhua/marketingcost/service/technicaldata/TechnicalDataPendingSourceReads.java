@@ -14,12 +14,18 @@ public final class TechnicalDataPendingSourceReads {
   private final ThreadPoolExecutor workers;
   public TechnicalDataPendingSourceReads() {
     var sequence=new AtomicInteger();
-    workers=new ThreadPoolExecutor(4,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(128),work -> {
+    workers=new ThreadPoolExecutor(8,8,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(128),work -> {
       var thread=new Thread(work,"technical-source-preview-"+sequence.incrementAndGet());thread.setDaemon(true);return thread;
     },new ThreadPoolExecutor.CallerRunsPolicy());
   }
   public <T,R> List<R> map(List<T> inputs,Function<T,R> read) {
-    if(inputs.size()<2) return inputs.stream().map(read).toList();
+    try(var shared=new com.sanhua.marketingcost.service.pricing.QuotationPreviewReads()) {
+      return map(inputs,read,shared);
+    }
+  }
+  private <T,R> List<R> map(List<T> inputs,Function<T,R> read,
+      com.sanhua.marketingcost.service.pricing.QuotationPreviewReads shared) {
+    if(inputs.size()<2) return shared.run(()->inputs.stream().map(read).toList());
     var authentication=SecurityContextHolder.getContext().getAuthentication();
     var logging=org.slf4j.MDC.getCopyOfContextMap();
     var pending=new ArrayList<CompletableFuture<R>>();
@@ -28,7 +34,7 @@ public final class TechnicalDataPendingSourceReads {
         var previous=SecurityContextHolder.getContext();var previousLog=org.slf4j.MDC.getCopyOfContextMap();
         var context=SecurityContextHolder.createEmptyContext();context.setAuthentication(authentication);SecurityContextHolder.setContext(context);
         if(logging==null) org.slf4j.MDC.clear();else org.slf4j.MDC.setContextMap(logging);
-        try {return read.apply(input);}
+        try {return shared.run(()->read.apply(input));}
         finally {SecurityContextHolder.setContext(previous);if(previousLog==null) org.slf4j.MDC.clear();else org.slf4j.MDC.setContextMap(previousLog);}
       });
       pending.add(CompletableFuture.supplyAsync(scoped,workers));

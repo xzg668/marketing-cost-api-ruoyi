@@ -78,7 +78,7 @@ class CmsPlanEligibilityServiceImplTest {
   }
 
   @Test
-  void checkEligibilityAllowsAllWhenUnapprovedItemsBlankOrPlanRowMissing() {
+  void checkEligibilityAllowsBlankItemsButRejectsMissingPlanRows() {
     CmsPlanCostRaw blank = plan(1L, "A", LocalDate.of(2026, 1, 1), "");
     blank.setEffectivePeriod("2026-01");
     CmsPlanCostRaw nullValue = plan(2L, "B", LocalDate.of(2026, 1, 1), null);
@@ -90,8 +90,10 @@ class CmsPlanEligibilityServiceImplTest {
 
     assertAllowed(result.get("A|2026-01"));
     assertAllowed(result.get("B|2026-01"));
-    assertAllowed(result.get("C|2026-01"));
-    assertThat(result.get("C|2026-01").getReason()).contains("计划成本未找到");
+    assertThat(result.get("C|2026-01").isDirectLaborAllowed()).isFalse();
+    assertThat(result.get("C|2026-01").isIndirectLaborAllowed()).isFalse();
+    assertThat(result.get("C|2026-01").isAuxSubjectAllowed()).isFalse();
+    assertThat(result.get("C|2026-01").getReason()).contains("未找到计划成本记录");
   }
 
   @Test
@@ -123,7 +125,8 @@ class CmsPlanEligibilityServiceImplTest {
     verify(planCostRawMapper).selectList(captor.capture());
     String sqlSegment = captor.getValue().getSqlSegment();
     assertThat(sqlSegment).contains("parent_code");
-    assertThat(sqlSegment).contains("effective_period");
+    assertThat(sqlSegment).contains("period IN").doesNotContain("effective_period");
+    assertThat(captor.getValue().getSqlSelect()).contains("period AS effective_period");
     assertThat(sqlSegment).contains("business_unit_type");
   }
 

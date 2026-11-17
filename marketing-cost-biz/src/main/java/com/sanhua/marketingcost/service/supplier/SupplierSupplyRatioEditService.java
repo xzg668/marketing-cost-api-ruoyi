@@ -35,6 +35,7 @@ public class SupplierSupplyRatioEditService {
   }
 
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"})
   public SupplierSupplyRatio update(long versionId, SupplierSupplyRatioUpdateRequest request,
       String businessUnitType, String operator) {
     String unit = SupplierSupplyRatioScope.require(businessUnitType);

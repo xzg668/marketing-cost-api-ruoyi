@@ -21,6 +21,8 @@ import com.sanhua.marketingcost.mapper.CmsProductSubjectCostRawMapper;
 import com.sanhua.marketingcost.mapper.CmsSubjectSettingRawMapper;
 import com.sanhua.marketingcost.mapper.CmsWorkshopLaborRawMapper;
 import com.sanhua.marketingcost.service.CmsPlanEligibilityService;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
@@ -92,7 +94,18 @@ class CmsDefaultSourceSyncIntegrationTest {
         """);
     seedRawRows();
     eligibility = mock(CmsPlanEligibilityService.class);
-    when(eligibility.checkEligibility(anyCollection(), anyCollection(), anyString())).thenReturn(Map.of());
+    when(eligibility.checkEligibility(anyCollection(), anyCollection(), anyString()))
+        .thenAnswer(invocation -> {
+          Collection<String> parents = invocation.getArgument(0);
+          Collection<String> periods = invocation.getArgument(1);
+          Map<String, PlanEligibility> result = new LinkedHashMap<>();
+          for (String parent : parents) {
+            for (String period : periods) {
+              result.put(parent + "|" + period, PlanEligibility.allowed(parent, period, "允许生效"));
+            }
+          }
+          return result;
+        });
     salary = new CmsSalaryCostSourceEffectiveServiceImpl(
         session.getMapper(CmsWorkshopLaborRawMapper.class), session.getMapper(CmsProductSubjectCostRawMapper.class),
         session.getMapper(CmsSubjectSettingRawMapper.class), effectiveMapper, logMapper, eligibility);

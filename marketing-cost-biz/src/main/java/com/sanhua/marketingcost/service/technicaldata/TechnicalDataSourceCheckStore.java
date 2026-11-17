@@ -24,9 +24,13 @@ public class TechnicalDataSourceCheckStore {
   }
 
   public void save(Long workspaceId, TechnicalDataSourceCheckResponse check, Map<String, Object> evidence) {
+    String contents=codec.write(Map.of("check", check, "evidence", evidence, "pending", Map.of("check", check)));
     if (jdbc.update("""
-        UPDATE lp_quote_costing_workspace SET technical_check_json=?,technical_check_fingerprint=? WHERE id=?
-        """, codec.write(Map.of("check", check, "evidence", evidence)), check.fingerprint(), workspaceId) != 1) {
+        UPDATE lp_quote_costing_workspace SET technical_check_json=
+          IF(JSON_EXTRACT(technical_check_json,'$.pending.dirty') IS NULL,CAST(? AS JSON),
+            JSON_SET(CAST(? AS JSON),'$.pending.dirty',JSON_EXTRACT(technical_check_json,'$.pending.dirty'),
+              '$.pending.nextAttemptEpoch',0)),technical_check_fingerprint=? WHERE id=?
+        """, contents, contents, check.fingerprint(), workspaceId) != 1) {
       throw new IllegalStateException("核算工作区已变化，请重新检查资料");
     }
   }

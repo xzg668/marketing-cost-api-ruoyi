@@ -41,7 +41,8 @@ public final class MonthlyOriginalRangePriceSource {
     this.rows=rows;this.months=months;this.finance=finance;this.effective=effective;this.supplierInputs=supplierInputs;this.suppliers=suppliers;this.runtime=runtime;this.codec=codec;
   }
   private record PublicationInput(FactorPriceSnapshot financial,Map<Long,FinanceEffectivePrice> prices,RuntimeException error) {}
-  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){return read(context,requests,null);}
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests,String specialMonth){
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
@@ -50,7 +51,7 @@ public final class MonthlyOriginalRangePriceSource {
     }
     var financeCache=new HashMap<String,FactorPriceSnapshot>();var financeErrors=new HashMap<String,RuntimeException>();
     for(var organization:groups.entrySet()){
-      var selectedMonth=months.select(context.businessUnitType(),organization.getKey(),context.month().toString());
+      var selectedMonth=specialMonth==null?months.select(context.businessUnitType(),organization.getKey(),context.month().toString()):new PriceMonthSelection(context.month().toString(),specialMonth);
       if(selectedMonth==null){organization.getValue().values().forEach(items->items.forEach(request->problems.put(request,new Problem(Failure.MISSING,"当前范围没有适用的原稿月份"))));continue;}
       var codes=new ArrayList<>(organization.getValue().keySet());
       for(int start=0;start<codes.size();start+=256){

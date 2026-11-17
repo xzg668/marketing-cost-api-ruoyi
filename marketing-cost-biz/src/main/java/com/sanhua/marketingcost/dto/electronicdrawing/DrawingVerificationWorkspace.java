@@ -50,5 +50,7 @@ public record DrawingVerificationWorkspace(
       JsonNode plmData,
       Long plmSourceResultId,
       List<Long> sourceVersionIds,
-      LocalDateTime receivedAt) {}
+      LocalDateTime receivedAt,
+      String productDrawingNo,
+      String productGroupKey) {}
 }

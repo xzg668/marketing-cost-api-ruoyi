@@ -25,7 +25,9 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     public FirstUse {Objects.requireNonNull(origin);dependencies=List.copyOf(dependencies);supplierReviews=List.copyOf(supplierReviews);}
   }
   private record ConsumerPrice(String organization,String materialCode) {}
-  private record Restored(Map<Long,Selection> values,Map<MonthlyPriceFamilyKey,List<MonthlyPriceStorage.StoredPrice>> families) {}
+  private record Restored(Map<Long,Selection> values,Map<MonthlyPriceFamilyKey,List<MonthlyPriceStorage.StoredPrice>> families,Map<Long,FirstUse> origins) {}
+  private com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicies specialPolicies;
+  public MonthlyMaterialPriceService withSpecialPolicies(com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicies policies) { this.specialPolicies=Objects.requireNonNull(policies);return this; }
   private final MonthlyPriceStorage storage;
   private final MonthlyPriceDocumentCodec codec;
   private final MonthlyPriceCandidateResolver sources;
@@ -45,14 +47,20 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
   private Lookup lookupSaved(Collection<MonthlyPriceRequest> requests){
     var unique=new LinkedHashSet<>(requests);var rows=storage.readFamilies(unique.stream().map(MonthlyPriceRequest::family).toList());
     var complete=restore(rows);var selected=new LinkedHashMap<MonthlyPriceRequest,Selection>();var missing=new LinkedHashSet<MonthlyPriceRequest>();
-    for(var request:unique){var found=matching(request,complete.families().getOrDefault(request.family(),List.of()));if(found==null)missing.add(request);else selected.put(request,complete.values().get(found.id()));}
+    var rules=policyRules(unique,complete,false);
+    for(var request:unique){var found=matching(request,rows.stream().filter(row->!row.applicability().matches(request)||!row.family().equals(request.family())||policyEligible(request,complete.values().get(row.id()),complete,rules,new HashSet<>())).toList());
+      if(found==null)missing.add(request);
+      else selected.put(request,complete.values().get(found.id()));}
     // Dependencies retain the saved request aliases, and are never rebuilt from current sources.
     var queue=new ArrayDeque<>(selected.values());
-    while(!queue.isEmpty())for(var dependency:queue.remove().fact().dependencies()){
-      if(selected.containsKey(dependency))continue;
-      var found=matching(dependency,complete.families().getOrDefault(dependency.family(),List.of()));
-      if(found==null)throw failure(Failure.PERSISTENCE_INCOMPLETE,"Saved dependency request is not uniquely resolved");
-      var value=complete.values().get(found.id());selected.put(dependency,value);queue.add(value);
+    while(!queue.isEmpty()) {
+      var parent=queue.remove();
+      for(var dependency:complete.origins().get(parent.monthlyPriceId()).dependencies()) {
+        var value=complete.values().get(dependency.monthlyPriceId());
+        var previous=selected.putIfAbsent(dependency.request(),value);
+        if(previous==null)queue.add(value);
+        else if(!previous.equals(value))throw failure(Failure.REPLAN_REQUIRED,"已采用月价的依赖已变化，请重新准备");
+      }
     }
     return new Lookup(selected,missing);
   }
@@ -88,6 +96,12 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
           .forEach(binding->context.supplierReviews().add(binding.review(),revised.evidence().sha256()));
       stamped.put(request,new Candidate(new Selection(null,selected.applicability(),revised),candidate.householdSourceId()));
     });
+    if(specialPolicies!=null) {
+      var revised=new LinkedHashMap<MonthlyPriceRequest,Candidate>();
+      var allCandidates=new LinkedHashMap<>(values);allCandidates.putAll(stamped);
+      for(var request:stamped.keySet())policyIdentity(request,allCandidates,revised,new HashSet<>());
+      stamped.clear();stamped.putAll(revised);
+    }
     resolved=new Candidates(stamped,resolved.problems());
     var reported=new HashSet<>(resolved.values().keySet());reported.addAll(resolved.problems().keySet());
     if(!reported.containsAll(lookup.missing()))throw failure(Failure.PERSISTENCE_INCOMPLETE,"Source resolver omitted requests");
@@ -102,6 +116,8 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     for(var problem:resolved.problems().keySet())if(authoritative.containsKey(problem))throw failure(lookup.values().containsKey(problem)?Failure.PERSISTENCE_INCOMPLETE:Failure.REPLAN_REQUIRED,"Source problem contradicts an adopted dependency");
     var unadopted=resolved.values().keySet().stream().filter(request->!authoritative.containsKey(request)).toList();
     var occupied=storage.readFamilies(unadopted.stream().map(MonthlyPriceRequest::family).toList());
+    var occupiedFacts=restore(occupied);
+    var occupiedPolicies=policyRules(resolved.values().keySet(),occupiedFacts,false);
     for(var entry:resolved.values().entrySet()){
       var supplied=entry.getValue().selection();var saved=authoritative.get(entry.getKey());
       if(saved!=null){
@@ -112,7 +128,7 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
       if(supplied.monthlyPriceId()!=null)throw failure(Failure.PERSISTENCE_INCOMPLETE,"Source fabricated a saved monthly price identity");
       if(!supplied.applicability().matches(entry.getKey()))throw failure(Failure.INVALID_INPUT,"Source returned an invalid candidate binding");
       var remaining=Optional.of(entry.getValue().selection().applicability());
-      for(var row:occupied)if(row.family().equals(entry.getKey().family()))remaining=remaining.flatMap(value->value.subtract(row.applicability()));
+      for(var row:occupied)if(row.family().equals(entry.getKey().family()) && policyEligible(entry.getKey(),occupiedFacts.values().get(row.id()),occupiedFacts,occupiedPolicies,new HashSet<>()))remaining=remaining.flatMap(value->value.subtract(row.applicability()));
       if(remaining.isEmpty() || !remaining.get().matches(entry.getKey()))throw failure(Failure.REPLAN_REQUIRED,"Source candidate was occupied; read committed winners again");
       var candidate=entry.getValue();values.put(entry.getKey(),new Candidate(new Selection(null,remaining.get(),candidate.selection().fact()),candidate.householdSourceId()));
     }
@@ -128,6 +144,47 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
           "Monthly price read temporarily unavailable; replan within the original budget", readFailure);
       throw readFailure;
     }
+  }
+
+
+  private Candidate policyIdentity(MonthlyPriceRequest request,Map<MonthlyPriceRequest,Candidate> candidates,
+      Map<MonthlyPriceRequest,Candidate> result,Set<MonthlyPriceRequest> active) {
+    if(result.containsKey(request))return result.get(request);
+    var value=candidates.get(request);
+    if(value==null)return null;
+    if(!active.add(request))throw failure(Failure.INVALID_INPUT,"物料价格依赖存在循环");
+    var revisions=new TreeSet<String>();
+    if(value.selection().applicability().specialPolicyRevision()!=null)revisions.add(value.selection().applicability().specialPolicyRevision());
+    for(var child:value.selection().fact().dependencies()) {
+      var dependency=policyIdentity(child,candidates,result,active);
+      if(dependency!=null&&dependency.selection().applicability().specialPolicyRevision()!=null)
+        revisions.add(child.family().canonical()+":"+child.priceOrgCode()+":"+dependency.selection().applicability().specialPolicyRevision());
+    }
+    if(value.selection().monthlyPriceId()==null&&!revisions.isEmpty()&&!value.selection().fact().dependencies().isEmpty()) {
+      var selected=value.selection();
+      value=new Candidate(new Selection(null,new MonthlyPriceApplicability(selected.applicability().fragments(),
+          MonthlyPriceDocumentCodec.sha256(String.join(";",revisions))),selected.fact()),value.householdSourceId());
+    }
+    active.remove(request);result.put(request,value);return value;
+  }
+
+  private Map<MonthlyPriceRequest,com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicy> policyRules(
+      Collection<MonthlyPriceRequest> roots,Restored complete,boolean lock) {
+    if(specialPolicies==null)return Map.of();
+    var requests=new LinkedHashSet<>(roots);
+    complete.values().values().forEach(value->requests.addAll(value.fact().dependencies()));
+    return specialPolicies.read(requests,lock);
+  }
+  private boolean policyEligible(MonthlyPriceRequest request,Selection selected,Restored complete,
+      Map<MonthlyPriceRequest,com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicy> rules,Set<Long> active) {
+    if(specialPolicies==null)return true;
+    if(!specialPolicies.accepts(request,selected,rules.get(request)))return false;
+    if(!active.add(selected.monthlyPriceId()))throw failure(Failure.PERSISTENCE_INCOMPLETE,"月价依赖存在循环");
+    for(var child:complete.origins().get(selected.monthlyPriceId()).dependencies()) {
+      var value=complete.values().get(child.monthlyPriceId());
+      if(value==null||!policyEligible(child.request(),value,complete,rules,active))return false;
+    }
+    active.remove(selected.monthlyPriceId());return true;
   }
   private Restored restore(List<MonthlyPriceStorage.StoredPrice> roots) {
     var rows=new LinkedHashMap<Long,MonthlyPriceStorage.StoredPrice>();roots.forEach(row->rows.put(row.id(),row));
@@ -164,7 +221,7 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
       result.put(row.id(),new Selection(row.id(),row.applicability(),
           new PriceFact(row.pricingType(),row.unitPrice(),row.householdRate(),row.evidence(),dependencies)));
     }
-    return new Restored(Map.copyOf(result),families);
+    return new Restored(Map.copyOf(result),families,Map.copyOf(metadata));
   }
   private MonthlyPriceStorage.StoredPrice matching(MonthlyPriceRequest request,Collection<MonthlyPriceStorage.StoredPrice> rows){
     MonthlyPriceStorage.StoredPrice found=null;
@@ -208,6 +265,11 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
   }
 
   private AdoptionResult persist(Context context,MonthlyAdoptionPlan planned) {
+    if(specialPolicies!=null) {
+      var rules=specialPolicies.read(planned.selections().keySet(),true);
+      for(var entry:planned.selections().entrySet()) if(!specialPolicies.accepts(entry.getKey(),entry.getValue(),rules.get(entry.getKey())))
+        throw failure(Failure.REPLAN_REQUIRED,"物料限定价格配置已变化，请重新准备价格");
+    }
     storage.lockAndCheckSupplierRatios(context,planned);
     lockAndCheckScope(planned);
     var existing=lookup(planned.selections().keySet());var resolved=new LinkedHashMap<MonthlyPriceRequest,Selection>();
@@ -240,7 +302,7 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     if(resolved.containsKey(request))return resolved.get(request);
     var saved=existing.get(request);
     if(saved==null) {
-      var staged=matching(request,rows);
+      var staged=matching(request,rows.stream().filter(row->Objects.equals(row.applicability().specialPolicyRevision(),planned.selections().get(request).applicability().specialPolicyRevision())).toList());
       if(staged!=null)saved=resolved.values().stream().filter(value->value.monthlyPriceId().equals(staged.id())).findFirst().orElse(null);
     }
     if(saved!=null){

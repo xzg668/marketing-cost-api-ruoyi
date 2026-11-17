@@ -175,6 +175,12 @@ public class TechnicalDataVersionContentCodec {
     return version == null ? null : read(version.getDrawingBomJson(), TechnicalDataSupplementContent.DrawingBom.class);
   }
 
+  public TechnicalBomContent technicalBom(QuoteTechDataVersion version) {
+    return version == null ? null : read(version.getTechnicalBomJson(), TechnicalBomContent.class);
+  }
+
+  public String technicalBomJson(TechnicalBomContent value) { return value == null ? null : write(value); }
+
   public String drawingBomJson(TechnicalDataSupplementContent.DrawingBom drawing) { return write(drawing); }
 
   public TechnicalDataSupplementContent.NetLoss netLoss(QuoteTechDataVersion version) {
@@ -200,7 +206,7 @@ public class TechnicalDataVersionContentCodec {
         read(version.getNetLossJson(), TechnicalDataSupplementContent.NetLoss.class),
         read(version.getPriceItemsJson(), TechnicalDataSupplementContent.Prices.class),
         read(version.getSourceFactsJson(), SourceSnapshot.class),
-        plateMaterial(version));
+        plateMaterial(version), technicalBom(version));
   }
 
   public String sourceFactsJson(String productSourceJson, List<QuoteTechModule> modules) {
@@ -221,7 +227,8 @@ public class TechnicalDataVersionContentCodec {
     if (content == null) return 0;
     return switch (moduleType) {
       case "PROFILE" -> content.productFees() == null ? 0 : 1;
-      case "DRAWING_BOM" -> content.drawingBom() == null ? 0 : size(content.drawingBom().nodes());
+      case "DRAWING_BOM" -> content.technicalBom() != null ? size(content.technicalBom().nodes())
+          : content.drawingBom() == null ? 0 : size(content.drawingBom().nodes());
       case "MANUFACTURING" -> content.manufacturing() == null ? 0 : size(content.manufacturing().items());
       case "SOLDER" -> content.solder() == null ? 0 : size(content.solder().items());
       case "NET_LOSS" -> content.netLoss() == null ? 0 : 1;
@@ -239,7 +246,7 @@ public class TechnicalDataVersionContentCodec {
         || version.getManufacturingJson() != null || version.getPackagingJson() != null
         || version.getSolderItemsJson() != null || version.getNetLossJson() != null
         || version.getPriceItemsJson() != null || version.getSourceFactsJson() != null
-        || version.getPlateMaterialJson() != null)) {
+        || version.getPlateMaterialJson() != null || version.getTechnicalBomJson() != null)) {
       throw new IllegalArgumentException("旧版本结构不能包含未计入指纹的新模块内容");
     }
     return schema;

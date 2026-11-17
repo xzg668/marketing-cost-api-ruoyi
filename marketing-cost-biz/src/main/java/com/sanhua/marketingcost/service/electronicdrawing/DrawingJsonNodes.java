@@ -14,11 +14,12 @@ public final class DrawingJsonNodes {
 
   public static List<ElectronicDrawingSourceNode> forProduct(
       DrawingVerificationSummary summary, String drawingNo) {
-    var drawing = summary.data().get(drawingNo);
+    String key = DrawingProductGroup.keyFor(summary, drawingNo);
+    var drawing = key == null ? null : summary.data().get(key);
     if (drawing == null || drawing.params().items().isEmpty()) {
       throw invalid("已接收明细中没有本产品图号的有效行：" + drawingNo);
     }
-    int group = new ArrayList<>(summary.data().keySet()).indexOf(drawingNo) + 1;
+    int group = new ArrayList<>(summary.data().keySet()).indexOf(key) + 1;
     var nodes = new ArrayList<ElectronicDrawingSourceNode>();
     int position = 0;
     for (var row : drawing.params().items()) {
@@ -38,8 +39,8 @@ public final class DrawingJsonNodes {
           row.weight() == null || row.weight().isBlank()
               ? null
               : decimal(row.weight(), false, location + "单重"));
-      // PDF 合同没有重量单位，不能猜测 g/kg；需要重量计算时由现有资料规则核实单位。
-      node.setReferenceWeightUnit(null);
+      // 用户已明确当前 PDF 单重统一为克；原始九字段响应仍完整保留。
+      node.setReferenceWeightUnit(node.getReferenceWeight() == null ? null : "g");
       node.setSourceRemark(bounded(row.note(), 1000, location + "备注"));
       node.setMatchStatus(ElectronicDrawingSourceNode.MATCH_UNMATCHED);
       nodes.add(node);

@@ -348,7 +348,7 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     input.setParameters(new TechnicalDataSupplementContent.PriceParameters(null,null,null,new BigDecimal("12"),null,"元/只"));
     var approved=approve(service.save(productId,request,WANG));
     var status=publication.statuses(approved).getFirst();
-    assertThat(status.status()).withFailMessage(status.message()).isEqualTo("AVAILABLE");
+    assertThat(status.status()).withFailMessage(status.message()).isEqualTo("WAIT_FINANCE");
     var published=linked.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getTechnicalVersionId,approved.getId())).getFirst();
     assertThat(published.getProcessFee()).isEqualByComparingTo("12"); assertThat(published.getSupplierName()).isNull();
     assertThat(linked.selectById(original.getId()).getProcessFee()).isEqualByComparingTo("99");
@@ -367,7 +367,7 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type) VALUES(?,?)",task.getOaNo(),"COMMERCIAL");
     publication.publish(task,product,approved);
     var status=publication.statuses(approved).getFirst();
-    assertThat(status.status()).withFailMessage(status.message()).isEqualTo("AVAILABLE");
+    assertThat(status.status()).withFailMessage(status.message()).isEqualTo("WAIT_FINANCE");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_linked_item WHERE technical_version_id=?",Integer.class,approved.getId())).isEqualTo(1);
   }
 

@@ -74,6 +74,7 @@ public class QualityLossRateServiceImpl implements QualityLossRateService {
 
   @Override
   @CacheEvict(value = "qualityLossRates", allEntries = true)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public QualityLossRate create(QualityLossRateRequest request) {
     if (request == null) {
       return null;
@@ -90,6 +91,7 @@ public class QualityLossRateServiceImpl implements QualityLossRateService {
 
   @Override
   @CacheEvict(value = "qualityLossRates", allEntries = true)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public QualityLossRate update(Long id, QualityLossRateRequest request) {
     if (id == null || request == null) {
       return null;
@@ -114,6 +116,7 @@ public class QualityLossRateServiceImpl implements QualityLossRateService {
 
   @Override
   @CacheEvict(value = "qualityLossRates", allEntries = true)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public boolean delete(Long id) {
     if (id == null) {
       return false;
@@ -127,6 +130,7 @@ public class QualityLossRateServiceImpl implements QualityLossRateService {
   @Override
   @Transactional(rollbackFor = Exception.class)
   @CacheEvict(value = "qualityLossRates", allEntries = true)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public QualityLossRateImportResponse importItems(QualityLossRateImportRequest request) {
     QualityLossRateImportResponse response = new QualityLossRateImportResponse();
     if (request == null || request.getRows() == null || request.getRows().isEmpty()) {

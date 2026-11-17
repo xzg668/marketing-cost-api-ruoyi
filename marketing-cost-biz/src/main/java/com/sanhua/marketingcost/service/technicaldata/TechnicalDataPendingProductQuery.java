@@ -17,7 +17,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 @lombok.extern.slf4j.Slf4j
 public class TechnicalDataPendingProductQuery {
-  // 原核算快照只提供待核对的范围，公共资料已补齐时只更新本次显示，不改写原快照。
+  // 已保存的待办投影直接参与计数和分页；来源变化时更新投影，列表不触发业务检查。
   // 原有共享办理资料仍保留提交/审批约束；不能通过列表覆盖原办理人的状态。
   private static final String CURRENT_DRAWING_SOURCE = """
       SELECT v.id FROM lp_quote_bom_preparation_record p
@@ -30,21 +30,16 @@ public class TechnicalDataPendingProductQuery {
         AND BINARY p.cost_period_month=BINARY w.period_month
         AND EXISTS (SELECT 1 FROM lp_electronic_drawing_source_node n WHERE n.supplement_version_id=v.id)
         AND NOT EXISTS (
-          SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.sharedModules[*]' COLUMNS (
+          SELECT 1 FROM JSON_TABLE(COALESCE(JSON_EXTRACT(w.technical_check_json,'$.pending.check'),JSON_EXTRACT(w.technical_check_json,'$.check')), '$.sharedModules[*]' COLUMNS (
             module_type VARCHAR(40) PATH '$.moduleType')) s WHERE s.module_type='DRAWING_BOM')
       ORDER BY p.id DESC LIMIT 1
       """;
   private final JdbcTemplate jdbc;
   private final ObjectMapper json;
-  private final TechnicalDataSharedModuleQuery shared;
-  private final TechnicalDataQuoteSourceReader sources;
 
-  public TechnicalDataPendingProductQuery(JdbcTemplate jdbc, ObjectMapper json, TechnicalDataSharedModuleQuery shared,
-      TechnicalDataQuoteSourceReader sources) {
+  public TechnicalDataPendingProductQuery(JdbcTemplate jdbc, ObjectMapper json) {
     this.jdbc = jdbc;
     this.json = json;
-    this.shared = shared;
-    this.sources = sources;
   }
 
   /** 旧空任务沿用已接收的本产品、本月份图库。只投影未办理模块，不改任务或历史快照。 */
@@ -87,8 +82,6 @@ public class TechnicalDataPendingProductQuery {
         module.assigneeUserId(), module.assigneeName());
   }
 
-  @org.springframework.beans.factory.annotation.Autowired
-  private TechnicalDataPendingSourceReads previews;
   private record Candidate(long id,int seq,String code,String name,String model,String spec,java.math.BigDecimal volume,
       String oaNo,String month,Long drawing,TechnicalDataSourceCheckResponse check) {}
 
@@ -107,13 +100,13 @@ public class TechnicalDataPendingProductQuery {
         WHERE i.deleted=0 AND f.deleted=0
           AND w.last_checked_at IS NOT NULL AND w.technical_check_json IS NOT NULL
           AND EXISTS (
-            SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.modules[*]' COLUMNS (
+            SELECT 1 FROM JSON_TABLE(COALESCE(JSON_EXTRACT(w.technical_check_json,'$.pending.check'),JSON_EXTRACT(w.technical_check_json,'$.check')), '$.modules[*]' COLUMNS (
               module_type VARCHAR(40) PATH '$.moduleType', required_flag INT PATH '$.required',
               reason_code VARCHAR(80) PATH '$.reasonCode')) m
-            WHERE (m.required_flag=1 OR (m.module_type='PRICE' AND m.reason_code='PRICE_BASIS_UNCONFIRMED'))
+            WHERE m.required_flag=1
               AND (m.module_type<>'DRAWING_BOM' OR (%s) IS NULL)
               AND NOT EXISTS (
-              SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.sharedModules[*]' COLUMNS (
+              SELECT 1 FROM JSON_TABLE(COALESCE(JSON_EXTRACT(w.technical_check_json,'$.pending.check'),JSON_EXTRACT(w.technical_check_json,'$.check')), '$.sharedModules[*]' COLUMNS (
                 module_type VARCHAR(40) PATH '$.moduleType', source_status VARCHAR(40) PATH '$.status')) s
               WHERE s.module_type=m.module_type AND s.source_status IN ('SUBMITTED','APPROVED')))
           AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_task t
@@ -148,7 +141,7 @@ public class TechnicalDataPendingProductQuery {
 
   public record Page(long total, List<TechnicalDataWorkbenchRowResponse> records) {}
 
-  /** 先按当前来源移除已补齐产品，再计数、分页；一次请求只检查每个候选产品一次。 */
+  /** 使用同一份保存状态在数据库中计数、分页，不扫描或检查其他页产品。 */
   public Page readPage(String accessMode, String businessUnit, String month, String keyword,
       String oaNo, int offset, int size) {
     if ("ASSIGNEE".equals(accessMode)) return new Page(0, List.of());
@@ -161,18 +154,10 @@ public class TechnicalDataPendingProductQuery {
   }
 
   private Page readPage(Query query, int offset, int size, boolean firstOnly) {
-    long total = 0;
-    List<TechnicalDataWorkbenchRowResponse> records = new ArrayList<>();
-    for (int candidateOffset = 0; ; candidateOffset += 128) {
-      var candidates = candidates(query, candidateOffset, 128);
-      for (var row : candidates) {
-        if (row.product().modules().stream().noneMatch(TechnicalDataModuleResponse::required)) continue;
-        if (total >= offset && records.size() < size) records.add(row);
-        total++;
-        if (firstOnly) return new Page(total, List.copyOf(records));
-      }
-      if (candidates.size() < 128) return new Page(total, List.copyOf(records));
-    }
+    Long count=jdbc.queryForObject("SELECT COUNT(*) " + query.sql(),Long.class,query.args().toArray());
+    long total=count==null?0:count;
+    if(total==0 || size==0 || offset>=total) return new Page(total,List.of());
+    return new Page(total,candidates(query,offset,firstOnly?1:size));
   }
 
   private List<TechnicalDataWorkbenchRowResponse> candidates(Query query, int offset, int size) {
@@ -180,10 +165,17 @@ public class TechnicalDataPendingProductQuery {
     args.add(offset); args.add(size);
     var stored = jdbc.query("""
         SELECT i.id,i.seq,i.material_no,i.product_name,i.sunl_model,i.spec,i.annual_volume,
-          f.oa_no,w.period_month,w.technical_check_json,(%s) AS current_drawing_source_id
+          f.oa_no,w.period_month,w.technical_check_json AS original_technical_check_json,JSON_OBJECT('check',COALESCE(JSON_EXTRACT(w.technical_check_json,'$.pending.check'),JSON_EXTRACT(w.technical_check_json,'$.check'))) AS technical_check_json,(%s) AS current_drawing_source_id
         """.formatted(CURRENT_DRAWING_SOURCE) + query.sql() + " ORDER BY w.updated_at DESC,w.id DESC LIMIT ?,?", (row, index) -> {
       TechnicalDataSourceCheckResponse check;
       try {
+        String originalJson=row.getString("original_technical_check_json");
+        if(originalJson!=null) {
+          var original=json.readTree(originalJson).path("check");
+          if(original.path("oaFormItemId").asLong()!=row.getLong("id")
+              || !java.util.Objects.equals(original.path("accountingMonth").asText(),row.getString("period_month")))
+            throw new IllegalStateException("补录检查与当前产品、月份不一致，请重新检查资料");
+        }
         check = json.treeToValue(json.readTree(row.getString("technical_check_json")).get("check"),
             TechnicalDataSourceCheckResponse.class);
       } catch (JsonProcessingException exception) {
@@ -197,15 +189,8 @@ public class TechnicalDataPendingProductQuery {
           row.getString("sunl_model"),row.getString("spec"),row.getBigDecimal("annual_volume"),row.getString("oa_no"),
           row.getString("period_month"),row.getObject("current_drawing_source_id",Long.class),check);
     },args.toArray());
-    // Finish the result set before opening independent source-preview transactions.
-    java.util.function.Function<Candidate,TechnicalDataSourceCheckResponse> refresh=row -> current(row.check());
-    var refreshed=previews==null?stored.stream().map(refresh).toList():previews.map(stored,refresh);
-    var result=new ArrayList<TechnicalDataWorkbenchRowResponse>();
-    for(int index=0;index<stored.size();index++) {
-      var row=stored.get(index);var check=refreshed.get(index);Long drawingSourceId=row.drawing();
-      var currentShared=shared.current(row.id(),row.month(),check.modules());
-      check=new TechnicalDataSourceCheckResponse(check.oaFormItemId(),check.accountingMonth(),check.fingerprint(),
-          check.checkedAt(),check.modules(),check.taskUpdateMessage(),currentShared);
+    java.util.function.Function<Candidate,TechnicalDataWorkbenchRowResponse> project=row -> {
+      var check=row.check();Long drawingSourceId=row.drawing();
       var modules=TechnicalDataSharedModuleQuery.applySharedSources(check.modules(),check.sharedModules()).stream().map(module ->
           "DRAWING_BOM".equals(module.moduleType()) && drawingSourceId!=null
               ? new TechnicalDataModuleResponse(null,module.moduleType(),false,"DRAWING_SOURCE_AVAILABLE",
@@ -215,37 +200,9 @@ public class TechnicalDataPendingProductQuery {
                   module.required()?"PENDING":"NOT_REQUIRED",null,0,null,module.availability().name(),module.sourceReference(),module.checkedAt(),null,null)).toList();
       var product=new TechnicalDataProductResponse(null,row.id(),row.seq(),row.code(),row.name(),row.model(),row.spec(),row.volume(),null,row.oaNo(),
           row.month(),null,check.fingerprint(),"UNASSIGNED",null,null,null,null,null,modules,null,null);
-      result.add(new TechnicalDataWorkbenchRowResponse(null,null,row.oaNo(),row.month(),null,null,"UNASSIGNED",null,null,null,List.of(),List.of(),product,check));
-    }
-    return List.copyOf(result);
+      return new TechnicalDataWorkbenchRowResponse(null,null,row.oaNo(),row.month(),null,null,"UNASSIGNED",null,null,null,List.of(),List.of(),product,check);
+    };
+    return stored.stream().map(project).toList();
   }
 
-  private TechnicalDataSourceCheckResponse current(TechnicalDataSourceCheckResponse saved) {
-    boolean mixedPriceCheck = saved.modules().stream().anyMatch(row -> "PRICE".equals(row.moduleType())
-        && "PRICE_BASIS_UNCONFIRMED".equals(row.reasonCode()));
-    if (!mixedPriceCheck && saved.modules().stream().noneMatch(row -> row.required() && !"DRAWING_BOM".equals(row.moduleType()))) return saved;
-    try {
-      var current = sources.preview(saved.oaFormItemId(), saved.accountingMonth());
-      // 修正已核算的旧混合缺口投影；新结论必须来自当前权威来源，查询不写回历史。
-      // 返回同次检查的完整指纹，使后续实际分派能验证同一组资料。
-      if (mixedPriceCheck && current.modules().stream().anyMatch(row -> "PRICE".equals(row.moduleType())
-          && (row.availability() == TechnicalDataAvailability.MISSING || row.availability() == TechnicalDataAvailability.AVAILABLE)))
-        return current;
-      // 只复核核算已经发现的缺口。查询失败或尚未核实不能当作已补齐，图库沿用精确来源绑定。
-      var modules = saved.modules().stream().map(previous -> {
-        if (!previous.required() || "DRAWING_BOM".equals(previous.moduleType())) return previous;
-        return current.modules().stream().filter(next -> next.moduleType().equals(previous.moduleType())
-            && !next.required() && (next.availability() == TechnicalDataAvailability.AVAILABLE
-                || "PRICE".equals(next.moduleType()) && next.availability() == TechnicalDataAvailability.UNCONFIRMED
-                    && "PRICE_BASIS_UNCONFIRMED".equals(next.reasonCode())))
-            .findFirst().orElse(previous);
-      }).toList();
-      return new TechnicalDataSourceCheckResponse(saved.oaFormItemId(), saved.accountingMonth(),
-          saved.fingerprint(), saved.checkedAt(), modules, saved.taskUpdateMessage(), saved.sharedModules());
-    } catch (RuntimeException failure) {
-      log.warn("待补录公共来源复核未完成，保留原检查：item={}, month={}",
-          saved.oaFormItemId(), saved.accountingMonth(), failure);
-      return saved;
-    }
-  }
 }

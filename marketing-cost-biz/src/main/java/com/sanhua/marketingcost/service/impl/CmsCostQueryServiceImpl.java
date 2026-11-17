@@ -28,6 +28,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -35,6 +37,7 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
   private static final int DEFAULT_PAGE = 1;
   private static final int DEFAULT_SIZE = 20;
   private static final int MAX_SIZE = 200;
+  private static final int MAX_WORKSHOP_PARENT_CODES = 200;
   private static final String SALARY_DIRECT = "SALARY_DIRECT";
   private static final String SALARY_INDIRECT = "SALARY_INDIRECT";
   private static final String DIRECT_LABOR_SUBJECT_CODE = "0301";
@@ -106,6 +109,7 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
   }
 
   @Override
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public CmsCostRawPageResponse<CmsWorkshopLaborRaw> pageWorkshopRows(
       String batchNo,
       String parentCode,
@@ -121,11 +125,28 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
     QueryWrapper<CmsWorkshopLaborRaw> query =
         new QueryWrapper<CmsWorkshopLaborRaw>()
             .in(!batchIds.isEmpty(), "import_batch_id", batchIds)
-            .like(StringUtils.hasText(parentCode), "parent_code", trim(parentCode))
             .likeRight(costYear != null && !StringUtils.hasText(period), "period", costYear + "-")
             .eq(StringUtils.hasText(period), "period", trim(period))
             .eq(StringUtils.hasText(businessUnitType), "business_unit_type", trim(businessUnitType))
             .orderByDesc("id");
+    if (StringUtils.hasText(parentCode)) {
+      // A covering parent-code index can find matching codes without reading every wage row.
+      // Keep the original contains search, including matches longer than a complete input code.
+      List<String> parentCodes = workshopLaborRawMapper.selectObjs(
+          new QueryWrapper<CmsWorkshopLaborRaw>()
+              .select("DISTINCT parent_code")
+              .like("parent_code", trim(parentCode))
+              .last("LIMIT " + (MAX_WORKSHOP_PARENT_CODES + 1)));
+      if (parentCodes.isEmpty()) {
+        return emptyRaw("WORKSHOP");
+      }
+      if (parentCodes.size() <= MAX_WORKSHOP_PARENT_CODES) {
+        query.in("parent_code", parentCodes);
+      } else {
+        // Broad searches remain complete; never truncate their results to the lookup limit.
+        query.like("parent_code", trim(parentCode));
+      }
+    }
     Page<CmsWorkshopLaborRaw> page =
         workshopLaborRawMapper.selectPage(new Page<>(pageNo(current), pageSize(size)), query);
     return new CmsCostRawPageResponse<>("WORKSHOP", page.getTotal(), page.getRecords());

@@ -55,6 +55,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"})
   public MaterialPriceTypePageResponse.Row update(Long id, MaterialPriceTypeRequest request) {
     if (request == null || !StringUtils.hasText(request.expectedRevision())
         || (request.restoreDefault() ? request.order() != null : request.order() == null)) {

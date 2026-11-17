@@ -33,6 +33,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 预检不写库；确认时在一个事务中保存整个财务发布及所有来源，已发布行只追加修订。 */
 @Service
 public class FinanceFactorPublicationService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
   private final com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceService settlementPrices;
   private final FinanceFactorWorkbookParser parser;
   private final FactorCanonicalKeyService canonicalKeys;
@@ -187,6 +190,7 @@ public class FinanceFactorPublicationService {
     if ("210".equals(context.priceOrgCode()))
       inquiryPrices.refreshInTransaction(context.businessUnitType(), context.priceMonth(), "FINANCE_PUBLICATION", operator);
     monthlyPrices.refresh(context, publication.batchId());
+    if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),context.businessUnitType(),java.util.Set.of(),java.util.Set.of()));
     return new Publication(
         publication.batchId(),
         publication.revision(),

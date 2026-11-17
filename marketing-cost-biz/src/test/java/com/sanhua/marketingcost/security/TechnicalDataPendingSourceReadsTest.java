@@ -27,13 +27,13 @@ class TechnicalDataPendingSourceReadsTest {
     }
   }
   @Test void concurrencyIsBoundedAndMultipleProductsCanProgressTogether() {
-    var active=new AtomicInteger();var maximum=new AtomicInteger();var started=new CountDownLatch(4);
+    var active=new AtomicInteger();var maximum=new AtomicInteger();var started=new CountDownLatch(8);
     reads.map(java.util.stream.IntStream.range(0,20).boxed().toList(),value->{
       int count=active.incrementAndGet();maximum.accumulateAndGet(count,Math::max);started.countDown();
       try {assertThat(started.await(3,TimeUnit.SECONDS)).isTrue();return value;}
       catch(InterruptedException failure){Thread.currentThread().interrupt();throw new IllegalStateException(failure);}
       finally {active.decrementAndGet();}
-    });assertThat(maximum.get()).isEqualTo(4);assertThat(active.get()).isZero();
+    });assertThat(maximum.get()).isEqualTo(8);assertThat(active.get()).isZero();
   }
   @Test void failureWaitsForAllReadsAndDoesNotLeakThePreviousCaller() {
     actor("first",QuoteVisibilityContext.Scope.COMMERCIAL,1);var finished=new AtomicInteger();

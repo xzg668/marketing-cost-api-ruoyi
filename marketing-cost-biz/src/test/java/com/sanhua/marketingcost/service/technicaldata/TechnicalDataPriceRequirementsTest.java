@@ -258,6 +258,11 @@ class TechnicalDataPriceRequirementsTest {
     assertThat(service.checkComposedBom(task,product).issues()).contains("缺净重");
   }
 
+  @Test void specialFinanceImportRequirementDoesNotCreateTechnicalPriceEntry() {
+    var prepared=bomGaps();prepared.getGaps().get(1).setReasonCode("SPECIAL_PRICE_REQUIRED");
+    assertThat(TechnicalDataPriceRequirements.technicalGaps(prepared)).containsExactly(prepared.getGaps().getFirst());
+  }
+
   @Test void manufacturingWrappedSupplierReviewIsAlsoExcludedFromTechnicalPriceEntry() {
     var prepared = bomGaps();
     var waiting = prepared.getGaps().get(1);

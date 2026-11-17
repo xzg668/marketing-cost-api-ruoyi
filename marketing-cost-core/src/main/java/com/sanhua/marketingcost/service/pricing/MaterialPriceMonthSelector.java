@@ -19,8 +19,10 @@ public class MaterialPriceMonthSelector {
     }
     // 同时检查规范格式；字符串月份的数据库排序依赖 YYYY-MM 契约。
     requestedMonth = FactorPriceScope.month(requestedMonth);
-    String source =
-        mapper.findLatestMonth(businessUnit, normalizeOrganization(orgCode), requestedMonth);
+    final String month=requestedMonth;
+    String source = QuotationPreviewReads.read(this,
+        java.util.List.of(businessUnit,normalizeOrganization(orgCode),month),
+        ()->mapper.findLatestMonth(businessUnit,normalizeOrganization(orgCode),month));
     return source == null ? null : new PriceMonthSelection(requestedMonth, source);
   }
 

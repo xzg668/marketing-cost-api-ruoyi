@@ -72,6 +72,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   private final PackageComponentStructureReadService packageComponentStructureReadService;
   private final QuoteBomContextResolver quoteBomContextResolver;
   private final CurrentU9BomGateway originalBom;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom;
 
   public QuoteProductBomPreparationServiceImpl(
       OaFormItemMapper oaFormItemMapper,
@@ -83,7 +84,9 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       SupplementBomReadService supplementBomReadService,
       PackageComponentStructureReadService packageComponentStructureReadService,
       QuoteBomContextResolver quoteBomContextResolver,
-      CurrentU9BomGateway originalBom) {
+      CurrentU9BomGateway originalBom,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom) {
+    this.completeBom = completeBom;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -121,6 +124,25 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     if(quoteShapeInputs!=null) quoteShapeInputs.discoverSelected(context.item().getBusinessUnitType(),periodMonth,itemId);
     boolean noOriginalBom = QuoteProductIdentityUtils.hasFormalMaterialNo(context.item())
         && originalBomMissing(context, bomContext, resolveQuoteDate(quoteDate));
+    if (noOriginalBom || !QuoteProductIdentityUtils.hasFormalMaterialNo(context.item())) {
+      var snapshot = completeBom.snapshot(itemId, periodMonth, context.form().getBusinessUnitType(),
+          organization.priceOrgCode(), bomContext.customerKey(), bomContext.packageMethod());
+      if (snapshot != null) {
+        var technicalType = fullSupplementType(context.item(), productCode);
+        boolean submitted = "SUCCESS".equals(snapshot.getSyncStatus());
+        String message = submitted ? null : "完整BOM已保存，须按原流程提交确认后才能核算";
+        var status = upsertStatus(context, productCode, periodMonth, technicalType, null, message);
+        status.setBomSource(snapshot.getBomSource());
+        if (submitted) status.setBomStatus(QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode());
+        quoteBomStatusMapper.updateById(status);
+        var record = upsertPreparationRecord(context, status, technicalType, periodMonth,
+            submitted ? PREPARATION_READY : PREPARATION_NEED_TECH, false, null, null,
+            snapshot.getBomSource(), null, organization, message);
+        return toPreview(record, status, submitted, !submitted, false, snapshot.getBomSource(), submitted,
+            List.of(), null, false, List.of(), submitted ? List.of() : List.of(SCOPE_NON_BARE_FULL_BOM),
+            submitted ? List.of() : List.of(message));
+      }
+    }
     QuoteProductTypeResolveResult typeResult =
         noOriginalBom ? fullSupplementType(context.item(), productCode) : resolveProductType(
             context.item(), productCode, organization.materialOrganizationCode());
@@ -706,6 +728,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
                 QuoteBomPreparationRecord::getMaterialOrganizationCode,
                 organization.materialOrganizationCode())
             .eq(QuoteBomPreparationRecord::getActiveFlag, ACTIVE)
+            .and(scope -> scope.isNull(QuoteBomPreparationRecord::getReuseType)
+                .or().notIn(QuoteBomPreparationRecord::getReuseType, "TECH_REFERENCE", "TECH_UPLOAD"))
             .in(
                 QuoteBomPreparationRecord::getPreparationStatus,
                 List.of(PREPARATION_READY, "CONFIRMED"))

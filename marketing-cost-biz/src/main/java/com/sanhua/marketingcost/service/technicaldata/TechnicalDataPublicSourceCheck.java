@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 /** 只查公共 BOM、工资、包装和制造资料；不依赖价格生成，组树阶段可安全复用。 */
 @Service
 public class TechnicalDataPublicSourceCheck {
+  private final TechnicalBomSavedSourceQuery completeBoms;
+  private final TechnicalBomAbsenceQuery completeBomEntry;
   private final TechnicalDataSharedModules shared;
   private final CurrentU9BomGateway u9;
   private final TechnicalDataSalarySourceQuery salary;
@@ -38,7 +40,10 @@ public class TechnicalDataPublicSourceCheck {
       com.sanhua.marketingcost.service.NetLossRateQuery netLoss, TechnicalDataSharedModules shared,
       ElectronicDrawingSourceNodeRepository drawingSources,
       com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
-      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse) {
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse,
+      TechnicalBomSavedSourceQuery completeBoms, TechnicalBomAbsenceQuery completeBomEntry) {
+    this.completeBoms = completeBoms;
+    this.completeBomEntry = completeBomEntry;
     this.drawingReuse = drawingReuse;
     this.repriceBom = repriceBom;
     this.shared = shared;
@@ -57,18 +62,33 @@ public class TechnicalDataPublicSourceCheck {
     return repriceBom.facts(context, () -> checkSelectedSources(context));
   }
 
+  public List<TechnicalDataSourceFact> checkDataSources(QuoteBomReadContext context,
+      java.util.Set<TechnicalDataModuleType> selected) {
+    // 部分事实不写入完整BOM事实缓存，避免后续正式读取被部分结果污染。
+    return checkSelectedSources(context, java.util.Set.copyOf(selected));
+  }
+
   private List<TechnicalDataSourceFact> checkSelectedSources(QuoteBomReadContext context) {
+    return checkSelectedSources(context, java.util.EnumSet.allOf(TechnicalDataModuleType.class));
+  }
+
+  private List<TechnicalDataSourceFact> checkSelectedSources(QuoteBomReadContext context,
+      java.util.Set<TechnicalDataModuleType> selected) {
     List<TechnicalDataSourceFact> facts = new ArrayList<>();
-    var originalBom = checkOriginalBom(context, facts);
-    facts.add(packaging.check(context, originalBom));
-    facts.add(checkManufacturing(context, originalBom));
-    facts.add(checkSalary(context));
-    facts.add(checkNetLoss(context));
+    boolean needsBom = selected.stream().anyMatch(type -> java.util.Set.of(TechnicalDataModuleType.PROFILE,
+        TechnicalDataModuleType.DRAWING_BOM, TechnicalDataModuleType.AUXILIARY, TechnicalDataModuleType.SOLDER,
+        TechnicalDataModuleType.PACKAGE, TechnicalDataModuleType.MANUFACTURING).contains(type));
+    var originalBom = needsBom ? checkOriginalBom(context, facts, selected) : null;
+    if (selected.contains(TechnicalDataModuleType.PACKAGE)) facts.add(packaging.check(context, originalBom));
+    if (selected.contains(TechnicalDataModuleType.MANUFACTURING)) facts.add(checkManufacturing(context, originalBom));
+    if (selected.contains(TechnicalDataModuleType.SALARY)) facts.add(checkSalary(context));
+    if (selected.contains(TechnicalDataModuleType.NET_LOSS)) facts.add(checkNetLoss(context));
     return List.copyOf(facts);
   }
 
   private TechnicalDataAvailability checkOriginalBom(
-      QuoteBomReadContext context, List<TechnicalDataSourceFact> facts) {
+      QuoteBomReadContext context, List<TechnicalDataSourceFact> facts,
+      java.util.Set<TechnicalDataModuleType> selected) {
     CurrentU9BomResult result;
     try {
       result = repriceBom.original(context, () -> u9.read(context));
@@ -95,12 +115,36 @@ public class TechnicalDataPublicSourceCheck {
                     Objects.toString(result.monthlySnapshotId(), ""),
                     "structureFingerprint",
                     Objects.toString(result.structureFingerprint(), "")));
+    TechnicalBomSavedSourceQuery.Saved complete = null;
+    String completeError = null;
+    if (availability == TechnicalDataAvailability.MISSING) {
+      try { complete = completeBoms.read(context); }
+      catch (RuntimeException error) { completeError = Objects.toString(error.getMessage(), "完整BOM来源检查失败"); }
+    }
+    var entry = selected.stream().anyMatch(type -> java.util.Set.of(TechnicalDataModuleType.AUXILIARY, TechnicalDataModuleType.SOLDER).contains(type))
+        && availability == TechnicalDataAvailability.MISSING && complete == null && completeError == null
+        ? completeBomEntry.read(context) : null;
     for (var type :
         List.of(
             TechnicalDataModuleType.PROFILE,
             TechnicalDataModuleType.DRAWING_BOM,
             TechnicalDataModuleType.AUXILIARY,
             TechnicalDataModuleType.SOLDER)) {
+      if (!selected.contains(type)) continue;
+      if (entry != null && entry.allowsEntry()
+          && java.util.Set.of(TechnicalDataModuleType.AUXILIARY, TechnicalDataModuleType.SOLDER).contains(type)) {
+        facts.add(fact(context, type, TechnicalDataAvailability.UNCONFIRMED, "TECH_BOM_WAITING",
+            "待完整BOM确认后检查，辅料和焊料应随BOM提供", entry.evidence()));
+        continue;
+      }
+      if (java.util.Set.of(TechnicalDataModuleType.AUXILIARY, TechnicalDataModuleType.SOLDER).contains(type)
+          && (complete != null || completeError != null)) {
+        facts.add(fact(context, type, completeError == null ? TechnicalDataAvailability.AVAILABLE : TechnicalDataAvailability.ERROR,
+            completeError == null ? "TECH_BOM_MATERIALS_AVAILABLE" : "TECH_BOM_SOURCE_ERROR",
+            completeError == null ? "已有（来自BOM），按完整子件清单核算，无需重复补录" : completeError,
+            complete == null ? null : "TECH_BOM:" + complete.version().getId() + ":" + complete.fingerprint()));
+        continue;
+      }
       if (type == TechnicalDataModuleType.DRAWING_BOM
           && availability == TechnicalDataAvailability.MISSING) {
         facts.add(checkDrawing(context, reference));
@@ -171,6 +215,10 @@ public class TechnicalDataPublicSourceCheck {
           "U9 原始来源尚未核实，不能判定缺原材料",
           null);
     try {
+      var complete = completeBoms.read(context);
+      if (complete != null) return fact(context, TechnicalDataModuleType.MANUFACTURING,
+          TechnicalDataAvailability.AVAILABLE, "TECH_BOM_RELATIONS_AVAILABLE", "完整技术BOM已有材料关系，无需图库制造件补录",
+          "TECH_BOM:" + complete.version().getId() + ":" + complete.fingerprint());
       var savedRows = repriceBom.drawingRows(context);
       if (savedRows != null) {
         if (savedRows.isEmpty()) return fact(context, TechnicalDataModuleType.MANUFACTURING,

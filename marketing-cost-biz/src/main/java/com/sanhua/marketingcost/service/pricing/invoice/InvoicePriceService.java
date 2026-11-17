@@ -12,6 +12,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Atomic incremental imports; the unique invoice identity lives in the current table, revisions in immutable batches. */
 @Service
 public final class InvoicePriceService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
   public record Published(long batchId, int rows, int duplicates, String fileName) {}
   public record Page(List<Map<String,Object>> records, long total) {}
   public record Original(String name, byte[] bytes) {}
@@ -72,6 +75,7 @@ public final class InvoicePriceService {
     var arguments = parsed.rows().stream().map(p -> new Object[]{unit,org,p.materialCode(),p.documentNo(),p.supplierCode(),p.supplierName(),
         p.materialName(),p.specification(),p.unit(),p.unitPrice(),p.currency(),p.voucherNo(),p.businessType(),p.documentType(),p.priceType(),p.sheetName(),p.sourceRow(),batchId}).toList();
     jdbc.batchUpdate(insert,arguments);
+    if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),unit,parsed.rows().stream().map(InvoiceWorkbookParser.Price::materialCode).collect(java.util.stream.Collectors.toSet()),java.util.Set.of()));
     return new Published(batchId,parsed.rows().size(),parsed.duplicateCount(),name);
   }
 

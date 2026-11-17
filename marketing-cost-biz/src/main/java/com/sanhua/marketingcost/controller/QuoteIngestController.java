@@ -63,7 +63,7 @@ public class QuoteIngestController {
     this.quoteRequestQueryService = quoteRequestQueryService;
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import','ingest:quote:mock-create')")
+  @PreAuthorize("@ss.hasRole('admin')")
   @PostMapping("/requests")
   public CommonResult<QuoteIngestResponse> ingest(@RequestBody QuoteIngestRequest request) {
     try {
@@ -73,7 +73,7 @@ public class QuoteIngestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PreAuthorize("@ss.hasRole('admin')")
   @PostMapping("/excel/preview")
   public CommonResult<QuoteExcelImportPreviewResponse> previewExcel(
       @RequestParam("file") MultipartFile file) {
@@ -85,7 +85,7 @@ public class QuoteIngestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PreAuthorize("@ss.hasRole('admin')")
   @PostMapping("/excel/commit")
   public CommonResult<QuoteExcelImportCommitResponse> commitExcel(
       @RequestParam("file") MultipartFile file) {
@@ -97,7 +97,7 @@ public class QuoteIngestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PreAuthorize("@ss.hasRole('admin')")
   @PostMapping("/pdf/preview")
   public CommonResult<QuoteExcelImportPreviewResponse> previewPdf(
       @RequestParam("file") MultipartFile file) {
@@ -109,7 +109,7 @@ public class QuoteIngestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PreAuthorize("@ss.hasRole('admin')")
   @PostMapping("/pdf/commit")
   public CommonResult<QuoteExcelImportCommitResponse> commitPdf(
       @RequestParam("file") MultipartFile file) {
@@ -121,13 +121,13 @@ public class QuoteIngestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PreAuthorize("@ss.hasRole('admin')")
   @GetMapping("/excel/templates")
   public CommonResult<List<QuoteExcelTemplateInfoResponse>> listExcelTemplates() {
     return CommonResult.success(quoteExcelTemplateService.listTemplates());
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PreAuthorize("@ss.hasRole('admin')")
   @GetMapping("/excel/templates/{templateType}/download")
   public void downloadExcelTemplate(
       @PathVariable("templateType") String templateType, HttpServletResponse response)

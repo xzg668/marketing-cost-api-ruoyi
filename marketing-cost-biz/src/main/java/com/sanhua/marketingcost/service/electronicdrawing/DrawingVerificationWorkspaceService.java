@@ -93,17 +93,21 @@ public class DrawingVerificationWorkspaceService {
             .stream()
             .map(QuoteBomSupplementVersion::getId)
             .toList();
+    JsonNode data = parse(result.getDataJson());
+    JsonNode plmData = parse(plmSource.getPlmDataJson());
     return new Detail(
         task.getId(),
         resultId,
         result.getEventType(),
         adoption,
         summary,
-        parse(result.getDataJson()),
-        parse(plmSource.getPlmDataJson()),
+        data,
+        plmData,
         plmSource.getId(),
         sourceIds,
-        result.getReceivedAt());
+        result.getReceivedAt(),
+        task.getDrawingNo(),
+        DrawingProductGroup.keyFor(data, task.getDrawingNo(), plmData));
   }
 
   /** 不开外层事务；核验 HTTP 与结果消费各自管理短事务。 */

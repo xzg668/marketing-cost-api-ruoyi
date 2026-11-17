@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.pricing.monthly;
 import com.sanhua.marketingcost.entity.monthly.MonthlyMaterialPriceRow;
 import com.sanhua.marketingcost.mapper.monthly.MonthlyPriceStorageMapper;
 import com.sanhua.marketingcost.mapper.monthly.MonthlyPriceLinkMapper;
+import com.sanhua.marketingcost.service.pricing.QuotationPreviewReads;
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.PriceFact;
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.PricingType;
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.SourceEvidence;
@@ -128,6 +129,7 @@ public class MonthlyPriceStorage {
     for(var existing:mapper.lockFamily(hash)) {
       var saved=read(existing);
       if(!saved.family().equals(key))throw new IllegalStateException("Monthly identity hash conflict");
+      if(!Objects.equals(applicability.specialPolicyRevision(),saved.applicability().specialPolicyRevision()))continue;
       for(var left:applicability.fragments())for(var right:saved.applicability().fragments()) {
         // A current locking read can see a winner committed after this transaction's snapshot.
         // Reject the obsolete candidate and let the existing bounded executor rebuild the whole plan.
@@ -176,8 +178,11 @@ public class MonthlyPriceStorage {
 
   public List<StoredPrice> readByIds(String unit,Collection<Long> ids) {
     requireBusinessUnit(unit);var unique=new ArrayList<>(new LinkedHashSet<>(ids));var result=new ArrayList<StoredPrice>();
-    for(int i=0;i<unique.size();i+=256)mapper.pricesByIds(unit,unique.subList(i,Math.min(i+256,unique.size())))
-        .forEach(row->result.add(read(row)));
+    for(int i=0;i<unique.size();i+=256) {
+      var chunk=List.copyOf(unique.subList(i,Math.min(i+256,unique.size())));
+      result.addAll(QuotationPreviewReads.read(this,List.of("ids",unit,chunk),
+          ()->mapper.pricesByIds(unit,chunk).stream().map(this::read).toList()));
+    }
     return List.copyOf(result);
   }
   public List<StoredPrice> readFamilies(Collection<MonthlyPriceFamilyKey> families) {
@@ -187,8 +192,11 @@ public class MonthlyPriceStorage {
     var result=new ArrayList<StoredPrice>();
     groups.forEach((unit,hashes)->{
       var unique=new ArrayList<>(hashes);
-      for(int i=0;i<unique.size();i+=256)mapper.pricesByFamilies(unit,unique.subList(i,Math.min(i+256,unique.size())))
-          .forEach(row->result.add(read(row)));
+      for(int i=0;i<unique.size();i+=256) {
+        var chunk=List.copyOf(unique.subList(i,Math.min(i+256,unique.size())));
+        result.addAll(QuotationPreviewReads.read(this,List.of("families",unit,chunk),
+            ()->mapper.pricesByFamilies(unit,chunk).stream().map(this::read).toList()));
+      }
     });
     return List.copyOf(result);
   }

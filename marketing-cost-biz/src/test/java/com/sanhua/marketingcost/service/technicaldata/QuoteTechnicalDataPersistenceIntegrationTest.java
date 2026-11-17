@@ -59,6 +59,29 @@ class QuoteTechnicalDataPersistenceIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
+  void completeTechnicalBomRoundTripsOnlyInDraftAndCannotChangeFrozenContent() {
+    var task = service.createTask(task("COMPLETE-BOM", 701L, 81009L));
+    var sourceProduct = product(task.getId(), 81009L);
+    sourceProduct.setContentSchemaVersion(2);
+    var product = service.createProduct(sourceProduct);
+    var sourceVersion = version(product.getId(), 1);
+    sourceVersion.setContentSchemaVersion(2);
+    sourceVersion.setSourceFactsJson("{\"productSourceJson\":\"{}\",\"modules\":[],\"dependencies\":[]}");
+    sourceVersion.setTechnicalBomJson("{\"schemaVersion\":1,\"entryMode\":\"UPLOAD\",\"nodes\":[{\"input\":{\"lineNo\":2,\"hierarchy\":\"1.10\"}}]}");
+    var version = service.createVersion(sourceVersion);
+    assertThat(repository.findVersion(version.getId()).orElseThrow().getTechnicalBomJson()).contains("1.10");
+    var changed = repository.findVersion(version.getId()).orElseThrow();
+    changed.setTechnicalBomJson("{\"schemaVersion\":1,\"entryMode\":\"REFERENCE\",\"nodes\":[{\"input\":{\"lineNo\":2,\"hierarchy\":\"1.10\"}}]}");
+    service.updateDraft(changed, 0);
+    assertThat(repository.findVersion(version.getId()).orElseThrow().getTechnicalBomJson()).contains("REFERENCE");
+    assertThat(repository.transitionVersion(version.getId(), "DRAFT", "FROZEN", 1,
+        "a".repeat(64), "{\"schemaVersion\":2,\"modules\":[]}", 101L, java.time.LocalDateTime.now())).isOne();
+    assertThatThrownBy(() -> jdbc.update("UPDATE lp_quote_tech_data_version SET technical_bom_json='{}' WHERE id=?", version.getId()))
+        .hasMessageContaining("IMMUTABLE");
+    assertThat(repository.findVersion(version.getId()).orElseThrow().getTechnicalBomJson()).contains("REFERENCE", "1.10");
+  }
+
+  @Test
   @DisplayName("技术资料Mapper、仓储和服务完成CRUD、批量写入与8位小数往返")
   void persistsReadsUpdatesAndDeletesCompleteAggregate() {
     QuoteTechTask task = service.createTask(task("CRUD", 701L, 81001L));

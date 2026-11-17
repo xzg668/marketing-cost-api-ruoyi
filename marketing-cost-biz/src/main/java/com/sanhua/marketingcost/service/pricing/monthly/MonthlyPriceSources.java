@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
 public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver {
   @org.springframework.beans.factory.annotation.Autowired
   private com.sanhua.marketingcost.service.materialshape.QuoteMaterialShapeInputs materialShapes;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicies specialPolicies;
   private final MaterialPricePriorityService priorities;
   private final HouseholdMonthlyPriceSource household;
   private final MonthlyFixedPriceSource fixed;
@@ -50,6 +52,9 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
 
   @Override public Candidates resolve(Context context,Set<MonthlyPriceRequest> requests,
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
+    if(requests.isEmpty())return new Candidates(Map.of(),Map.of());
+    var special=specialPolicies==null?Map.<MonthlyPriceRequest,com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicy>of():specialPolicies.read(requests,false);
+    if(!special.isEmpty())return resolveSpecial(context,requests,dependencies,special,false);
     var orders=orders(context,requests);
     var local=resolveOrganization(context,requests,dependencies,orders);
     return withOtherOrganization(context,requests,local,alternatives->{
@@ -257,6 +262,9 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
 
   @Override public Candidates resolveScrap(Context context,Set<MonthlyPriceRequest> requests,
       Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
+    if(requests.isEmpty())return new Candidates(Map.of(),Map.of());
+    var special=specialPolicies==null?Map.<MonthlyPriceRequest,com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicy>of():specialPolicies.read(requests,false);
+    if(!special.isEmpty())return resolveSpecial(context,requests,dependencies,special,true);
     var local=resolveScrapOrganization(context,requests);
     return withOtherOrganization(context,requests,local,alternatives->resolveScrapOrganization(context,alternatives));
   }
@@ -272,6 +280,53 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       var inquiry=inquiries.read(context,missing);requireComplete(missing,inquiry);
       for(var request:missing)problems.remove(request);
       values.putAll(inquiry.values());problems.putAll(inquiry.problems());
+    }
+    return new Candidates(values,problems);
+  }
+
+
+  private Candidates resolveSpecial(Context context,Set<MonthlyPriceRequest> requests,
+      Function<Set<MonthlyPriceRequest>,Candidates> dependencies,
+      Map<MonthlyPriceRequest,com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicy> policies,boolean scrapOnly) {
+    var ordinary=new LinkedHashSet<>(requests);ordinary.removeAll(policies.keySet());
+    var original=scrapOnly?resolveScrap(context,ordinary,dependencies):resolve(context,ordinary,dependencies);
+    var values=new LinkedHashMap<>(original.values());var problems=new LinkedHashMap<>(original.problems());
+    var groups=new LinkedHashMap<String,Set<MonthlyPriceRequest>>();
+    policies.forEach((request,rule)->groups.computeIfAbsent(rule.priceType()+":"+rule.refreshMode(),ignored->new LinkedHashSet<>()).add(request));
+    for(var group:groups.values()) {
+      var first=policies.get(group.iterator().next());
+      var found=MaterialShapePriceScope.read(first.priceType(),group,batch->
+          readSpecialSource(context,batch,policies,dependencies));
+      for(var request:group) {
+        var rule=policies.get(request);var candidate=found.values().get(request);
+        if(candidate==null) {
+          var problem=found.problems().get(request);
+          problems.put(request,new Problem(Failure.SPECIAL_PRICE_REQUIRED,rule.requiredMessage(context.month().toString())
+              +(problem==null?"":"；"+problem.message())));
+        } else try { values.put(request,specialPolicies.stamp(context,request,candidate,rule)); }
+        catch(MonthlyPriceProblem problem) { problems.put(request,new Problem(problem.reason(),problem.getMessage())); }
+      }
+      found.values().forEach((request,candidate)->{if(!group.contains(request))values.putIfAbsent(request,candidate);});
+    }
+    return new Candidates(values,problems);
+  }
+
+  private Candidates readSpecialSource(Context context,Set<MonthlyPriceRequest> requests,
+      Map<MonthlyPriceRequest,com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicy> policies,
+      Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
+    if(requests.isEmpty())return new Candidates(Map.of(),Map.of());
+    var first=policies.get(requests.iterator().next());
+    if("INQUIRY".equals(first.priceType()))return inquiries.readSpecial(context,requests,first.currentMonthOnly());
+    if("FIXED".equals(first.priceType()))return fixed.readSpecial(context,requests,first.currentMonthOnly());
+    if(first.priceType().startsWith("SETTLE_"))return readChosenSource(context,first.priceType(),requests,dependencies);
+    var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
+    for(var request:requests) {
+      String month=specialPolicies.sourceMonth(request,policies.get(request));
+      var batch=Set.of(request);
+      var found="LINKED".equals(first.priceType())
+          ?chain(batch,b->linked.read(context,b,dependencies,month),b->originalLinked.read(context,b,month))
+          :chain(batch,b->range.read(context,b,month),b->originalRange.read(context,b,month));
+      values.putAll(found.values());problems.putAll(found.problems());
     }
     return new Candidates(values,problems);
   }

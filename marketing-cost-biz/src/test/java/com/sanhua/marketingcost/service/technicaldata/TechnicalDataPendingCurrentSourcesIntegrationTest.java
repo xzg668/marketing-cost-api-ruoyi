@@ -29,7 +29,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Tag("integration")
 class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingIntegrationTestBase {
   @Autowired TechnicalDataPendingProductQuery pending;
+  @Autowired TechnicalDataPendingState pendingState;
+  @Autowired TechnicalDataPendingRefresh pendingRefresh;
   @Autowired TechnicalDataTaskApplicationService tasks;
+  @Autowired com.sanhua.marketingcost.service.PriceFixedItemService fixedPrices;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   @MockBean TechnicalDataSourceCheckService sources;
@@ -38,6 +42,7 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
   private long itemId;
 
   @BeforeEach void fixture() throws Exception {
+    when(sources.preview(any(), any(), any())).thenAnswer(call -> sources.check(call.getArgument(0), call.getArgument(1)));
     SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
         "admin",null,List.of(new SimpleGrantedAuthority("*:*:*"))));
     oaNo="PENDING-IMPORT-"+UUID.randomUUID();
@@ -57,7 +62,13 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
     current(false,false);
   }
 
-  @AfterEach void clearActor() { SecurityContextHolder.clearContext(); }
+  @AfterEach void clearActor() {
+    jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",oaNo);
+    jdbc.update("DELETE FROM lp_quote_costing_workspace WHERE oa_no=?",oaNo);
+    jdbc.update("DELETE FROM oa_form_item WHERE oa_form_id IN (SELECT id FROM oa_form WHERE oa_no=?)",oaNo);
+    jdbc.update("DELETE FROM oa_form WHERE oa_no=?",oaNo);
+    SecurityContextHolder.clearContext();
+  }
 
   @Test void importingMissingPublicDataRemovesPendingRowWithoutAnySupplementWrites() {
     assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isEqualTo(1);
@@ -118,6 +129,7 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
         ? new TechnicalDataSourceFact(TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
             "PRICE_BASIS_UNCONFIRMED", "仍有结构或来源问题，但无实际缺价", "price", LocalDateTime.now()) : fact).toList();
     when(sources.check(any(),any())).thenReturn(new TechnicalDataSourceCheckService.Check(facts,Map.of()));
+    refreshPending();
     var before=protectedRows();
     assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isZero();
     assertThat(protectedRows()).isEqualTo(before);
@@ -126,6 +138,8 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
   @Test void unavailableSourcesKeepTheOriginalPendingRowWithoutWritingAnything() {
     var before=protectedRows();
     when(sources.check(any(),any())).thenThrow(new IllegalStateException("当前来源暂时不可用"));
+    pendingState.changed(new TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),"COMMERCIAL",java.util.Set.of(),java.util.Set.of(itemId)));
+    assertThat(pendingRefresh.runBatch()).isZero();
     assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isEqualTo(1);
     assertThat(pending.page("ALL",null,"2026-11",null,oaNo,0,20).getFirst().product().modules())
         .filteredOn(m->m.required()).hasSize(2);
@@ -166,6 +180,7 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
       jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,business_unit_type) VALUES(?,?,'测试阀','COMMERCIAL')",formId,oaNo+"-"+i);
       long next=jdbc.queryForObject("SELECT MAX(id) FROM oa_form_item WHERE oa_form_id=?",Long.class,formId);
       expected.add(next);
+      ((com.fasterxml.jackson.databind.node.ObjectNode)saved).remove("pending");
       ((com.fasterxml.jackson.databind.node.ObjectNode)saved.path("check")).put("oaFormItemId",next);
       jdbc.update("""
           INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,business_unit_type,
@@ -173,10 +188,11 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
           VALUES(?,?,?,'2026-11','COMMERCIAL','WAIT_PRICE',2,NOW(),?,'old-check')
           """,oaNo,next,oaNo+"-"+i,json.writeValueAsString(saved));
     }
-    var ready=current(true,true);
-    var missing=current(true,false);
+    var ready=facts(true,true);
+    var missing=facts(true,false);
     when(sources.check(any(),any())).thenAnswer(call ->
         ((com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext)call.getArgument(0)).oaFormItemId()==itemId?ready:missing);
+    refreshPending();
     var page=pending.readPage("ALL",null,"2026-11",null,oaNo,1,1);
     assertThat(page.total()).isEqualTo(3);
     assertThat(page.records()).hasSize(1);
@@ -192,6 +208,7 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
     jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,business_unit_type) VALUES(?,?,'同料号另一行','COMMERCIAL')",form,oaNo);
     long other=jdbc.queryForObject("SELECT MAX(id) FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
     var saved=json.readTree(jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",String.class,itemId));
+    ((com.fasterxml.jackson.databind.node.ObjectNode)saved).remove("pending");
     ((com.fasterxml.jackson.databind.node.ObjectNode)saved.path("check")).put("oaFormItemId",other);
     jdbc.update("INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,business_unit_type,workspace_status,gap_count,last_checked_at,technical_check_json) VALUES(?,?,?,'2026-11','COMMERCIAL','WAIT_PRICE',2,NOW(),?)",oaNo,other,oaNo,json.writeValueAsString(saved));
     var focused=tasks.workbench(1,20,null,"2026-11",null,oaNo,itemId,ADMIN);
@@ -203,20 +220,156 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
     assertThatThrownBy(()->tasks.workbench(1,20,null,null,null,oaNo,itemId,ADMIN)).hasMessageContaining("定位产品");
   }
 
+
+  @Test void actualPriceWriteQueuesOnlyItsAffectedProductAndTheListNeverCallsSources() {
+    when(sources.check(any(),any())).thenReturn(facts(true,false));
+    var authentication=(UsernamePasswordAuthenticationToken)SecurityContextHolder.getContext().getAuthentication();
+    authentication.setDetails(Map.of("businessUnitType","COMMERCIAL"));
+    clearInvocations(sources);
+    fixedPrices.create(priceRequest());
+    verifyNoInteractions(sources);
+    assertThat(pendingState.waiting(100)).as("Saved=%s; price=%s; bean=%s", jdbc.queryForList("SELECT technical_check_json,business_unit_type FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId), jdbc.queryForList("SELECT business_unit_type,material_code FROM lp_price_fixed_item WHERE material_code=?",oaNo),fixedPrices.getClass()).extracting(TechnicalDataPendingState.Work::itemId).containsExactly(itemId);
+    assertThat(pendingRefresh.runBatch()).isEqualTo(1);
+    clearInvocations(sources);
+    long started=System.nanoTime();
+    for(int i=0;i<10;i++) {
+      var page=tasks.workbench(1,20,null,"2026-11",null,oaNo,ADMIN);
+      assertThat(page.total()).isEqualTo(1);
+      assertThat(page.records().getFirst().product().modules()).filteredOn(row -> row.required())
+          .extracting(row -> row.moduleType()).containsExactly("NET_LOSS");
+    }
+    System.out.println("PENDING_READ_BENCH tenActualWorkbenchReadsMs="+(System.nanoTime()-started)/1_000_000);
+    verifyNoInteractions(sources);
+  }
+
+  @Test void rolledBackSourceWriteDoesNotLeaveARefreshOrPriceBehind() {
+    var before=jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",String.class,itemId);
+    new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status -> {
+      fixedPrices.create(priceRequest());status.setRollbackOnly();
+    });
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_fixed_item WHERE material_code=?",Integer.class,oaNo)).isZero();
+    assertThat(jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",String.class,itemId)).isEqualTo(before);
+    assertThat(pendingState.waiting(100)).isEmpty();
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"ITEM_DELETED", "FORM_DELETED", "MISSING_ITEM", "WRONG_UNIT"})
+  void unavailableProductsAreNotInitializedOrMarkedBySourceChanges(String kind) {
+    long form = jdbc.queryForObject("SELECT oa_form_id FROM oa_form_item WHERE id=?", Long.class, itemId);
+    jdbc.update("UPDATE lp_quote_costing_workspace SET technical_check_json=JSON_REMOVE(technical_check_json,'$.pending') WHERE oa_form_item_id=?", itemId);
+    makeUnavailable(kind, form);
+    try {
+      var before = jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_no=?", String.class, oaNo);
+      clearInvocations(sources);
+      assertThat(pendingState.initializeLegacy()).isZero();
+      assertThat(pendingState.changed(new TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),
+          "COMMERCIAL", java.util.Set.of(), java.util.Set.of(itemId)))).isZero();
+      assertThat(pendingState.waiting(16)).isEmpty();
+      assertThat(pendingRefresh.runBatch()).isZero();
+      verifyNoInteractions(sources);
+      assertThat(jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_no=?", String.class, oaNo)).isEqualTo(before);
+    } finally { restoreProduct(form); }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"ITEM_DELETED", "FORM_DELETED", "MISSING_ITEM", "WRONG_UNIT"})
+  void queuedProductsBecomingUnavailableStopRefreshingAndRetainTheirSavedCheck(String kind) {
+    long form = jdbc.queryForObject("SELECT oa_form_id FROM oa_form_item WHERE id=?", Long.class, itemId);
+    pendingState.changed(new TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),
+        "COMMERCIAL", java.util.Set.of(), java.util.Set.of(itemId)));
+    assertThat(pendingState.waiting(16)).hasSize(1);
+    makeUnavailable(kind, form);
+    try {
+      var before = jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_no=?", String.class, oaNo);
+      clearInvocations(sources);
+      for (int pass = 0; pass < 3; pass++) {
+        assertThat(pendingState.waiting(16)).isEmpty();
+        assertThat(pendingRefresh.runBatch()).isZero();
+      }
+      verifyNoInteractions(sources);
+      assertThat(jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_no=?", String.class, oaNo)).isEqualTo(before);
+    } finally { restoreProduct(form); }
+    // If the product is restored, its existing change token is still usable.
+    assertThat(pendingState.waiting(16)).singleElement()
+        .extracting(TechnicalDataPendingState.Work::itemId).isEqualTo(itemId);
+    assertThat(pendingRefresh.runBatch()).isEqualTo(1);
+  }
+
+  private void makeUnavailable(String kind, long form) {
+    switch (kind) {
+      case "ITEM_DELETED" -> jdbc.update("UPDATE oa_form_item SET deleted=1 WHERE id=?", itemId);
+      case "FORM_DELETED" -> jdbc.update("UPDATE oa_form SET deleted=1 WHERE id=?", form);
+      case "MISSING_ITEM" -> jdbc.update("UPDATE lp_quote_costing_workspace SET oa_form_item_id=? WHERE oa_form_item_id=?", itemId + 10000000, itemId);
+      case "WRONG_UNIT" -> jdbc.update("UPDATE oa_form SET business_unit_type='HOUSEHOLD' WHERE id=?", form);
+      default -> throw new IllegalArgumentException(kind);
+    }
+  }
+
+  private void restoreProduct(long form) {
+    jdbc.update("UPDATE oa_form_item SET deleted=0 WHERE id=?", itemId);
+    jdbc.update("UPDATE oa_form SET deleted=0,business_unit_type='COMMERCIAL' WHERE id=?", form);
+    jdbc.update("UPDATE lp_quote_costing_workspace SET oa_form_item_id=? WHERE oa_no=?", itemId, oaNo);
+  }
+
+  @Test void thousandPendingProductsUseSavedStatesAndOnlyReturnTheRequestedPage() throws Exception {
+    long form=jdbc.queryForObject("SELECT oa_form_id FROM oa_form_item WHERE id=?",Long.class,itemId);
+    var values=new java.util.ArrayList<Object[]>();
+    for(int i=0;i<1000;i++) values.add(new Object[]{form,oaNo+"-"+i,"COMMERCIAL"});
+    jdbc.batchUpdate("INSERT INTO oa_form_item(oa_form_id,material_no,business_unit_type) VALUES(?,?,?)",values);
+    String original=jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",String.class,itemId);
+    jdbc.update("""
+      INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,business_unit_type,
+        workspace_status,gap_count,last_checked_at,technical_check_json,technical_check_fingerprint)
+      SELECT ?,i.id,i.material_no,'2026-11','COMMERCIAL','WAIT_PRICE',2,NOW(),
+        JSON_SET(CAST(? AS JSON),'$.check.oaFormItemId',i.id,'$.pending.check.oaFormItemId',i.id),'old-check'
+      FROM oa_form_item i WHERE i.oa_form_id=? AND i.id<>?
+      """,oaNo,original,form,itemId);
+    clearInvocations(sources);
+    var times=new java.util.ArrayList<Long>();
+    for(int pageNo:List.of(1,2,20,40)) {
+      long start=System.nanoTime();
+      var page=tasks.workbench(pageNo,20,null,"2026-11",null,oaNo,ADMIN);
+      times.add((System.nanoTime()-start)/1_000_000);
+      assertThat(page.total()).isEqualTo(1001);assertThat(page.summary().total()).isEqualTo(1001);
+      assertThat(page.records()).hasSize(20);
+    }
+    verifyNoInteractions(sources);
+    System.out.println("PENDING_READ_BENCH savedProducts=1001 pageSize=20 pageMilliseconds="+times+" sourceChecks=0");
+  }
+
+  private com.sanhua.marketingcost.dto.PriceFixedItemUpdateRequest priceRequest() {
+    var request=new com.sanhua.marketingcost.dto.PriceFixedItemUpdateRequest();
+    request.setMaterialCode(oaNo);request.setOrgCode("210");request.setSupplierCode("PENDING-SUPPLIER");
+    request.setSourceType("PURCHASE_FIXED");request.setFixedPrice(java.math.BigDecimal.TEN);
+    request.setEffectiveFrom(java.time.LocalDate.of(2026,11,1));return request;
+  }
+
   private TechnicalDataSourceCheckService.Check current(boolean priceAvailable,boolean rateAvailable) {
-    var checked = new TechnicalDataSourceCheckService.Check(
+    var checked = facts(priceAvailable,rateAvailable);
+    when(sources.check(any(),any())).thenReturn(checked);
+    refreshPending();
+    return checked;
+  }
+
+  private TechnicalDataSourceCheckService.Check facts(boolean priceAvailable,boolean rateAvailable) {
+    return new TechnicalDataSourceCheckService.Check(
         TechnicalDataModuleType.orderedCodes().stream().map(code->{
           boolean missing="PRICE".equals(code)&&!priceAvailable||"NET_LOSS".equals(code)&&!rateAvailable;
           return new TechnicalDataSourceFact(TechnicalDataModuleType.valueOf(code),
               missing?TechnicalDataAvailability.MISSING:TechnicalDataAvailability.AVAILABLE,
               missing?"SOURCE_MISSING":"SOURCE_AVAILABLE",missing?"仍缺资料":"公共资料已导入",code,LocalDateTime.now());
         }).toList(),Map.of());
-    when(sources.check(any(),any())).thenReturn(checked);
-    return checked;
+  }
+
+  private void refreshPending() {
+    pendingState.initializeLegacy();
+    int marked=pendingState.changed(new TechnicalDataPendingState.Change(java.util.Set.of("PRICE","NET_LOSS"),"COMMERCIAL",java.util.Set.of(),java.util.Set.of(itemId)));
+    assertThat(pendingState.waiting(100)).as("marked="+marked+" "+jdbc.queryForList("SELECT technical_check_fingerprint,technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId)).isNotEmpty();
+    pendingRefresh.runBatch();
   }
 
   private Map<String,Object> protectedRows() {
-    return Map.of("workspace",jdbc.queryForList("SELECT * FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId),
+    return Map.of("workspace",jdbc.queryForList("SELECT id,workspace_status,current_bom_build_batch_id,technical_check_fingerprint,JSON_REMOVE(technical_check_json,'$.pending') technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId),
         "tasks",jdbc.queryForList("SELECT * FROM lp_quote_tech_task WHERE oa_form_item_id=?",itemId),
         "products",jdbc.queryForList("SELECT * FROM lp_quote_tech_product WHERE oa_form_item_id=?",itemId),
         "modules",jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_module",Long.class),

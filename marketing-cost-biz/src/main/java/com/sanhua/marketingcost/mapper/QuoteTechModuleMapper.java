@@ -15,6 +15,19 @@ import org.apache.ibatis.annotations.Update;
 public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
 
   @Update("""
+      UPDATE lp_quote_tech_module SET entry_mode='REFERENCE',module_status='READY',
+        current_version_id=#{module.currentVersionId},reference_source_type=#{module.referenceSourceType},
+        reference_source_id=#{module.referenceSourceId},reference_source_version=#{module.referenceSourceVersion},
+        reference_fingerprint=#{module.referenceFingerprint},reference_snapshot_json=#{module.referenceSnapshotJson},
+        referenced_at=#{now},last_validation_code=#{module.lastValidationCode},
+        last_validation_message=#{module.lastValidationMessage},
+        requirement_reason_code='TECH_BOM_COVERED',requirement_reason=#{module.lastValidationMessage},
+        row_version=row_version+1,updated_at=#{now}
+      WHERE id=#{module.id} AND row_version=#{module.rowVersion}
+      """)
+  int coverByCompleteBom(@Param("module") QuoteTechModule module, @Param("now") LocalDateTime now);
+
+  @Update("""
       UPDATE lp_quote_tech_module SET required_flag=#{required},module_status=#{status},
         requirement_reason_code=#{reasonCode},requirement_reason=#{reason},
         source_availability=CASE WHEN #{required} THEN 'MISSING' ELSE 'AVAILABLE' END,

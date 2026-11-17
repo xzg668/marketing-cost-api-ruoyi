@@ -35,6 +35,7 @@ public class QuoteTechDataVersion {
   private String productFeesJson;
   private String plateMaterialJson;
   private String drawingBomJson;
+  private String technicalBomJson;
   private String manufacturingJson;
   private String packagingJson;
   private String solderItemsJson;

@@ -105,6 +105,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private final QuoteBomContextResolver contextResolver;
   private final QuoteBomStatusService quoteBomStatusService;
   private final ElectronicDrawingPreparationSource drawingPreparation;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom;
   private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom;
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions technicalContributions;
 
@@ -129,7 +130,9 @@ public class QuoteEffectiveBomApplicationServiceImpl
       com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions technicalContributions,
       ElectronicDrawingPreparationSource drawingPreparation,
       com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
-      QuotePricingPeriod pricingPeriods) {
+      QuotePricingPeriod pricingPeriods,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom) {
+    this.completeBom = completeBom;
     this.pricingPeriods = pricingPeriods;
     this.preparationMapper = preparationMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -237,8 +240,10 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   private QuoteEffectiveBomCostingCandidate prepareCandidate(QueryContext context, boolean technical) {
     // 已组好的技术草稿直接进入现有计价筛选，不再发起 U9 取图。
-    QuoteBomMonthlySnapshot snapshot = technical ? drawingPreparation.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
+    QuoteBomMonthlySnapshot snapshot = technical ? completeBom.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
         context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod()) : null;
+    if (snapshot == null && technical) snapshot = drawingPreparation.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
+        context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
     if (snapshot == null) snapshot = findOrPrepareMonthlySnapshot(context);
     DraftEvaluation evaluation = evaluateDraft(context, snapshot);
     if (readyForCosting(evaluation)
@@ -580,6 +585,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
                     QuoteBomMonthlySnapshot::getPriceOrgCode,
                     context.organization().priceOrgCode())
                 .isNull(QuoteBomMonthlySnapshot::getSnapshotIdentityKey)
+                .notIn(QuoteBomMonthlySnapshot::getBomSource, "TECH_REFERENCE", "TECH_UPLOAD")
                 .eq(QuoteBomMonthlySnapshot::getSyncStatus, "SUCCESS")
                 .eq(QuoteBomMonthlySnapshot::getActiveFlag, ACTIVE)
                 .orderByDesc(QuoteBomMonthlySnapshot::getSyncAt)
@@ -591,6 +597,11 @@ public class QuoteEffectiveBomApplicationServiceImpl
   /** 历史报价可能已有原始 BOM，但尚未建立新流程使用的内部月度关系。页面打开或刷新时只为当前 产品补齐这层技术关系，业务无需返回产品列表再次执行 BOM 同步。 */
   private QuoteBomMonthlySnapshot findOrPrepareMonthlySnapshot(QueryContext context) {
     QuoteBomMonthlySnapshot snapshot = findMonthlySnapshot(context);
+    if (snapshot == null || !"U9".equals(snapshot.getBomSource())) {
+      var technical = completeBom.snapshot(context.oaFormItemId(), context.costPeriodMonth(), context.businessUnit(),
+          context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
+      if (technical != null) return technical;
+    }
     if (snapshot != null && !"U9".equals(snapshot.getBomSource())) {
       var blocked = drawingPreparation.currentBlockReason(context.oaFormItemId(), context.costPeriodMonth(),
           context.businessUnit(), context.organization().priceOrgCode());

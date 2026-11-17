@@ -63,6 +63,7 @@ public class CmsCostImportServiceImpl implements CmsCostImportService {
 
   @Override
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SALARY"},wholeUnit=true)
   public CmsCostImportResponse importExcel(
       InputStream planInput,
       String planFileName,
@@ -118,6 +119,7 @@ public class CmsCostImportServiceImpl implements CmsCostImportService {
 
   @Override
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SALARY"},wholeUnit=true)
   public CmsCostImportResponse importParsedRows(CmsCostImportRequest request) {
     if (request == null) {
       throw new IllegalArgumentException("CMS 导入请求不能为空");

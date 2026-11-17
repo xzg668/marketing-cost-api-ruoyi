@@ -375,6 +375,36 @@ class DrawingResultConsumptionIntegrationTest extends com.sanhua.marketingcost.d
   }
 
   @Test
+  void savedFailedUnknownGroupContinuesToRealBomWithoutRefetchOrDuplicateSources() {
+    doAnswer(call -> {
+      var body = payload("unknown-" + UUID.randomUUID());
+      var original = body.path("data").path(key + "-DRAW-MX").deepCopy();
+      body.putObject("data").set("_unknown_1", original);
+      body.putArray("plm_data").addObject().put("drawingNo", key + "-DRAW-MX");
+      body.put("status", "reviewRequired");
+      body.put("verificationStatus", "partial");
+      return codec.parse(body.toString());
+    }).when(client).verify(any());
+    var task = start();
+    String raw = results.findById(task.getCurrentResultId()).getRawSummaryJson();
+    tasks.failConsumption(task.getId(), task.getCurrentResultId(), "旧版本未匹配图号", java.time.LocalDateTime.now());
+
+    var outcome = consumer.consume(task.getId());
+
+    assertThat(outcome.consumptionState()).isEqualTo("COMPLETE");
+    assertThat(outcome.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.COMPOSED);
+    assertThat(sourceCount()).isEqualTo(1);
+    var source = contexts.load(itemId, "COMMERCIAL", "210", month).sourceVersionId();
+    assertThat(sourceNodes.findByVersionId(source)).hasSize(2);
+    assertThat(sourceNodes.findByVersionId(source)).extracting(row -> row.getQty())
+        .usingElementComparator(BigDecimal::compareTo).containsExactly(new BigDecimal("2"), new BigDecimal(".125"));
+    assertThat(results.findById(task.getCurrentResultId()).getRawSummaryJson()).isEqualTo(raw);
+    assertThat(consumer.consume(task.getId()).consumptionState()).isEqualTo("SKIPPED");
+    assertThat(sourceCount()).isEqualTo(1);
+    verify(client, times(1)).verify(any());
+  }
+
+  @Test
   void zeroDifferencesImportMatchAndComposeFromStoredJsonWithoutSecondPost() {
     var task = start();
     var outcome = consumer.consume(task.getId());

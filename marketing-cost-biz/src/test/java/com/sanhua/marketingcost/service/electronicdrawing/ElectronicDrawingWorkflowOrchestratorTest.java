@@ -207,6 +207,50 @@ class ElectronicDrawingWorkflowOrchestratorTest {
   }
 
   @Test
+  void technicalRecheckKeepsVerifiedCompositionWithoutPublishingUnsubmittedMaterials() {
+    var before = context(3, 201L, ElectronicDrawingWorkflowStage.COMPOSED, "WAIT_TECH", true);
+    current.set(copy(before, 3, 201L, before.workflowStage(), before.workflowStatus(), true,
+        null, null, "existing-composition-fingerprint"));
+    when(resolutionService.autoMatch(101L, "COMMERCIAL", "210", "2026-08"))
+        .thenReturn(resolution(true, 0, 0));
+
+    var refreshed = orchestrator.refreshSource(command(), verificationTask);
+
+    assertThat(refreshed.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.COMPOSED);
+    verify(hybridBomService).compose(101L, "COMMERCIAL", "210", "2026-08");
+    verify(autoPublicationService, never()).publish(anyLong(), anyString(), anyString(), anyString());
+    verify(verifications, never()).start(any(), any());
+  }
+
+  @Test
+  void technicalRecheckWithUnresolvedMaterialDoesNotRetainComposedStage() {
+    var before = context(3, 201L, ElectronicDrawingWorkflowStage.COMPOSED, "WAIT_TECH", true);
+    current.set(copy(before, 3, 201L, before.workflowStage(), before.workflowStatus(), true,
+        null, null, "existing-composition-fingerprint"));
+    when(resolutionService.autoMatch(101L, "COMMERCIAL", "210", "2026-08"))
+        .thenReturn(resolution(false, 1, 0));
+
+    var refreshed = orchestrator.refreshSource(command(), verificationTask);
+
+    assertThat(refreshed.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.MAPPING_PENDING);
+    verify(hybridBomService, never()).compose(anyLong(), anyString(), anyString(), anyString());
+    verify(autoPublicationService, never()).publish(anyLong(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void technicalRecheckWithoutCompositionStillWaitsForItsRemainingInputs() {
+    current.set(context(3, 201L, ElectronicDrawingWorkflowStage.MATCHED, "WAIT_TECH", true));
+    when(resolutionService.autoMatch(101L, "COMMERCIAL", "210", "2026-08"))
+        .thenReturn(resolution(true, 0, 0));
+
+    var refreshed = orchestrator.refreshSource(command(), verificationTask);
+
+    assertThat(refreshed.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.MATCHED);
+    verify(hybridBomService, never()).compose(anyLong(), anyString(), anyString(), anyString());
+    verify(autoPublicationService, never()).publish(anyLong(), anyString(), anyString(), anyString());
+  }
+
+  @Test
   void missingDrawingWeightReturnsActionableGapAndNeverPublishes() {
     verificationTask.setConsumedResultId(202L);
     current.set(

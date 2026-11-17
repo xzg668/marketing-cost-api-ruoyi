@@ -48,6 +48,7 @@ class TechnicalPriceCorrectionIntegrationTest extends OriginalPricingIntegration
   private String frozen;
   @Autowired com.sanhua.marketingcost.service.impl.TechnicalPriceSourceResolverImpl technicalResolver;
   @Autowired PriceLinkedCalcItemMapper calculations;
+  @Autowired PriceLinkedItemMapper linkedRows;
   @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
 
   @BeforeEach
@@ -164,6 +165,28 @@ class TechnicalPriceCorrectionIntegrationTest extends OriginalPricingIntegration
     entry.setEntryMode("MANUAL");
     entry.setFormula("技术原公式");
     request.setItems(List.of(entry));
+    if (test.getTestMethod().orElseThrow().getName().startsWith("reference")) {
+      var original = new PriceLinkedItem();
+      original.setMaterialCode(material + "-REFERENCE");
+      original.setBusinessUnitType("COMMERCIAL");
+      original.setOrgCode("210");
+      original.setPricingMonth("2026-09");
+      original.setFormulaExpr("[process_fee]");
+      original.setProcessFee(new java.math.BigDecimal("99"));
+      original.setUnit("只");
+      original.setTaxIncluded(0);
+      original.setEffectiveFrom(java.time.LocalDate.of(2026, 9, 1));
+      original.setRuleStatus("LEGACY");
+      original.setDeleted(0);
+      linkedRows.insert(original);
+      var reference = prices.references(productId, "CODE", original.getMaterialCode(), WANG).getFirst();
+      entry.setEntryMode("REFERENCE");
+      entry.setFormula(null);
+      entry.setReferenceId(reference.id());
+      entry.setReferenceFingerprint(reference.fingerprint());
+      entry.setParameters(new TechnicalDataSupplementContent.PriceParameters(
+          null, null, null, new java.math.BigDecimal("12"), null, "元/只"));
+    }
     if (test.getTestMethod().orElseThrow().getName().startsWith("partial")) {
       var second = new MaterialMasterRaw();
       second.setMaterialCode(material + "2");
@@ -394,6 +417,35 @@ class TechnicalPriceCorrectionIntegrationTest extends OriginalPricingIntegration
                 next.getTechnicalResults().getFirst().linkedItemId()))
         .isEqualTo("AVAILABLE");
     assertThat(corrections.get(key, itemId, "2026-09").items()).isEmpty();
+  }
+
+  @Test
+  void referenceFormulaHasFinanceHandoffUntilAnActualPriceSourceIsAvailable() {
+    var view = corrections.get(key, itemId, "2026-09");
+    assertThat(view.items()).extracting(TechnicalPriceCorrection.Item::materialNo).containsExactly(material);
+    assertThat(view.canDownload()).isTrue();
+    assertThat(prices.get(productId, versionId, WANG).publications().getFirst().status())
+        .isEqualTo("WAIT_FINANCE");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?", Integer.class, material)).isZero();
+    assertThat(repository.findVersion(versionId).orElseThrow().getPriceItemsJson()).isEqualTo(frozen);
+  }
+
+  @Test
+  void referenceFormulaFinanceImportReusesExistingContractAndKeepsFrozenSource() throws Exception {
+    var before = linkedRows.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .eq(PriceLinkedItem::getMaterialCode, material + "-REFERENCE")).getFirst();
+    byte[] file = edited("12", null, null);
+    var preview = imports.preview(command(file, null));
+    assertThat(preview.isCanConfirm()).as(preview.getErrors().toString()).isTrue();
+    var imported = imports.confirm(command(file, preview.getFileSha256()));
+    assertThat(imported.getTechnicalResults().getFirst().status()).isEqualTo("AVAILABLE");
+    assertThat(corrections.get(key, itemId, "2026-09").items()).isEmpty();
+    assertThat(prices.get(productId, versionId, WANG).publications().getFirst().status()).isEqualTo("AVAILABLE");
+    assertThat(repository.findVersion(versionId).orElseThrow().getPriceItemsJson()).isEqualTo(frozen);
+    assertThat(linkedRows.selectById(before.getId()).getProcessFee()).isEqualByComparingTo("99");
+    var repeat = imports.confirm(command(file, preview.getFileSha256()));
+    assertThat(repeat.getTechnicalResults().getFirst().linkedItemId()).isEqualTo(imported.getTechnicalResults().getFirst().linkedItemId());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_linked_item WHERE technical_version_id=? AND technical_publication_status='AVAILABLE'", Integer.class, versionId)).isEqualTo(1);
   }
 
   @Test

@@ -13,6 +13,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 原件和结算规则的导入边界。预览只读，确认在一个数据库事务内追加修订。 */
 @Service
 public class SettlementPriceImportService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
   public record Preview(SettlementWorkbookParser.ParsedWorkbook workbook, String fingerprint) {}
   public record ImportResult(int inserted, int revised, int unchanged, int sourceRows, List<Long> ruleIds, SettlementEffectivePriceService.Generation effectivePrices) {
     public ImportResult { ruleIds = List.copyOf(ruleIds); }
@@ -67,6 +70,7 @@ public class SettlementPriceImportService {
             if (sameMonth) revised++; else inserted++;
           }
         }
+        if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),scope.businessUnitType(),book.rules().stream().map(SettlementWorkbookParser.Rule::materialCode).collect(java.util.stream.Collectors.toSet()),java.util.Set.of()));
         return new ImportResult(inserted, revised, unchanged, book.sourceRows().size(), ids,
             effectivePrices.generate(scope.businessUnitType(), operator));
       });

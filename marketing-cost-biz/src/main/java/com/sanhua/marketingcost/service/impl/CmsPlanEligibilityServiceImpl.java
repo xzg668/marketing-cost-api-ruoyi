@@ -48,7 +48,7 @@ public class CmsPlanEligibilityServiceImpl implements CmsPlanEligibilityService 
     Map<String, PlanEligibility> result = new LinkedHashMap<>();
     for (String parentCode : normalizedParentCodes) {
       for (String period : normalizedPeriods) {
-        result.put(key(parentCode, period), PlanEligibility.allowed(parentCode, period, "计划成本未找到对应未审批项，允许生效"));
+        result.put(key(parentCode, period), PlanEligibility.missingPlan(parentCode, period));
       }
     }
     if (normalizedParentCodes.isEmpty() || normalizedPeriods.isEmpty()) {
@@ -58,10 +58,13 @@ public class CmsPlanEligibilityServiceImpl implements CmsPlanEligibilityService 
     List<CmsPlanCostRaw> rows =
         planCostRawMapper.selectList(
             new QueryWrapper<CmsPlanCostRaw>()
+                // Read-only projection: approval follows the CMS source month, not effective_period.
+                .select("id", "parent_code", "period AS effective_period", "effective_date",
+                    "unapproved_items", "row_no")
                 .eq(importBatchId != null, "import_batch_id", importBatchId)
                 .eq(StringUtils.hasText(businessUnitType), "business_unit_type", businessUnitType)
                 .in("parent_code", normalizedParentCodes)
-                .in("effective_period", normalizedPeriods));
+                .in("period", normalizedPeriods));
     Map<String, List<CmsPlanCostRaw>> grouped = new LinkedHashMap<>();
     for (CmsPlanCostRaw row : rows) {
       if (StringUtils.hasText(row.getParentCode()) && StringUtils.hasText(row.getEffectivePeriod())) {

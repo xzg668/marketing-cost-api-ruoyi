@@ -177,6 +177,23 @@ public final class InquiryPriceRepository {
     return List.copyOf(result);
   }
 
+
+  /** Special rules choose the latest eligible source month before considering import batch order. */
+  public List<Source> matchingPolicy(String unit,String month,Set<String> materials,boolean currentOnly) {
+    if(materials.isEmpty())return List.of();
+    var args=new ArrayList<Object>(List.of(unit,month));args.addAll(materials);
+    var rows=jdbc.query(select()+" WHERE r.business_unit_type=? AND r.price_month"+(currentOnly?"=":"<=")
+        +"? AND r.material_key IN ("+placeholders(materials.size())+") ORDER BY r.price_month DESC,r.batch_id DESC,r.id DESC",
+        this::source,args.toArray());
+    var months=new HashMap<String,String>();var selected=new LinkedHashMap<String,Source>();
+    for(var row:rows) {
+      String code=InquiryNames.normalize(row.rule().materialCode());
+      if(!months.computeIfAbsent(code,ignored->row.sourceMonth()).equals(row.sourceMonth()))continue;
+      selected.putIfAbsent(row.identityKey(),row);
+    }
+    return List.copyOf(selected.values());
+  }
+
   public Map<Long, Map<String, Object>> effective(String unit, String month, Collection<Long> ids) {
     var result = new HashMap<Long, Map<String, Object>>();
     var all = new ArrayList<>(ids);

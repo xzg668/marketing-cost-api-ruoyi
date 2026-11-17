@@ -73,6 +73,7 @@ class MakePartPriceGenerationServiceImplTest {
     when(noScrapConfirmationService.findEffective(any(), any(), any())).thenReturn(null);
     manufacturingInputs =
         mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
+    when(manufacturingInputs.completeBomChildren(any())).thenReturn(null);
     service =
         new MakePartPriceGenerationServiceImpl(
             sourceDataService,
@@ -1025,6 +1026,35 @@ class MakePartPriceGenerationServiceImplTest {
         eq("OA-001"), eq("COMMERCIAL"), contexts.capture(), any(MakePartMaterialPriceResolveService.Purpose.class));
     assertThat(contexts.getAllValues().stream().map(value -> value.supplierReviews().priceOrgCode()).distinct())
         .containsExactly("210", "220");
+  }
+
+  @Test
+  void storesFinancialManufacturingPriceWhileReturningUnchangedCustomerCalculation() {
+    stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
+    var parent = parent("MAKE-001"); parent.setId(501L); parent.setOaFormItemId(10L);
+    when(priceResolveService.calculateMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any(),
+        any(MakePartMaterialPriceResolveService.Purpose.class))).thenAnswer(invocation -> {
+      String code = invocation.getArgument(0);
+      String p0 = code.startsWith("SCRAP") ? "10" : "50";
+      String p1 = code.startsWith("SCRAP") ? "75.66" : "82.95";
+      var result = okPrice(code, p1);
+      result.setEvidence(new com.sanhua.marketingcost.service.pricing.PriceResolveEvidence(null,null,null,null,
+          null,null,null,null,false,null,com.sanhua.marketingcost.service.MakePartFinancialPricesTest.price(code,p0,p1,"2026-05","1")));
+      return result;
+    });
+    when(calcRowMapper.insert(any(MakePartPriceCalcRow.class))).thenAnswer(invocation -> {
+      ((MakePartPriceCalcRow) invocation.getArgument(0)).setId(123L); return 1;
+    });
+    var result = service.calculateForBomRow(parent, priceAsOf(),
+        PricePrepareScenarioContext.oaLocked(10L,"210"), true).getFirst();
+    var saved = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(saved.capture());
+    assertThat(saved.getValue().getCostPrice()).isEqualByComparingTo("3.75");
+    assertThat(saved.getValue().getPriceScenarioType()).isEqualTo("FINANCE_QUOTE_BASE");
+    assertThat(result.getCostPrice()).isEqualByComparingTo("4.7445");
+    assertThat(result.getPriceScenarioType()).isEqualTo("OA_LOCKED");
+    assertThat(result.getId()).isEqualTo(123L);
+    assertThat(saved.getValue().getRawInputSnapshotJson()).isEqualTo(result.getRawInputSnapshotJson());
   }
 
   private void stubHappyPath(

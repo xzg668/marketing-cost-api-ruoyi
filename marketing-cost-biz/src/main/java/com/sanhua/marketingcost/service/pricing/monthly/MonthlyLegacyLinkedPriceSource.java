@@ -62,9 +62,11 @@ public final class MonthlyLegacyLinkedPriceSource {
   }
 
   public Candidates read(Context context,Set<MonthlyPriceRequest> requests,
-      Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {
+      Function<Set<MonthlyPriceRequest>,Candidates> dependencies) {return read(context,requests,dependencies,null);}
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests,
+      Function<Set<MonthlyPriceRequest>,Candidates> dependencies,String specialMonth) {
     var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
-    var selected=select(context,requests,problems);
+    var selected=select(context,requests,problems,specialMonth);
     if(selected.isEmpty())return new Candidates(Map.of(),problems);
     var bindings=new ArrayList<PriceVariableBinding>();
     for(var ids:batches(selected.values().stream().map(value->value.rule().getId()).toList()))
@@ -190,7 +192,7 @@ public final class MonthlyLegacyLinkedPriceSource {
   }
 
   private Map<MonthlyPriceRequest,Selected> select(Context context,Set<MonthlyPriceRequest> requests,
-      Map<MonthlyPriceRequest,Problem> problems) {
+      Map<MonthlyPriceRequest,Problem> problems,String specialMonth) {
     var organizations=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests) {
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()))
@@ -200,12 +202,12 @@ public final class MonthlyLegacyLinkedPriceSource {
     }
     var result=new LinkedHashMap<MonthlyPriceRequest,Selected>();
     for(var organization:organizations.entrySet()) {
-      var month=months.select(context.businessUnitType(),organization.getKey(),context.month().toString());
+      var month=specialMonth==null?months.select(context.businessUnitType(),organization.getKey(),context.month().toString()):new PriceMonthSelection(context.month().toString(),specialMonth);
       if(month==null)month=new PriceMonthSelection(context.month().toString(),context.month().toString());
       for(var batch:batches(organization.getValue().keySet())) {
         var byCode=new HashMap<String,List<PriceLinkedItem>>();
         rules.rules(context.businessUnitType(),organization.getKey(),month.sourceMonth(),context.month().toString(),context.priceAsOfTime().toLocalDate(),batch)
-            .forEach(row->byCode.computeIfAbsent(row.getMaterialCode().trim(),ignored->new ArrayList<>()).add(row));
+            .stream().filter(row->specialMonth==null||specialMonth.equals(row.getPricingMonth())).forEach(row->byCode.computeIfAbsent(row.getMaterialCode().trim(),ignored->new ArrayList<>()).add(row));
         var ratioCodes = byCode.keySet().stream().map(SupplierSupplyRatioNormalizeUtils::normalizeToNull)
             .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
         var capturedRatios=new HashMap<String,List<SupplierSupplyRatio>>();

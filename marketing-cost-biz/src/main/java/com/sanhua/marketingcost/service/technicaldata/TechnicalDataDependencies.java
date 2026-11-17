@@ -35,7 +35,7 @@ public class TechnicalDataDependencies {
 
   public List<Issue> pending(List<QuoteTechModule> modules, Set<String> scope) {
     List<Issue> issues = new ArrayList<>();
-    for (String type : scope) for (String input : INPUTS.getOrDefault(type, List.of())) {
+    for (String type : scope) for (String input : inputs(modules, type)) {
       var source = module(modules, input);
       if (!ready(source)) {
         issues.add(new Issue(type, input, name(type) + "引用的" + name(input) + "尚未补齐，请先确定基础资料"));
@@ -48,7 +48,7 @@ public class TechnicalDataDependencies {
     var pending = pending(modules, scope);
     if (!pending.isEmpty()) throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.VERSION_CONFLICT, pending.getFirst().message());
     List<Dependency> result = new ArrayList<>();
-    for (String type : scope.stream().sorted().toList()) for (String input : INPUTS.getOrDefault(type, List.of())) {
+    for (String type : scope.stream().sorted().toList()) for (String input : inputs(modules, type)) {
       var source = module(modules, input);
       result.add(new Dependency(type, input, source.getCurrentVersionId(), json.dataFingerprint(basis(type, source))));
     }
@@ -102,6 +102,10 @@ public class TechnicalDataDependencies {
     return versions.values().stream().flatMap(version -> stale(version, modules).stream()).distinct().toList();
   }
 
+  private List<String> inputs(List<QuoteTechModule> modules, String type) {
+    return TechnicalBomModuleCoverage.covered(module(modules, type)) ? List.of("DRAWING_BOM") : INPUTS.getOrDefault(type, List.of());
+  }
+
   private Object basis(String target, QuoteTechModule source) {
     return basis(target,source,id->repository.findVersion(id).orElseThrow(),repository::findPackageItems);
   }
@@ -112,11 +116,17 @@ public class TechnicalDataDependencies {
       return Map.of("availability", source.getSourceAvailability(),
           "sourceReference", Objects.toString(source.getSourceReference(), ""));
     }
+    if (TechnicalBomModuleCoverage.covered(source)) {
+      return Map.of("source", TechnicalBomModuleCoverage.SOURCE, "bomFingerprint", source.getReferenceFingerprint());
+    }
     var version = versions.apply(source.getCurrentVersionId());
     var snapshot = content.supplementContent(version);
     // 单价依据是料号和单位；单纯调整数量不应使另一人的已批单价作废。
     Object basis = switch (source.getModuleType()) {
-      case "DRAWING_BOM" -> "PRICE".equals(target)
+      case "DRAWING_BOM" -> snapshot.technicalBom() != null
+          ? "PRICE".equals(target) ? snapshot.technicalBom().nodes().stream()
+              .map(node -> key(node.resolvedMaterialCode(), node.purchasingUnit())).distinct().sorted().toList() : snapshot.technicalBom().inputBasis()
+          : "PRICE".equals(target)
           ? snapshot.drawingBom().nodes().stream().map(node -> key(node.materialNo(), node.unit())).distinct().sorted().toList()
           : snapshot.drawingBom();
       case "MANUFACTURING" -> snapshot.manufacturing().items().stream()

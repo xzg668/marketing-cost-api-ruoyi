@@ -214,6 +214,16 @@ public class ElectronicDrawingWorkflowOrchestrator {
             context.businessUnitType(),
             context.applicableOrgCode(),
             context.accountingMonth());
+    if (resolution.complete() && StringUtils.hasText(context.compositionFingerprint())) {
+      // Recheck the existing composition before retaining its technical-preview stage.
+      // This does not publish unsubmitted technical material or bypass approval.
+      hybridBomService.compose(context.workflowId(), context.businessUnitType(),
+          context.applicableOrgCode(), context.accountingMonth());
+      context = load(context.workflowId(), context.businessUnitType(),
+          context.applicableOrgCode(), context.accountingMonth());
+      return stage(context, ElectronicDrawingWorkflowStage.COMPOSED,
+          valid.financeUserId(), valid.financeUserName());
+    }
     return stage(
         context,
         resolution.complete()

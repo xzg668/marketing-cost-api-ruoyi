@@ -36,7 +36,10 @@ final class TechnicalDataVersionCopies {
         to.setProductFeesJson(from.getProductFeesJson());
         to.setPlateMaterialJson(from.getPlateMaterialJson());
       }
-      case DRAWING_BOM -> to.setDrawingBomJson(from.getDrawingBomJson());
+      case DRAWING_BOM -> {
+        to.setDrawingBomJson(from.getDrawingBomJson());
+        to.setTechnicalBomJson(from.getTechnicalBomJson());
+      }
       case MANUFACTURING -> to.setManufacturingJson(from.getManufacturingJson());
       case PACKAGE -> {
         to.setPackagingJson(from.getPackagingJson());
@@ -66,6 +69,7 @@ final class TechnicalDataVersionCopies {
     draft.setProductFeesJson(source.getProductFeesJson());
     draft.setPlateMaterialJson(source.getPlateMaterialJson());
     draft.setDrawingBomJson(source.getDrawingBomJson());
+    draft.setTechnicalBomJson(source.getTechnicalBomJson());
     draft.setManufacturingJson(source.getManufacturingJson());
     draft.setPackagingJson(source.getPackagingJson());
     draft.setSolderItemsJson(source.getSolderItemsJson());

@@ -24,6 +24,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 完整文件预检与不可变发布。行情规则发布不会写入财务公共因素。 */
 @Service
 public class OriginalRangeImportService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
   private final OriginalRangeWorkbookParser parser;
   private final OriginalRangeRuleCalculator calculator;
   private final OriginalRangeRuleSnapshot snapshots;
@@ -470,6 +473,7 @@ public class OriginalRangeImportService {
   }
 
   private Publication complete(Publication publication, Scope scope, Prepared prepared) {
+    if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),scope.businessUnit(),java.util.Set.of(),java.util.Set.of()));
     var generation =
         new com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.Generation(
             0, 0, 0);

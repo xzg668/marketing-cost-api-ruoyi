@@ -92,6 +92,7 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
   @Override
   @Transactional(rollbackFor = Exception.class)
   @CacheEvict(value = "productProperty", allEntries = true)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public ProductPropertyImportResult importExcel(
       InputStream input,
       String fileName,
@@ -217,6 +218,7 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
   @Override
   @Transactional(rollbackFor = Exception.class)
   @CacheEvict(value = "productProperty", allEntries = true)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public List<ProductPropertyRule> saveRules(ProductPropertyRuleSaveRequest request) {
     if (request == null || request.getPropertyYear() == null
         || request.getPropertyYear() < 2000 || request.getPropertyYear() > 2100) {

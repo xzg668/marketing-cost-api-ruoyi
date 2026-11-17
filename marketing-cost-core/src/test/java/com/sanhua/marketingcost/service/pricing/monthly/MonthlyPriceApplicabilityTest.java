@@ -53,6 +53,16 @@ class MonthlyPriceApplicabilityTest {
     assertThat(touching.matches(request("40"))).isTrue();
   }
 
+  @Test void specialPolicyCanCoexistWithOrdinaryPriceWithoutChangingOrdinaryCanonicalIdentity() {
+    var coverage=coverage("1",true,"100",true);var ordinary=MonthlyPriceApplicability.of(coverage);
+    var special=new MonthlyPriceApplicability(List.of(coverage),"a".repeat(64));
+    assertThat(ordinary.canonical()).isEqualTo(MonthlyPriceCanonical.fields("MONTHLY_PRICE_APPLICABILITY_V1",coverage.canonical()));
+    assertThat(special.canonical()).isNotEqualTo(ordinary.canonical());
+    assertThat(special.subtract(ordinary)).contains(special);assertThat(ordinary.subtract(special)).contains(ordinary);
+    assertThat(special.subtract(special)).isEmpty();
+    assertThat(special.subtract(new MonthlyPriceApplicability(List.of(coverage("40",true,"60",true)),"a".repeat(64))).orElseThrow().specialPolicyRevision()).isEqualTo("a".repeat(64));
+  }
+
   private static MonthlyPriceCoverage coverage(
       String lower, boolean lowerInclusive, String upper, boolean upperInclusive) {
     return new MonthlyPriceCoverage(Set.of("210", "220"),

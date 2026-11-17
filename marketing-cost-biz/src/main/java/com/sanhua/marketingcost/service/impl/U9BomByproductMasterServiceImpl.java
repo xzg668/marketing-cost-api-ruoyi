@@ -49,6 +49,7 @@ public class U9BomByproductMasterServiceImpl implements U9BomByproductMasterServ
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"MANUFACTURING","PRICE"},wholeUnit=true)
   public U9BomByproductImportResponse importExcel(
       java.io.InputStream input, String sourceFileName, String importedBy) {
     if (input == null) {

@@ -95,7 +95,8 @@ class QuoteProductBomPreparationServiceImplTest {
             formalBomReadService,
             supplementBomReadService,
             packageReadService,
-            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> activePricingMonth), originalBom);
+            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> activePricingMonth), originalBom,
+            mock(com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource.class));
 
     when(statusMapper.selectOne(any())).thenReturn(null);
     when(preparationRecordMapper.selectOne(any())).thenReturn(null);

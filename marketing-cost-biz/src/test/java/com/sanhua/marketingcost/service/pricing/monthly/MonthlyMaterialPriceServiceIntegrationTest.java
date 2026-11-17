@@ -102,6 +102,8 @@ class MonthlyMaterialPriceServiceIntegrationTest {
       var patch=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot mpp_module_test < /tmp/household.sql");
       assertThat(patch.getExitCode()).withFailMessage(patch.getStderr()).isZero();
     }
+    jdbc.execute("CREATE TABLE lp_material_price_type(id BIGINT PRIMARY KEY,business_unit_type VARCHAR(32),period CHAR(7),price_org_code VARCHAR(32),material_code VARCHAR(64),material_name VARCHAR(128),material_spec VARCHAR(128),material_model VARCHAR(128),price_type VARCHAR(32))");
+    new ResourceDatabasePopulator(new ClassPathResource("db/V387__material_special_price_policy.sql")).execute(ds);
     var config = new org.apache.ibatis.session.Configuration();
     config.setMapUnderscoreToCamelCase(true);
     config.addMapper(MonthlyPriceStorageMapper.class);

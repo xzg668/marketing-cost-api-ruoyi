@@ -43,6 +43,11 @@ public class TechnicalDataSharedModules {
   @Transactional(readOnly = true)
   public TechnicalDataSharedModuleRepository.Owner find(String materialNo, long quoteItemId, String type) {
     String identity = identity(materialNo, quoteItemId);
+    return com.sanhua.marketingcost.service.pricing.QuotationPreviewReads.read(this,
+        java.util.List.of(identity,type),()->findCurrent(identity,type));
+  }
+
+  private TechnicalDataSharedModuleRepository.Owner findCurrent(String identity,String type) {
     var existing = repository.existing(identity, type);
     if (existing.size() > 1) throw conflict("同一产品的" + label(type) + "已有重复办理记录，请核对原任务");
     var owner = repository.find(identity, type);

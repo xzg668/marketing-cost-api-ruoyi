@@ -59,6 +59,8 @@ class CmsSyncPublishLogPolicyTest {
     var result = service.runNextReady();
 
     assertThat(result.getStatus()).isEqualTo("SUCCESS");
+    assertThat(result.getTmpCounts()).containsEntry("tmp_lp_material_scrap_ref", 1L).hasSize(1);
+    assertThat(result.getPublishedCounts()).containsOnlyKeys("lp_material_scrap_ref");
     assertThat(result.getMessage()).contains("inserted=2", "updated=3", "removed=3", "skipped=1100", "blocked=4");
     verify(salary).synchronizeDefaultSources(2026, "SYSTEM_CMS_SYNC", "COMMERCIAL");
     verify(auxiliary).synchronizeDefaultSources(2026, "SYSTEM_CMS_SYNC", "COMMERCIAL");
@@ -66,7 +68,8 @@ class CmsSyncPublishLogPolicyTest {
     verify(auxiliary, never()).generateDefaultSources(2026, "SYSTEM_CMS_SYNC", "COMMERCIAL");
     assertThat(mockingDetails(jdbc).getInvocations()).noneSatisfy(invocation -> {
       assertThat(invocation.getMethod().getName()).isEqualTo("update");
-      assertThat(invocation.getArgument(0, String.class)).contains("DELETE FROM cms_cost_source_effective");
+      assertThat(invocation.getArgument(0, String.class)).containsAnyOf("cms_plan_cost_raw",
+          "cms_workshop_labor_raw", "cms_product_subject_cost_raw", "cms_subject_setting_raw");
     });
   }
 }

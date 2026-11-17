@@ -57,6 +57,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_fixed_item")
   public PriceFixedItem create(PriceFixedItemUpdateRequest request) {
     if (request == null) {
       return null;
@@ -75,6 +76,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_fixed_item")
   public PriceFixedItem update(Long id, PriceFixedItemUpdateRequest request) {
     if (id == null) {
       return null;
@@ -92,6 +94,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_fixed_item")
   public boolean delete(Long id) {
     if (id != null) requirePublicSource(itemMapper.selectById(id));
     return id != null && itemMapper.delete(Wrappers.lambdaQuery(PriceFixedItem.class)
@@ -100,6 +103,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_fixed_item")
   public PriceFixedItemImportResponse importItems(PriceFixedItemImportRequest request) {
     PriceFixedItemImportResponse response = new PriceFixedItemImportResponse();
     if (request == null || request.getRows() == null || request.getRows().isEmpty()) {

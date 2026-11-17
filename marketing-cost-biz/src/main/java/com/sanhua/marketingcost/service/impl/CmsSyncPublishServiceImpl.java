@@ -22,6 +22,8 @@ import org.springframework.util.StringUtils;
 @Service
 @Slf4j
 public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
   private static final String STATUS_READY = "READY";
   private static final String STATUS_RUNNING = "RUNNING";
   private static final String STATUS_SUCCESS = "SUCCESS";
@@ -133,8 +135,10 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
               ignored -> {
                 CmsSyncPublishRunResponse current = baseResponse(signal);
                 current.setExecuted(true);
-                publishTmpTables(signal, current);
+                validateFormalInputs(signal);
+                publishMaterialScrap(signal, current);
                 refreshEffectiveSources(signal, current);
+                if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("SALARY","PRICE"),normalizeBusinessUnit(signal.getBusinessUnitType()),java.util.Set.of(),java.util.Set.of()));
                 current.setStatus(STATUS_SUCCESS);
                 current.setMessage(successMessage(current));
                 return current;
@@ -178,58 +182,26 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
             .set("finished_at", LocalDateTime.now()));
   }
 
-  private void publishTmpTables(CmsSyncPublishSignal signal, CmsSyncPublishRunResponse response) {
+  /** ETL owns four raw tables; only scrap mappings retain their staged publication. */
+  private void validateFormalInputs(CmsSyncPublishSignal signal) {
     String businessUnitType = normalizeBusinessUnit(signal.getBusinessUnitType());
-    List<String> tmpTables =
-        List.of(
-            "tmp_cms_plan_cost_raw",
-            "tmp_cms_workshop_labor_raw",
-            "tmp_cms_product_subject_cost_raw",
-            "tmp_cms_subject_setting_raw",
-            "tmp_lp_material_scrap_ref");
-    for (String table : tmpTables) {
-      long count = countTmpTable(table, businessUnitType);
-      response.getTmpCounts().put(table, count);
-      if (count <= 0) {
-        throw new IllegalStateException(table + " 没有数据，停止覆盖正式表");
+    for (String table : List.of("cms_plan_cost_raw", "cms_workshop_labor_raw",
+        "cms_product_subject_cost_raw", "cms_subject_setting_raw")) {
+      String sql = "SELECT EXISTS(SELECT 1 FROM " + table;
+      Long present;
+      if (StringUtils.hasText(businessUnitType)) {
+        String defaultBusinessUnit = "";
+        present = jdbcTemplate.queryForObject(
+            sql + " WHERE COALESCE(business_unit_type, ?) = ? LIMIT 1)", Long.class,
+            defaultBusinessUnit, businessUnitType);
+      } else {
+        present = jdbcTemplate.queryForObject(sql + " LIMIT 1)", Long.class);
+      }
+      if (present == null || present == 0) {
+        throw new IllegalStateException(table
+            + " 正式表在当前业务单元没有数据，请确认 ETL 全部抽取完成后再发送 READY 信号");
       }
     }
-
-    deleteByBusinessUnit("cms_plan_cost_raw", businessUnitType, "");
-    response
-        .getPublishedCounts()
-        .put(
-            "cms_plan_cost_raw",
-            updateWithBusinessUnit(insertPlanCostSql(businessUnitType), businessUnitType));
-
-    deleteByBusinessUnit("cms_workshop_labor_raw", businessUnitType, "");
-    response
-        .getPublishedCounts()
-        .put(
-            "cms_workshop_labor_raw",
-            updateWithBusinessUnit(insertWorkshopLaborSql(businessUnitType), businessUnitType));
-
-    deleteByBusinessUnit("cms_product_subject_cost_raw", businessUnitType, "");
-    response
-        .getPublishedCounts()
-        .put(
-            "cms_product_subject_cost_raw",
-            updateWithBusinessUnit(insertProductSubjectSql(businessUnitType), businessUnitType));
-
-    jdbcTemplate.update("DELETE FROM cms_subject_setting_raw");
-    response
-        .getPublishedCounts()
-        .put(
-            "cms_subject_setting_raw",
-            updateWithBusinessUnit(insertSubjectSettingSql(businessUnitType), businessUnitType));
-
-    preserveNewerMaterialScrapMappings(businessUnitType);
-    deleteByBusinessUnit("lp_material_scrap_ref", businessUnitType, "COMMERCIAL");
-    response
-        .getPublishedCounts()
-        .put(
-            "lp_material_scrap_ref",
-            updateWithBusinessUnit(insertMaterialScrapSql(businessUnitType), businessUnitType));
   }
 
   private void refreshEffectiveSources(
@@ -248,6 +220,53 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
     response.setEffectiveSkippedCount(salary.getSkippedCount() + aux.getSkippedCount());
     response.setEffectiveBlockedCount(salary.getBlockedCount() + aux.getBlockedCount());
     response.setEffectiveErrorCount(salary.getErrorCount() + aux.getErrorCount());
+  }
+
+  private void markSignal(Long signalId, String status, String message) {
+    signalMapper.update(
+        null,
+        new UpdateWrapper<CmsSyncPublishSignal>()
+            .eq("id", signalId)
+            .set("status", status)
+            .set("message", trimMessage(message))
+            .set("finished_at", LocalDateTime.now()));
+  }
+
+  private String successMessage(CmsSyncPublishRunResponse response) {
+    return "四张ETL直写表校验通过，废料映射已从tmp发布，CMS 公共生效来源已刷新：inserted="
+        + response.getEffectiveInsertedCount()
+        + ", updated="
+        + response.getEffectiveUpdatedCount()
+        + ", removed="
+        + response.getEffectiveRemovedCount()
+        + ", skipped="
+        + response.getEffectiveSkippedCount()
+        + ", blocked="
+        + response.getEffectiveBlockedCount();
+  }
+
+  private String trimMessage(String message) {
+    if (!StringUtils.hasText(message)) {
+      return "CMS 同步发布失败";
+    }
+    return message.length() > 1000 ? message.substring(0, 1000) : message;
+  }
+
+  private String normalizeBusinessUnit(String businessUnitType) {
+    return businessUnitType == null ? "" : businessUnitType.trim();
+  }
+
+  private void publishMaterialScrap(CmsSyncPublishSignal signal, CmsSyncPublishRunResponse response) {
+    String businessUnitType = normalizeBusinessUnit(signal.getBusinessUnitType());
+    long count = countTmpTable("tmp_lp_material_scrap_ref", businessUnitType);
+    response.getTmpCounts().put("tmp_lp_material_scrap_ref", count);
+    if (count <= 0) {
+      throw new IllegalStateException("tmp_lp_material_scrap_ref 没有数据，请确认废料映射 ETL 抽取完成后再发送 READY 信号");
+    }
+    preserveNewerMaterialScrapMappings(businessUnitType);
+    deleteByBusinessUnit("lp_material_scrap_ref", businessUnitType, "COMMERCIAL");
+    response.getPublishedCounts().put("lp_material_scrap_ref",
+        updateWithBusinessUnit(insertMaterialScrapSql(businessUnitType), businessUnitType));
   }
 
   private long countTmpTable(String tableName, String businessUnitType) {
@@ -351,120 +370,6 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
         + businessUnitLiveFilter(businessUnitType, "COMMERCIAL");
   }
 
-  private void markSignal(Long signalId, String status, String message) {
-    signalMapper.update(
-        null,
-        new UpdateWrapper<CmsSyncPublishSignal>()
-            .eq("id", signalId)
-            .set("status", status)
-            .set("message", trimMessage(message))
-            .set("finished_at", LocalDateTime.now()));
-  }
-
-  private String successMessage(CmsSyncPublishRunResponse response) {
-    return "发布成功，正式表覆盖完成，CMS 公共生效来源已刷新：inserted="
-        + response.getEffectiveInsertedCount()
-        + ", updated="
-        + response.getEffectiveUpdatedCount()
-        + ", removed="
-        + response.getEffectiveRemovedCount()
-        + ", skipped="
-        + response.getEffectiveSkippedCount()
-        + ", blocked="
-        + response.getEffectiveBlockedCount();
-  }
-
-  private String trimMessage(String message) {
-    if (!StringUtils.hasText(message)) {
-      return "CMS 同步发布失败";
-    }
-    return message.length() > 1000 ? message.substring(0, 1000) : message;
-  }
-
-  private String normalizeBusinessUnit(String businessUnitType) {
-    return businessUnitType == null ? "" : businessUnitType.trim();
-  }
-
-  private String insertPlanCostSql(String businessUnitType) {
-    return """
-        INSERT INTO cms_plan_cost_raw (
-          import_batch_id, row_no, first_unit_code, first_unit_name, parent_code, parent_name,
-          parent_spec, parent_type, unit, working_hours, effective_date, effective_period,
-          main_material_cost, aux_material_cost, salary_cost, fund_cost, loss_cost,
-          total_plan_cost, business_status, unapproved_items, description, oa_no,
-          business_unit_type, created_at
-        )
-        SELECT
-          import_batch_id, row_no, first_unit_code, first_unit_name, parent_code, parent_name,
-          parent_spec, parent_type, unit, working_hours, effective_date, effective_period,
-          main_material_cost, aux_material_cost, salary_cost, fund_cost, loss_cost,
-          total_plan_cost, business_status, unapproved_items, description, oa_no,
-          COALESCE(business_unit_type, ''), created_at
-        FROM tmp_cms_plan_cost_raw
-        """
-        + businessUnitFilter(businessUnitType, "");
-  }
-
-  private String insertWorkshopLaborSql(String businessUnitType) {
-    return """
-        INSERT INTO cms_workshop_labor_raw (
-          import_batch_id, row_no, period, first_unit_code, first_unit_name, parent_code,
-          parent_name, parent_spec, parent_type, last_unit_name, last_unit_code, working_hours,
-          funding, working_cost_cent, working_cost_yuan, build_flag, path, source_row_id,
-          sequence_no, sequence_status, material_price, first_subject_code, first_subject_name,
-          second_subject_code, second_subject_name, third_subject_code, third_subject_name,
-          business_unit_type, created_at
-        )
-        SELECT
-          import_batch_id, row_no, period, first_unit_code, first_unit_name, parent_code,
-          parent_name, parent_spec, parent_type, last_unit_name, last_unit_code, working_hours,
-          funding, working_cost_cent, working_cost_yuan, build_flag, path, source_row_id,
-          sequence_no, sequence_status, material_price, first_subject_code, first_subject_name,
-          second_subject_code, second_subject_name, third_subject_code, third_subject_name,
-          COALESCE(business_unit_type, ''), created_at
-        FROM tmp_cms_workshop_labor_raw
-        """
-        + businessUnitFilter(businessUnitType, "");
-  }
-
-  private String insertProductSubjectSql(String businessUnitType) {
-    return """
-        INSERT INTO cms_product_subject_cost_raw (
-          import_batch_id, row_no, period, first_unit_code, first_unit_name, parent_code,
-          parent_name, parent_spec, parent_type, last_subject_code, last_subject_name,
-          last_subject_level, material_price, material_price_yuan, build_flag, path,
-          first_subject_code, first_subject_name, second_subject_code, second_subject_name,
-          third_subject_code, third_subject_name, source_row_id, sequence_no, sequence_status,
-          business_unit_type, created_at
-        )
-        SELECT
-          import_batch_id, row_no, period, first_unit_code, first_unit_name, parent_code,
-          parent_name, parent_spec, parent_type, last_subject_code, last_subject_name,
-          last_subject_level, material_price, material_price_yuan, build_flag, path,
-          first_subject_code, first_subject_name, second_subject_code, second_subject_name,
-          third_subject_code, third_subject_name, source_row_id, sequence_no, sequence_status,
-          COALESCE(business_unit_type, ''), created_at
-        FROM tmp_cms_product_subject_cost_raw
-        """
-        + businessUnitFilter(businessUnitType, "");
-  }
-
-  private String insertSubjectSettingSql(String businessUnitType) {
-    return """
-        INSERT INTO cms_subject_setting_raw (
-          import_batch_id, row_no, first_subject_code, first_subject_name, second_subject_code,
-          second_subject_name, third_subject_code, third_subject_name, business_unit_type,
-          created_at
-        )
-        SELECT
-          COALESCE(import_batch_id, 0), row_no, first_subject_code, first_subject_name,
-          second_subject_code, second_subject_name, COALESCE(third_subject_code, ''),
-          third_subject_name, COALESCE(business_unit_type, ''), created_at
-        FROM tmp_cms_subject_setting_raw
-        """
-        + businessUnitFilter(businessUnitType, "");
-  }
-
   String insertMaterialScrapSql(String businessUnitType) {
     return """
         INSERT INTO lp_material_scrap_ref (
@@ -503,13 +408,6 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
         WHERE ranked.row_rank = 1
         """
         + businessUnitRankedFilter(businessUnitType, "COMMERCIAL");
-  }
-
-  private String businessUnitFilter(String businessUnitType, String defaultBusinessUnit) {
-    if (!StringUtils.hasText(businessUnitType)) {
-      return "";
-    }
-    return " WHERE COALESCE(business_unit_type, '" + defaultBusinessUnit + "') = ?";
   }
 
   private String businessUnitRankedFilter(String businessUnitType, String defaultBusinessUnit) {

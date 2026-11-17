@@ -94,7 +94,7 @@ public final class MonthlyRepriceFailures {
         return "INPUT_NOT_READY";
       if (cause instanceof MonthlyPriceProblem price) return switch (price.reason()) {
         case REPLAN_REQUIRED, TRANSIENT_CONCURRENCY_FAILURE, COMMIT_OUTCOME_UNKNOWN -> "PRICE_REPLAN";
-        case MISSING, WAITING, INVALID_INPUT, EVIDENCE_UNAVAILABLE -> "INPUT_NOT_READY";
+        case MISSING, WAITING, SPECIAL_PRICE_REQUIRED, INVALID_INPUT, EVIDENCE_UNAVAILABLE -> "INPUT_NOT_READY";
         case INVALID_PLAN, PERSISTENCE_INCOMPLETE -> "REQUIRES_ATTENTION";
       };
       if (cause instanceof TransientDataAccessException || cause instanceof RecoverableDataAccessException

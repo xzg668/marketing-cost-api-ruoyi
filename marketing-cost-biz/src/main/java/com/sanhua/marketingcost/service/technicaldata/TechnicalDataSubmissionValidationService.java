@@ -19,6 +19,8 @@ import org.springframework.util.StringUtils;
 /** 共用提交校验；只读草稿/冻结内容，不继承旧逐模块审核状态，也不执行 OA 发送。 */
 @Service
 public class TechnicalDataSubmissionValidationService {
+  private final TechnicalBomModuleCoverage coverage;
+  private final TechnicalBomApplicationService completeBom;
   private final TechnicalDataUnchangedModuleReuse reuse;
 
   private final com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients;
@@ -41,7 +43,9 @@ public class TechnicalDataSubmissionValidationService {
       TechnicalDataAuxiliaryApplicationService auxiliary, TechnicalDataSolderApplicationService solder,
       TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataPriceApplicationService prices,
       com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients,
-      TechnicalDataPlateMaterialProfile plateMaterials, TechnicalDataUnchangedModuleReuse reuse) {
+      TechnicalDataPlateMaterialProfile plateMaterials, TechnicalDataUnchangedModuleReuse reuse, TechnicalBomApplicationService completeBom, TechnicalBomModuleCoverage coverage) {
+    this.coverage = coverage;
+    this.completeBom = completeBom;
     this.reuse = reuse;
     this.plateMaterials = plateMaterials;
     this.recipients = recipients;
@@ -83,7 +87,8 @@ public class TechnicalDataSubmissionValidationService {
           && (person == null || person.processingModules().contains(module.getModuleType()))).toList();
       if (own.isEmpty()) add(issues, product, "TASK", "assigneeUserId", null, "PERSON_SCOPE_EMPTY", "此人没有负责的补录模块", "task-status");
       var priceCheck = byType.get("PRICE");
-      boolean preparingBom = own.stream().anyMatch(module -> Set.of("MANUFACTURING", "PACKAGE", "SOLDER").contains(module.getModuleType())
+      boolean preparingBom = own.stream().anyMatch(module -> (Set.of("MANUFACTURING", "PACKAGE", "SOLDER").contains(module.getModuleType())
+          || "DRAWING_BOM".equals(module.getModuleType()) && Set.of("TECH_REFERENCE", "TECH_UPLOAD").contains(Objects.toString(module.getReferenceSourceType(), "")))
           && !TechnicalDataSubmissionState.submitted(module.getModuleStatus()));
       if (preparingBom && priceCheck != null && ("TECHNICAL_BOM_PRICE_FAILED".equals(priceCheck.getRequirementReasonCode())
           || "PRICE_BOM_NOT_READY".equals(priceCheck.getRequirementReasonCode()))) {
@@ -110,6 +115,14 @@ public class TechnicalDataSubmissionValidationService {
         if (!own.contains(module)) continue;
         if (!Set.of("AVAILABLE", "MISSING").contains(module.getSourceAvailability() == null ? "UNCONFIRMED" : module.getSourceAvailability())) {
           add(issues, product, type, "sourceAvailability", null, "SOURCE_NOT_CONFIRMED", "本模块来源检查未确认或失败，请先复查", anchor(product, type));
+        }
+        if (version != null && TechnicalBomModuleCoverage.covered(module)) {
+          int before = issues.size();
+          validateModule(product, version, module, type, issues, frozen, 1);
+          for (String issue : coverage.issues(module, modules)) add(issues, product, type, "source", null,
+              "TECH_BOM_COVERAGE_CHANGED", issue, anchor(product, "DRAWING_BOM"));
+          if (before == issues.size()) ready++;
+          continue;
         }
         boolean valid = switch (type) {
           case "PROFILE" -> validateProfile(product, version, module, issues, frozen);
@@ -138,7 +151,8 @@ public class TechnicalDataSubmissionValidationService {
         && codec.manufacturing(version).evidence() != null) itemCount = Math.max(1, itemCount);
     validateModule(product, version, module, module.getModuleType(), issues, frozen, itemCount);
     if ("DRAWING_BOM".equals(module.getModuleType()) && !frozen) {
-      for (String message : TechnicalDataDrawingRules.validate(codec.drawingBom(version), product)) {
+      for (String message : codec.technicalBom(version) == null ? TechnicalDataDrawingRules.validate(codec.drawingBom(version), product)
+          : completeBom.validateCurrent(product, version)) {
         add(issues, product, "DRAWING_BOM", "source", null, "DRAWING_SOURCE_INVALID", message, anchor(product, "DRAWING_BOM"));
       }
     }
@@ -300,7 +314,7 @@ public class TechnicalDataSubmissionValidationService {
     }
     if (!"PROFILE".equals(type)
         && !("MANUAL".equals(module.getEntryMode()) || "REFERENCE".equals(module.getEntryMode())
-            || Set.of("AUXILIARY", "SALARY").contains(type) && "UPLOAD".equals(module.getEntryMode()))) {
+            || Set.of("AUXILIARY", "SALARY", "DRAWING_BOM").contains(type) && "UPLOAD".equals(module.getEntryMode()))) {
       add(issues, product, type, "entryMode", null,
           "ENTRY_MODE_REQUIRED", type + "模块未选择参照或录入", anchor(product, type));
     }

@@ -77,6 +77,7 @@ public class TechnicalDataPackageApplicationService {
   }
 
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PACKAGE","PRICE"},productArgument=0)
   public TechnicalDataPackageResponse save(Long productId, TechnicalDataPackageSaveRequest request, TechnicalDataActor actor) {
     if (request == null || request.getExpectedVersion() == null || request.getExpectedVersion() < 0
         || !request.getUnknownFields().isEmpty() || request.getItems() == null || request.getItems().size() > 500

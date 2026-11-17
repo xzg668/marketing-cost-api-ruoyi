@@ -90,6 +90,37 @@ class DrawingVerificationWorkspaceIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
+  void savedSingleUnknownGroupIsProjectedUsingRequestAndPlmWithoutRewritingOrRefetching() throws Exception {
+    String drawing = key + "-DRAW-MX";
+    var body = DrawingVerificationFixtures.drawing("single-unknown-" + UUID.randomUUID(), drawing,
+        java.util.List.of(java.util.List.of("1", "PART-01", "零件", "2.5000", "钢", "B", "C", "", "原文")));
+    var data = (com.fasterxml.jackson.databind.node.ObjectNode) body.get("data");
+    data.set("_unknown_1", data.remove(drawing));
+    body.put("status", "reviewRequired");
+    body.put("verificationStatus", "partial");
+    doReturn(codec.parse(body.toString())).when(client).verify(any());
+    var received = verifications.restart(contexts.load(itemId, "COMMERCIAL", "210", month), null, task.getId()).orElseThrow();
+    var original = results.findById(received.getCurrentResultId());
+    tasks.failConsumption(received.getId(), received.getCurrentResultId(), "原分组未匹配", java.time.LocalDateTime.now());
+    var taskBeforeRead = jdbc.queryForMap("SELECT * FROM lp_drawing_verification_task WHERE id=?", received.getId());
+
+    for (int i = 0; i < 2; i++) {
+      var state = read(admin(get(path)));
+      assertThat(state.path("current").path("consumptionState").asText()).isEqualTo("FAILED");
+      var detail = read(admin(get(path + "/results/" + received.getCurrentResultId())));
+      assertThat(detail.path("productDrawingNo").asText()).isEqualTo(drawing);
+      assertThat(detail.path("productGroupKey").asText()).isEqualTo("_unknown_1");
+      assertThat(detail.path("data")).isEqualTo(body.path("data"));
+      assertThat(detail.path("data").path("_unknown_1").path("params").path("items").get(0).path("qty").asText())
+          .isEqualTo("2.5000");
+    }
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_drawing_verification_task WHERE id=?", received.getId()))
+        .isEqualTo(taskBeforeRead);
+    assertThat(results.findById(received.getCurrentResultId()).getRawSummaryJson()).isEqualTo(original.getRawSummaryJson());
+    verify(client, times(2)).verify(any());
+  }
+
+  @Test
   void directDrawingModeBindsAnUnknownDrawingToTheQuoteAndReceivesItsFinalData() throws Exception {
     String suppliedDrawing = key + "-PROVIDER-TEST-MX";
     jdbc.update("UPDATE oa_form_item SET material_no=NULL,sunl_model=NULL,spec=NULL,customer_drawing=? WHERE id=?",

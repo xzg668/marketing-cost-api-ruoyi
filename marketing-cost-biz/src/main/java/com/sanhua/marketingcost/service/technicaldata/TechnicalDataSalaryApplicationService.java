@@ -87,6 +87,7 @@ public class TechnicalDataSalaryApplicationService {
   }
 
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SALARY"},productArgument=0)
   public TechnicalDataSalaryResponse save(Long productId, TechnicalDataSalarySaveRequest request, TechnicalDataActor actor) {
     if (request == null || request.getExpectedVersion() == null || request.getExpectedVersion() < 0
         || !request.getUnknownFields().isEmpty() || !Set.of("REFERENCE", "UPLOAD").contains(Objects.toString(request.getEntryMode(), ""))) {

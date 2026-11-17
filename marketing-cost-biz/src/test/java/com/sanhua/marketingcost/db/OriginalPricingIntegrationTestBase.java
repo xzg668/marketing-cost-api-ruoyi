@@ -51,6 +51,7 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V320__technical_calculation_input_versions.sql",
             "V321__retire_factor_adjustment.sql",
             "V323__monthly_material_price_priority.sql",
+            "V387__material_special_price_policy.sql",
             "V325__finance_effective_price.sql",
             "V326__original_workbook_source.sql",
             "V327__price_prepare_gap_price_type.sql",

@@ -90,7 +90,12 @@ public final class MonthlySupplementalFixedPriceSource {
           problems.put(request,new Problem(Failure.MISSING,"补录固定价没有适用的含税口径"));continue;
         }
         if(!"PRICE".equals(owner.moduleType()))throw new IllegalArgumentException("技术价格声明必须由PRICE模块办理");
-        if(!owner.claimOrganization().equals(request.priceOrgCode()) || !owner.claimBusinessUnit().equals(context.businessUnitType())
+        // Cross-organization fallback probes each source in its own organization.
+        // A claim belonging to another probe is inapplicable, not a corrupt declaration.
+        if(!owner.claimOrganization().equals(request.priceOrgCode())) {
+          problems.put(request,new Problem(Failure.MISSING,"本组织没有适用的技术补录固定价"));continue;
+        }
+        if(!owner.claimBusinessUnit().equals(context.businessUnitType())
             || !owner.currency().equals(request.family().currency())
             || !"CNY".equals(owner.currency()))
           throw new IllegalArgumentException("技术价格声明的组织、业务单元、单位或币税口径不适用");

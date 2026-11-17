@@ -22,6 +22,7 @@ public class U9MaterialMasterIngestServiceImpl implements U9MaterialMasterIngest
   }
 
   @Override
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","MANUFACTURING","PRICE","NET_LOSS"})
   public U9MaterialImportResponse ingest(
       U9MaterialMasterSourceType sourceType,
       U9MaterialMasterIngestRequest request) {

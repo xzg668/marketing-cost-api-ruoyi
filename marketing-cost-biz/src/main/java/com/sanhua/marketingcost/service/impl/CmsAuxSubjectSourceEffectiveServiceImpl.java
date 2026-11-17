@@ -102,7 +102,7 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
         PlanEligibility eligibility =
             eligibilityByKey.getOrDefault(
                 candidate.parentCode + "|" + candidate.period,
-                PlanEligibility.allowed(candidate.parentCode, candidate.period, "允许生效"));
+                PlanEligibility.missingPlan(candidate.parentCode, candidate.period));
         if (eligibility.isAuxSubjectAllowed()) {
           selected = candidate;
           selectedEligibility = eligibility;
@@ -322,7 +322,7 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
   private PlanEligibility eligibility(String parentCode, String period, String businessUnitType) {
     return planEligibilityService
         .checkEligibility(List.of(parentCode), List.of(period), normalizeBusinessUnit(businessUnitType))
-        .getOrDefault(parentCode + "|" + period, PlanEligibility.allowed(parentCode, period, "允许生效"));
+        .getOrDefault(parentCode + "|" + period, PlanEligibility.missingPlan(parentCode, period));
   }
 
   private void insertLog(

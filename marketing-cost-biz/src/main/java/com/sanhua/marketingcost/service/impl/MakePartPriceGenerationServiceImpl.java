@@ -388,7 +388,9 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   }
 
   private void upsertRows(List<MakePartPriceCalcRow> rows) {
-    for (MakePartPriceCalcRow row : rows) {
+    var financialRows = new com.sanhua.marketingcost.service.MakePartFinancialPrices(monthlyCodec).project(rows);
+    for (int index = 0; index < financialRows.size(); index++) {
+      MakePartPriceCalcRow row = financialRows.get(index);
       // 缺数据也必须落异常行，不能静默跳过，否则页面无法定位缺 BOM、缺价或缺废料映射。
       Long existingId = findExistingRowId(row);
       if (existingId == null) {
@@ -397,6 +399,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
         row.setId(existingId);
         calcRowMapper.updateById(row);
       }
+      // The caller still needs the original quotation-scenario amounts and this saved reference.
+      rows.get(index).setId(row.getId());
     }
   }
 
@@ -579,9 +583,9 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     PricePrepareScenarioContext parentScenario =
         plan.scenarioContext == null
             ? new PricePrepareScenarioContext(
-                QuotePriceScenarioType.OA_LOCKED,
-                null,
-                null,
+                QuotePriceScenarioType.FINANCE_QUOTE_BASE,
+                "MAKE_FINANCE_BASE",
+                "MAKE_FINANCE_BASE",
                 Map.of(),
                 new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(
                     parent.getOaFormItemId()))
@@ -910,6 +914,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     if (parentCode == null) {
       return List.of();
     }
+    var completeChildren = manufacturingInputs.completeBomChildren(parent);
+    if (completeChildren != null) return completeChildren;
     // DRAWING: 是图库节点的内部核算身份，不能作为 U9 料号查询。
     List<BomU9Source> u9Children =
         parentCode.startsWith("DRAWING:") || parentCode.startsWith("DRAWING#")
@@ -1030,7 +1036,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
 
   private QuotePriceScenarioType scenarioType(PricePrepareScenarioContext scenarioContext) {
     return scenarioContext == null || scenarioContext.scenarioType() == null
-        ? QuotePriceScenarioType.OA_LOCKED
+        ? QuotePriceScenarioType.FINANCE_QUOTE_BASE
         : scenarioContext.scenarioType();
   }
 

@@ -68,6 +68,7 @@ public class TechnicalDataPriceApplicationService {
   }
 
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},productArgument=0)
   public TechnicalDataPriceResponse save(Long productId, TechnicalDataPriceSaveRequest request, TechnicalDataActor actor) {
     if (request == null || request.getExpectedVersion() == null || request.getExpectedVersion() < 0
         || request.getItems() == null || request.getItems().size() > 500 || !request.getUnknownFields().isEmpty()) throw invalid("价格请求缺少版本或包含不支持的字段");
@@ -145,6 +146,7 @@ public class TechnicalDataPriceApplicationService {
   }
 
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},productArgument=0)
   public TechnicalDataPriceResponse recheckPublication(Long productId, TechnicalDataActor actor) {
     if (actor != null && actor.oaSession()) throw forbidden("OA 补录链接不能发布价格资料");
     var found = repository.findProduct(productId).orElseThrow(() -> invalid("补录产品不存在"));
@@ -155,6 +157,7 @@ public class TechnicalDataPriceApplicationService {
     return get(productId, null, actor);
   }
 
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},productArgument=0)
   public void claimForDispatch(Long productId) {
     var product = repository.findProduct(productId).orElseThrow();
     var task = repository.findTask(product.getTaskId()).orElseThrow();

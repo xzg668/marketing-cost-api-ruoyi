@@ -316,4 +316,27 @@ class SysUserServiceImplTest {
 
         assertTrue(perms.isEmpty(), "空 perms 应被过滤");
     }
+    @Test
+    void quoteImportIsAdminOnlyEvenIfLegacyRoleGrantsRemain() {
+        for (String roleKey : List.of("bu_staff", "bu_director", "finance_reviewer", "admin", "ADMIN")) {
+            SysUserRole ur = new SysUserRole(); ur.setRoleId(11L);
+            SysRole role = new SysRole(); role.setRoleId(11L); role.setRoleKey(roleKey);
+            SysRoleMenu rm = new SysRoleMenu(); rm.setMenuId(205L);
+            when(sysUserRoleMapper.selectList(any())).thenReturn(List.of(ur));
+            when(sysRoleMapper.selectList(any())).thenReturn(List.of(role));
+            when(sysRoleMenuMapper.selectList(any())).thenReturn(List.of(rm));
+            SysMenu upload = new SysMenu(); upload.setPerms("ingest:quote:import");
+            SysMenu mock = new SysMenu(); mock.setPerms("ingest:quote:mock-create");
+            SysMenu list = new SysMenu(); list.setPerms("ingest:quote:list");
+            when(sysMenuMapper.selectList(any())).thenReturn(List.of(upload, mock, list));
+            if ("admin".equalsIgnoreCase(roleKey)) {
+                assertEquals(List.of(upload, mock, list), sysUserService.findVisibleMenus(10L, "COMMERCIAL"));
+                assertEquals(Set.of("*:*:*"), sysUserService.findPermissionsByUserId(10L));
+            } else {
+                assertEquals(List.of(list), sysUserService.findVisibleMenus(10L, "COMMERCIAL"));
+                assertEquals(Set.of("ingest:quote:list"), sysUserService.findPermissionsByUserId(10L));
+            }
+        }
+    }
+
 }

@@ -14,6 +14,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /** 一次原子发布形成包含全部并行规则的新修订；旧修订和来源永不改写。 */
 @Component
 public class MonthlyPriceFolderPublication {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
   private final PriceLinkedItemMapper linked;
   private final PriceRangeFactorRuleMapper ranges;
   private final PriceRangeItemMapper bands;
@@ -71,6 +73,8 @@ public class MonthlyPriceFolderPublication {
         }
       }
     }
+    if (pendingState != null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(
+        Set.of("PRICE"), com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(), Set.of(), Set.of()));
     if (ownedBatches.isEmpty()) return;
     linked.update(null, Wrappers.lambdaUpdate(PriceLinkedItem.class).in(PriceLinkedItem::getSourceUploadBatchId, ownedBatches)
         .eq(PriceLinkedItem::getRuleStatus, "STAGED").set(PriceLinkedItem::getRuleStatus, "NOT_SELECTED"));

@@ -223,6 +223,11 @@ public class DrawingVerificationService {
     return tasks.selectById(task.getId());
   }
 
+  /** Read-only input identity check for technical BOM entry; no retry or task mutation. */
+  public boolean matchesCurrentInputs(ElectronicDrawingWorkContext expected, DrawingVerificationTask task) {
+    return inputsStillMatch(expected, task);
+  }
+
   boolean inputsStillMatch(ElectronicDrawingWorkContext expected, DrawingVerificationTask task) {
     try {
       var scope = reload(expected);

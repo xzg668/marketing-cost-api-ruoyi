@@ -12,6 +12,20 @@ import org.apache.ibatis.annotations.Update;
 public interface QuoteTechDataVersionMapper extends BaseMapper<QuoteTechDataVersion> {
 
   @Select("""
+      SELECT approved.* FROM lp_quote_tech_data_version draft
+      JOIN lp_quote_tech_product p ON p.id=draft.product_id AND p.active_flag=1
+      JOIN lp_quote_tech_module m ON m.product_id=p.id AND m.module_type='MANUFACTURING'
+      JOIN lp_quote_tech_data_version approved ON approved.id=m.current_version_id
+        AND approved.product_id=p.id
+       WHERE draft.id=#{draftId} AND draft.version_status='DRAFT'
+         AND p.oa_form_item_id=#{sourceItemId} AND p.accounting_month=#{sourceMonth}
+         AND m.module_status IN ('SUBMITTED','APPROVED')
+         AND approved.version_status IN ('SUBMITTED','APPROVED')
+      """)
+  QuoteTechDataVersion selectSubmittedManufacturingForDraft(@Param("draftId") Long draftId,
+      @Param("sourceItemId") Long sourceItemId, @Param("sourceMonth") String sourceMonth);
+
+  @Select("""
       SELECT id FROM lp_quote_tech_data_version
        WHERE product_id=#{productId}
          AND version_status IN ('FROZEN','SUBMITTED','APPROVED','RETURNED')
@@ -40,6 +54,7 @@ public interface QuoteTechDataVersionMapper extends BaseMapper<QuoteTechDataVers
              product_fees_json = #{version.productFeesJson},
              plate_material_json = #{version.plateMaterialJson},
              drawing_bom_json = #{version.drawingBomJson},
+             technical_bom_json = #{version.technicalBomJson},
              manufacturing_json = #{version.manufacturingJson},
              packaging_json = #{version.packagingJson},
              solder_items_json = #{version.solderItemsJson},

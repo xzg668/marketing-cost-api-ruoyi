@@ -91,7 +91,8 @@ public final class MonthlyLegacyRangePriceSource {
       return "CU".equalsIgnoreCase(raw) || "1#CU".equalsIgnoreCase(raw)?PriceFactorContext.COPPER:null;
     }
   }
-  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){return read(context,requests,null);}
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests,String specialMonth){
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
@@ -100,11 +101,11 @@ public final class MonthlyLegacyRangePriceSource {
     }
     var financeCache=new HashMap<String,Financial>();var bindings=new Bindings(context.businessUnitType());
     for(var organization:groups.entrySet()){
-      var selectedMonth=months.select(context.businessUnitType(),organization.getKey(),context.month().toString());
+      var selectedMonth=specialMonth==null?months.select(context.businessUnitType(),organization.getKey(),context.month().toString()):new PriceMonthSelection(context.month().toString(),specialMonth);
       var codes=new ArrayList<>(organization.getValue().keySet());
       for(int start=0;start<codes.size();start+=256){
         var batch=codes.subList(start,Math.min(start+256,codes.size()));var byCode=new HashMap<String,List<PriceRangeFactorRule>>();
-        rows.rules(context.businessUnitType(),organization.getKey(),batch).forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
+        rows.rules(context.businessUnitType(),organization.getKey(),batch).stream().filter(row->specialMonth==null||specialMonth.equals(row.getPricingMonth())).forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
         bindings.capture(byCode.values().stream().flatMap(List::stream).toList());
         var ids=byCode.values().stream().flatMap(List::stream).filter(row->!OriginalRangeRuleSnapshot.isOriginal(row)).map(PriceRangeFactorRule::getId).distinct().toList();
         var bands=new HashMap<Long,List<PriceRangeItem>>();if(!ids.isEmpty())rows.bands(ids).forEach(row->bands.computeIfAbsent(row.getFactorRuleId(),ignored->new ArrayList<>()).add(row));

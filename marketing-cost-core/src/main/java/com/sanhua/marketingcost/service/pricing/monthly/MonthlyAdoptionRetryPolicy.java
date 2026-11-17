@@ -14,6 +14,7 @@ public final class MonthlyAdoptionRetryPolicy {
   public enum Failure {
     MISSING,
     WAITING,
+    SPECIAL_PRICE_REQUIRED,
     INVALID_INPUT,
     INVALID_PLAN,
     EVIDENCE_UNAVAILABLE,

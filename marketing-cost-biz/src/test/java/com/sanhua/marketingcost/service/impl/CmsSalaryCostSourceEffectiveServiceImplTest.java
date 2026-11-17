@@ -34,6 +34,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
@@ -100,9 +101,13 @@ class CmsSalaryCostSourceEffectiveServiceImplTest {
           List<String> parents = new ArrayList<>((Collection<String>) invocation.getArgument(0));
           @SuppressWarnings("unchecked")
           List<String> periods = new ArrayList<>((Collection<String>) invocation.getArgument(1));
-          String parent = parents.get(0);
-          String period = periods.get(0);
-          return Map.of(parent + "|" + period, PlanEligibility.allowed(parent, period, "允许生效"));
+          Map<String, PlanEligibility> result = new LinkedHashMap<>();
+          for (String parent : parents) {
+            for (String period : periods) {
+              result.put(parent + "|" + period, PlanEligibility.allowed(parent, period, "允许生效"));
+            }
+          }
+          return result;
         })
         .when(eligibilityService)
         .checkEligibility(anyCollection(), anyCollection(), anyString());
@@ -183,13 +188,15 @@ class CmsSalaryCostSourceEffectiveServiceImplTest {
           List<String> parents = new ArrayList<>((Collection<String>) invocation.getArgument(0));
           @SuppressWarnings("unchecked")
           List<String> periods = new ArrayList<>((Collection<String>) invocation.getArgument(1));
-          String parent = parents.get(0);
-          String period = periods.get(0);
-          if ("A".equals(parent) && "2026-01".equals(period)) {
-            return Map.of(parent + "|" + period,
-                PlanEligibility.fromPlanRow(parent, period, 1L, null, period, false, true, true, "工时未审批"));
+          Map<String, PlanEligibility> result = new LinkedHashMap<>();
+          for (String parent : parents) {
+            for (String period : periods) {
+              result.put(parent + "|" + period, "A".equals(parent) && "2026-01".equals(period)
+                  ? PlanEligibility.fromPlanRow(parent, period, 1L, null, period, false, true, true, "工时未审批")
+                  : PlanEligibility.allowed(parent, period, "允许生效"));
+            }
           }
-          return Map.of(parent + "|" + period, PlanEligibility.allowed(parent, period, "允许生效"));
+          return result;
         })
         .when(eligibilityService)
         .checkEligibility(anyCollection(), anyCollection(), anyString());

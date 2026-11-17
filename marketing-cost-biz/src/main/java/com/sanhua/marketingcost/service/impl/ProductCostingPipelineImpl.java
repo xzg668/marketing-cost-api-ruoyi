@@ -326,7 +326,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
           "WAIT_PRICE",
           STEP_PRICE,
           "TECH_PRICE_CORRECTION_REQUIRED",
-          "本产品有 " + correction.items().size() + " 项自行公式尚未形成可用价格，请在价格源维护下载修正后导入",
+          "本产品有 " + correction.items().size() + " 项补录联动公式尚未形成可用价格，请在价格源维护下载核对后导入",
           correction.items().size());
     PricePrepareReadinessResult readiness = prices == null ? null : prices.getReadiness();
     if (readiness != null && "FAILED".equals(readiness.getBatchStatus())) {

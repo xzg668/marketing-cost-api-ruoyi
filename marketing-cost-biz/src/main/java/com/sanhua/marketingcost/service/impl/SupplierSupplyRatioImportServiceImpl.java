@@ -47,6 +47,7 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
 
   @Override
   @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"})
   public SupplierSupplyRatioImportResponse importExcel(InputStream input, String sourceFileName,
       String businessUnitType, String operator, String sheetName) {
     SupplierSupplyRatioScope.require(businessUnitType);
@@ -61,6 +62,7 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
 
   @Override
   @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"})
   public SupplierSupplyRatioImportResponse importRows(List<SupplierSupplyRatioExcelRow> rows,
       String sourceFileName, String businessUnitType, String operator) {
     if (rows == null || rows.isEmpty()) {

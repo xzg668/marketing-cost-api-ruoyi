@@ -18,6 +18,8 @@ import org.springframework.stereotype.Service;
 /** 个人冻结、定向恢复和提交版本汇总。调用方先锁任务，随后按产品、版本、模块顺序加锁。 */
 @Service
 public class TechnicalDataParticipantVersions {
+  private final TechnicalBomModuleCoverage coverage;
+  private final TechnicalBomApplicationService completeBom;
   private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
@@ -38,7 +40,9 @@ public class TechnicalDataParticipantVersions {
       TechnicalDataPackageApplicationService packaging, TechnicalDataAuxiliaryApplicationService auxiliary,
       TechnicalDataSolderApplicationService solder, TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataSharedModules sharedModules, TechnicalDataPriceApplicationService prices,
       TechnicalDataPlateMaterialProfile plateMaterials,
-      TechnicalDataPlateMaterialPublication plateMaterialPublication, TechnicalDataUnchangedModuleReuse reuse) {
+      TechnicalDataPlateMaterialPublication plateMaterialPublication, TechnicalDataUnchangedModuleReuse reuse, TechnicalBomApplicationService completeBom, TechnicalBomModuleCoverage coverage) {
+    this.coverage = coverage;
+    this.completeBom = completeBom;
     this.reuse = reuse;
     this.plateMaterials = plateMaterials;
     this.plateMaterialPublication = plateMaterialPublication;
@@ -79,12 +83,18 @@ public class TechnicalDataParticipantVersions {
     if (!Objects.equals(product.getRowVersion(), expectedVersion)) throw conflict("产品资料已变化，请刷新后提交");
     if (own.stream().anyMatch(module -> Integer.valueOf(0).equals(module.getOaEditAllowed()))) throw conflict("OA待办已暂停或失效，不能提交补录");
     for (var module : own) {
-      if (!"PRICE".equals(module.getModuleType())) sharedModules.requireOwnership(product.getId(), module.getModuleType());
+      if (!"PRICE".equals(module.getModuleType()) && !TechnicalBomModuleCoverage.covered(module)) sharedModules.requireOwnership(product.getId(), module.getModuleType());
     }
     if (own.stream().anyMatch(module -> !Set.of("READY", "RETURNED").contains(module.getModuleStatus())
         || !Objects.equals(module.getCurrentVersionId(), draft.getId()) || !"MISSING".equals(module.getSourceAvailability())
         || module.getLastValidationCode() == null)) throw conflict("本人负责模块尚未全部完成服务端校验");
+    for (var module : own) if (TechnicalBomModuleCoverage.covered(module)) {
+      var issues = coverage.issues(module, all);
+      if (!issues.isEmpty()) throw conflict(String.join("；", issues));
+    }
     Set<String> types = own.stream().map(QuoteTechModule::getModuleType).collect(java.util.stream.Collectors.toSet());
+    var materialTypes = new java.util.HashSet<>(types);
+    own.stream().filter(TechnicalBomModuleCoverage::covered).forEach(module -> materialTypes.remove(module.getModuleType()));
     if (types.contains("PROFILE") && !TechnicalDataProductFeeRules.validate(codec.productFees(draft)).isEmpty()) {
       throw conflict("本人负责模块的产品费用尚未填写完整，不能冻结提交");
     }
@@ -92,19 +102,20 @@ public class TechnicalDataParticipantVersions {
       var issues = plateMaterials.validateCurrent(product, draft);
       if (!issues.isEmpty()) throw conflict(String.join("；", issues));
     }
-    if (types.contains("DRAWING_BOM") && !TechnicalDataDrawingRules.validate(codec.drawingBom(draft), product).isEmpty()) {
-      throw conflict("电子图库明细尚未通过实际取数校验，不能冻结提交");
+    if (types.contains("DRAWING_BOM") && !(codec.technicalBom(draft) == null
+        ? TechnicalDataDrawingRules.validate(codec.drawingBom(draft), product) : completeBom.validateCurrent(product, draft)).isEmpty()) {
+      throw conflict("BOM明细尚未通过实际来源校验，不能冻结提交");
     }
-    if (types.contains("MANUFACTURING") && !manufacturing.validateCurrent(product, codec.manufacturing(draft)).isEmpty()) {
+    if (materialTypes.contains("MANUFACTURING") && !manufacturing.validateCurrent(product, codec.manufacturing(draft)).isEmpty()) {
       throw conflict("制造件原材料或来源尚未核实完整，不能冻结提交");
     }
     if (types.contains("PACKAGE") && !packaging.validateCurrent(product, draft).isEmpty()) {
       throw conflict("包装母件底数、子件用量或来源尚未核实完整，不能冻结提交");
     }
-    if (types.contains("AUXILIARY") && !auxiliary.validateCurrent(product, draft).isEmpty()) {
+    if (materialTypes.contains("AUXILIARY") && !auxiliary.validateCurrent(product, draft).isEmpty()) {
       throw conflict("辅料明细、本次金额或来源尚未核实完整，不能冻结提交");
     }
-    if (types.contains("SOLDER") && !solder.validateCurrent(product, draft).isEmpty()) {
+    if (materialTypes.contains("SOLDER") && !solder.validateCurrent(product, draft).isEmpty()) {
       throw conflict("焊料、图号来源或每产品用量尚未核实完整，不能冻结提交");
     }
     if (types.contains("SALARY") && !salary.validateCurrent(product, draft).isEmpty()) {
@@ -117,11 +128,11 @@ public class TechnicalDataParticipantVersions {
       var issues = prices.validateCurrent(product, draft);
       if (!issues.isEmpty()) throw conflict(String.join("；", issues));
     }
-    var copy = scopedDraft(draft, repository.maxVersionNo(product.getId()) + 1, actorId, now(), types);
+    var copy = scopedDraft(draft, repository.maxVersionNo(product.getId()) + 1, actorId, now(), materialTypes);
     copy.setReferenceSnapshotJson(codec.referenceSnapshotJson(codec.moduleSnapshots(own)));
     copy.setSourceFactsJson(codec.sourceFactsJson(product.getSourceSnapshotJson(), own, dependencies.capture(all, types)));
     repository.insertVersion(copy);
-    copyDetails(copy.getId(), draft.getId(), types);
+    copyDetails(copy.getId(), draft.getId(), materialTypes);
     var frozen = freezeCopy(copy.getId(), actorId);
     for (var module : own) setModule(module, frozen.getId(), "FROZEN");
     product.setLatestSubmittedVersionId(frozen.getId());

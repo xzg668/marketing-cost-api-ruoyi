@@ -19,6 +19,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Source maintenance only. No monthly adoption or costing dependency enters this module. */
 @Service
 public class HouseholdInquiryService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
   private static final PriceContext IMPORT_PRICE_CONTEXT=new PriceContext("件","CNY",TaxBasis.EXCLUDED);
   private final HouseholdInquiryQueryMapper queries;
   private final HouseholdInquiryStorage storage;
@@ -114,7 +117,9 @@ public class HouseholdInquiryService {
           if(!Objects.equals(id,row.expectedCurrentId())) throw fail("STALE_PREVIEW",409,"目标来源已变化，请重新预览");
         }
         var saved=publishRows(unit,batch,content,current);
-        storage.completePublication(unit,batch.getId(),write(saved));return saved;
+        storage.completePublication(unit,batch.getId(),write(saved));
+        if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),unit,java.util.Set.of(),java.util.Set.of()));
+        return saved;
       });
     } catch(DuplicateKeyException conflict) { throw fail("STALE_PREVIEW",409,"目标来源已被并发发布，请重新预览");
     } catch(ConcurrencyFailureException conflict) {

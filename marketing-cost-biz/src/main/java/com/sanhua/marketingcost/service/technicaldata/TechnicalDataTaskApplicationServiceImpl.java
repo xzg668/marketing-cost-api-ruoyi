@@ -37,6 +37,9 @@ import org.springframework.util.StringUtils;
 @Service
 public class TechnicalDataTaskApplicationServiceImpl
     implements TechnicalDataTaskApplicationService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
   private static final Set<String> TASK_STATUSES = Set.of(
       "UNASSIGNED", "PENDING", "IN_PROGRESS", "PREPARED", "SUBMITTED", "RETURN_PENDING", "PARTIALLY_RETURNED", "APPROVED", "CANCELLED");
 
@@ -192,6 +195,9 @@ public class TechnicalDataTaskApplicationServiceImpl
       results.add(new TechnicalDataTaskPublishResponse.Item(itemId, action,
           assemble(repository.findTask(task.getId()).orElseThrow(), actor)));
     }
+    if(pendingState!=null) for(var task:selected) pendingState.changed(new TechnicalDataPendingState.Change(
+        java.util.Set.copyOf(TechnicalDataModuleType.orderedCodes()),task.getBusinessUnitType(),
+        repository.findProducts(task.getId()).stream().map(QuoteTechProduct::getMaterialNo).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet()),java.util.Set.of()));
     String batchId = oaDispatch.prepare(selected, command.assigneeUserId(), request.getModuleAssignees(),
         command.requestId(), fingerprint, actor);
     return new TechnicalDataTaskPublishResponse(command.requestId(), results, batchId, null);
@@ -521,7 +527,8 @@ public class TechnicalDataTaskApplicationServiceImpl
           contentCodec.productFees(profileVersion),contentCodec.drawingBom(visible.get("DRAWING_BOM")),
           contentCodec.manufacturing(visible.get("MANUFACTURING")),contentCodec.packaging(visible.get("PACKAGE")),
           contentCodec.solder(visible.get("SOLDER")),contentCodec.netLoss(visible.get("NET_LOSS")),
-          contentCodec.prices(visible.get("PRICE")),null,contentCodec.plateMaterial(profileVersion));
+          contentCodec.prices(visible.get("PRICE")),null,contentCodec.plateMaterial(profileVersion),
+          contentCodec.technicalBom(visible.get("DRAWING_BOM")));
       boolean ownDraft=submission==null && modules.stream().anyMatch(module -> readPolicy.ownsDraft(module,actor));
       String state=ownDraft?product.getProductStatus():visible.isEmpty()?"PENDING":
           modules.stream().anyMatch(module -> "RETURNED".equals(module.getModuleStatus())) ? "RETURNED" : "SUBMITTED";

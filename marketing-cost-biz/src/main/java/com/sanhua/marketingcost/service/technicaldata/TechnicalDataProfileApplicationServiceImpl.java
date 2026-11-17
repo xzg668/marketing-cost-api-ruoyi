@@ -40,6 +40,7 @@ public class TechnicalDataProfileApplicationServiceImpl
 
   @Override
   @Transactional(isolation = Isolation.READ_COMMITTED)
+  @RefreshPendingInputs(modules={"PROFILE","PACKAGE","AUXILIARY","SOLDER","MANUFACTURING","PRICE","NET_LOSS"},productArgument=0)
   public TechnicalDataProfileResponse save(
       Long productId,
       TechnicalDataProfileUpdateRequest request,

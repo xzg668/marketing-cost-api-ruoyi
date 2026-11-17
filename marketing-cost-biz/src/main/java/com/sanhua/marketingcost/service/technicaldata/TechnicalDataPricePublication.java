@@ -17,7 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 审批只确认技术内容；固定价和可计算参考公式发布，自行公式继续等待财务处理。 */
+/** 审批确认技术内容；参考公式预计算保留，联动公式仍须完成既有财务导入。 */
 @Service
 public class TechnicalDataPricePublication {
   private static final Logger log = LoggerFactory.getLogger(TechnicalDataPricePublication.class);
@@ -28,6 +28,8 @@ public class TechnicalDataPricePublication {
   private final TechnicalDataPriceOwnership ownership;
   private final TechnicalPriceSourceResolverImpl calculator;
   private final QuoteTechnicalDataRepository repository;
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private TechnicalDataPendingState pendingState;
   public TechnicalDataPricePublication(PriceFixedItemMapper fixed, PriceLinkedItemMapper linked, TechnicalDataVersionContentCodec codec,
       TechnicalDataPriceOwnership ownership, TechnicalPriceSourceResolverImpl calculator, QuoteTechnicalDataRepository repository, PriceVariableBindingMapper bindings) {
     this.fixed=fixed; this.linked=linked; this.codec=codec; this.ownership=ownership; this.calculator=calculator;
@@ -42,6 +44,7 @@ public class TechnicalDataPricePublication {
     if(!Objects.equals(actual,version.getContentFingerprint())) throw new IllegalStateException("价格提交内容与冻结指纹不一致");
     var content=codec.prices(version);
     if (content==null || content.items()==null) return;
+    if(pendingState!=null) pendingState.changed(new TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),task.getBusinessUnitType(),content.items().stream().map(PriceItem::materialNo).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet()),java.util.Set.of()));
     for (var item:content.items()) {
       var owner=ownership.find(item.materialNo());
       if(owner==null || !Objects.equals(owner.productId(),product.getId())) throw new IllegalStateException(item.materialNo()+" 价格办理来源不一致");
@@ -133,12 +136,20 @@ public class TechnicalDataPricePublication {
     linked.selectList(Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getTechnicalVersionId,version.getId()))
         .forEach(row -> {
           var previous=published.get(row.getTechnicalItemKey());
-          if(previous==null || !"AVAILABLE".equals(previous.status()))published.put(row.getTechnicalItemKey(),new TechnicalDataPricePublicationStatus(row.getTechnicalItemKey(),row.getMaterialCode(),row.getTechnicalPublicationStatus(),row.getTechnicalPublicationMessage()));
+          String status=row.getTechnicalPublicationStatus();
+          String message=row.getTechnicalPublicationMessage();
+          if("AVAILABLE".equals(status) && row.getSourceUploadBatchId()==null) {
+            status="WAIT_FINANCE";
+            message="技术资料已提交，待报价员整理并导入联动表后核算";
+          }
+          if(previous==null || !"AVAILABLE".equals(previous.status()))published.put(row.getTechnicalItemKey(),new TechnicalDataPricePublicationStatus(row.getTechnicalItemKey(),row.getMaterialCode(),status,message));
         });
     return content.items().stream().map(item -> {
       if(!TechnicalDataSubmissionState.submitted(version.getVersionStatus())) return new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),version.getVersionStatus(),"尚未形成可用补录价格");
-      if("MANUAL".equals(item.entryMode()) && published.containsKey(item.itemKey()))return published.get(item.itemKey());
-      if("MANUAL".equals(item.entryMode())) return new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),"WAIT_FINANCE","技术资料已提交，等待报价员修正、导入并检查取价");
+      if(Set.of("MANUAL","REFERENCE").contains(item.entryMode())) {
+        if(published.containsKey(item.itemKey()))return published.get(item.itemKey());
+        return new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),"WAIT_FINANCE","技术资料已提交，待报价员整理并导入联动表后核算");
+      }
       return published.getOrDefault(item.itemKey(),new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),"UNPUBLISHED","已提交，尚未形成可用价格，请重新检查"));
     }).toList();
   }

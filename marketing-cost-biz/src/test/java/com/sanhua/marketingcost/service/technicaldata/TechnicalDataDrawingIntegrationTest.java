@@ -132,6 +132,21 @@ class TechnicalDataDrawingIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
+  void publicDrawingCanBeReadBesideManufacturingWithoutReadingAnotherPersonsDraft() {
+    var ownerDraft = service.recheck(productId, request(0), WANG);
+    assertThat(ownerDraft.drawing().nodes()).isNotEmpty();
+    assertThat(service.read(productId, null, LI).drawing()).isNull();
+    jdbc.update("UPDATE lp_quote_tech_module SET source_availability='AVAILABLE', "
+        + "requirement_reason_code='DRAWING_SOURCE_AVAILABLE', required_flag=0, module_status='NOT_REQUIRED' WHERE product_id=? AND module_type='DRAWING_BOM'", productId);
+    var publicView = service.read(productId, null, LI);
+    assertThat(publicView.drawing().sourceVersionId()).isEqualTo(ownerDraft.drawing().sourceVersionId());
+    assertThat(codec.sameSourceEvidence(publicView.drawing().nodes(), ownerDraft.drawing().nodes())).isTrue();
+    assertThat(publicView.acquired()).isTrue();
+    assertThat(publicView.editable()).isFalse();
+    assertThat(publicView.versionId()).isNull();
+  }
+
+  @Test
   void confirmedConsumedResultCanBeAdoptedByTechnicalCheckWithoutAnotherVerify() throws Exception {
     var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
     doAnswer(
@@ -164,7 +179,7 @@ class TechnicalDataDrawingIntegrationTest extends BomMapperTestBase {
 
   @Test
   void
-      jsonImportKeepsUnknownWeightUnitAndDuplicateRowsSeparateWithoutCompletingOtherPersonsModules() {
+      jsonImportKeepsConfirmedGramUnitAndDuplicateRowsSeparateWithoutCompletingOtherPersonsModules() {
     var response = service.recheck(productId, request(0), WANG);
     assertThat(response.acquired()).isTrue();
     assertThat(response.materialsMatched()).isFalse();
@@ -178,7 +193,7 @@ class TechnicalDataDrawingIntegrationTest extends BomMapperTestBase {
         .allSatisfy(
             node -> {
               assertThat(node.sourceWeight()).isEqualByComparingTo("12");
-              assertThat(node.sourceWeightUnit()).isNull();
+              assertThat(node.sourceWeightUnit()).isEqualTo("g");
               assertThat(node.quantityPerParent()).isEqualByComparingTo("2");
               assertThat(node.unit()).isNull();
             });

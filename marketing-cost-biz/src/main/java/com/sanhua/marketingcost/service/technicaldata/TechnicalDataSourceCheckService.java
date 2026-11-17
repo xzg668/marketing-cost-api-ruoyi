@@ -16,6 +16,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.NoTransactionException;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 
 /** 只把实际来源转换为补录前提，不创建待办、不把查询错误当作缺资料。 */
 @Service
@@ -36,13 +38,28 @@ public class TechnicalDataSourceCheckService {
   }
 
   public Check check(QuoteBomReadContext context, QuoteCostingWorkspace workspace) {
-    List<TechnicalDataSourceFact> facts = new ArrayList<>(publicSources.checkDataSources(context));
+    return checkSources(context, workspace, null, false);
+  }
+
+  /** 历史待办仅按已保存月份只读复核，正式检查仍由check执行当前月份门禁。 */
+  public Check preview(QuoteBomReadContext context, QuoteCostingWorkspace workspace,
+      java.util.Set<TechnicalDataModuleType> selected) {
+    return checkSources(context, workspace, selected, true);
+  }
+
+  private Check checkSources(QuoteBomReadContext context, QuoteCostingWorkspace workspace,
+      java.util.Set<TechnicalDataModuleType> selected, boolean technicalPreview) {
+    List<TechnicalDataSourceFact> facts = new ArrayList<>(selected == null
+        ? publicSources.checkDataSources(context) : publicSources.checkDataSources(context, selected));
     Map<String, Object> evidence = new LinkedHashMap<>();
-    facts.add(checkPrice(context, workspace, evidence));
+    if (selected == null || selected.contains(TechnicalDataModuleType.PRICE)) {
+      facts.add(checkPrice(context, workspace, evidence, technicalPreview));
+    }
     return new Check(List.copyOf(facts), Map.copyOf(evidence));
   }
 
-  private TechnicalDataSourceFact checkPrice(QuoteBomReadContext context, QuoteCostingWorkspace workspace, Map<String, Object> evidence) {
+  private TechnicalDataSourceFact checkPrice(QuoteBomReadContext context, QuoteCostingWorkspace workspace,
+      Map<String, Object> evidence, boolean technicalPreview) {
     if (workspace == null || workspace.getCurrentBomBuildBatchId() == null) {
       return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
           "PRICE_BOM_NOT_READY", "先确定本产品实际 BOM 及计价物料，再检查价格", null);
@@ -56,7 +73,7 @@ public class TechnicalDataSourceCheckService {
       request.setPeriodMonth(context.accountingMonth());
       request.setBusinessUnitType(context.businessUnitType());
       request.setScenarioType(QuotePriceScenarioType.OA_LOCKED);
-      var result = prices.calculate(request);
+      var result = technicalPreview ? prices.calculateForTechnical(request) : prices.calculate(request);
       if (result == null || result.getSummary() == null || "FAILED".equals(result.getSummary().getStatus())
           || result.getItems().stream().anyMatch(row -> "FAILED".equals(row.getStatus()))) {
         return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.ERROR,
@@ -113,8 +130,18 @@ public class TechnicalDataSourceCheckService {
       // 资料未提交等业务阻断来自共用事务，必须交给上层返回原原因；吞掉后提交会变成回滚异常。
       throw exception;
     } catch (RuntimeException exception) {
+      // 参与者已标记回滚时保留原始异常，让产品级只读边界回滚；否则提交会掩盖真正原因。
+      if (transactionMarkedForRollback()) throw exception;
       return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.ERROR,
           "PRICE_QUERY_FAILED", "价格来源查询失败，请核实后重新检查", null);
+    }
+  }
+
+  private boolean transactionMarkedForRollback() {
+    try {
+      return TransactionAspectSupport.currentTransactionStatus().isRollbackOnly();
+    } catch (NoTransactionException ignored) {
+      return false;
     }
   }
 

@@ -37,6 +37,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 公共联动原稿：完整只读预检、确认时版本复核、整批追加规则；不写公共因素价格。 */
 @Service
 public class OriginalLinkedImportService {
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
   private static final BigDecimal VAT = new BigDecimal("1.13");
   private final LinkedApprovalImportContext approvalContext;
   private final OriginalLinkedWorkbookParser parser;
@@ -523,6 +526,7 @@ public class OriginalLinkedImportService {
   }
 
   private PriceItemImportResponse complete(PriceItemImportResponse response, Scope scope) {
+    if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),scope.businessUnit(),java.util.Set.of(),java.util.Set.of()));
     var generation =
         new com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.Generation(
             0, 0, 0);

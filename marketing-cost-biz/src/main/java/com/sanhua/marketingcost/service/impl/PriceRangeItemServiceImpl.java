@@ -86,6 +86,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_range_item")
   public PriceRangeItem create(PriceRangeItemUpdateRequest request) {
     if (request == null) {
       return null;
@@ -108,6 +109,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_range_item")
   public PriceRangeItem update(Long id, PriceRangeItemUpdateRequest request) {
     if (id == null) {
       return null;
@@ -124,6 +126,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_range_item")
   public boolean delete(Long id) {
     if (id == null) return false;
     PriceRangeItem existing = itemMapper.selectById(id);
@@ -134,6 +137,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},previousTable="lp_price_range_item")
   public List<PriceRangeItem> importItems(PriceRangeItemImportRequest request) {
     if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
       return List.of();

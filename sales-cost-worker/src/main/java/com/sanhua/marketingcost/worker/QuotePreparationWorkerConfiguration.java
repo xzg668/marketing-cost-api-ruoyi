@@ -6,6 +6,18 @@ import org.springframework.context.annotation.Import;
 /** Registers the same submitted-material publication and per-product review used by the API. */
 @Configuration
 @Import({
+    com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingInputWrites.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomApplicationService.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomContextQuery.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomAbsenceQuery.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomReferenceQuery.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomValidation.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomWorkbook.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomSavedSourceQuery.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalBomCostingInputs.class,
+        com.sanhua.marketingcost.service.technicaldata.TechnicalBomModuleCoverage.class,
     com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService.class,
     com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl.class,
     com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl.class,

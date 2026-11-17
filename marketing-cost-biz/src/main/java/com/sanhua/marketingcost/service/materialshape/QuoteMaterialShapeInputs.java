@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.materialshape;
 import com.sanhua.marketingcost.enums.QuoteMaterialShape;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomShapeDecision;
 import com.sanhua.marketingcost.service.pricing.monthly.*;
+import com.sanhua.marketingcost.service.pricing.QuotationPreviewReads;
 import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -185,7 +186,7 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
     if(materialCodes!=null && codes.isEmpty()) return new Catalog(List.of(),List.of());
     String restriction=materialCodes==null ? "" : " AND s.material_code IN ("+String.join(",",Collections.nCopies(codes.size(),"?"))+")";
     var parameters=new ArrayList<Object>();parameters.add(unit);parameters.add(month);parameters.addAll(codes);
-    var sources=jdbc.query("""
+    var sources=QuotationPreviewReads.read(this,List.of("sources",unit,month,codes,materialCodes==null),()->List.copyOf(jdbc.query("""
         SELECT s.price_org_code,s.material_code,s.price_source_type,
           CASE WHEN s.auto_attribute IS NOT NULL THEN s.auto_attribute ELSE a.material_attribute END shape,
           COALESCE(a.row_version,0) row_version
@@ -194,7 +195,7 @@ public class QuoteMaterialShapeInputs implements com.sanhua.marketingcost.servic
           AND a.price_org_code=s.price_org_code AND a.material_code=s.material_code AND a.price_source_type=s.price_source_type
         WHERE s.business_unit_type=? AND s.price_month=?
         """+restriction+" ORDER BY s.price_org_code,s.material_code,s.price_source_type",
-        (r,n)->new Source(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getLong(5)),parameters.toArray());
+        (r,n)->new Source(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getLong(5)),parameters.toArray())));
     List<Choice> choices=itemId==null ? List.of() : jdbc.query("""
         SELECT price_org_code,material_code,selected_shape,row_version FROM lp_quote_material_shape_selection
         WHERE business_unit_type=? AND period_month=? AND oa_form_item_id=? ORDER BY price_org_code,material_code

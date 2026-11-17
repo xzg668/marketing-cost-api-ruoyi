@@ -17,6 +17,14 @@ public class PlanEligibility {
   private LocalDate effectiveDate;
   private String effectivePeriod;
 
+  public static PlanEligibility missingPlan(String parentCode, String period) {
+    PlanEligibility eligibility = new PlanEligibility();
+    eligibility.setParentCode(parentCode);
+    eligibility.setPeriod(period);
+    eligibility.setReason("料号" + parentCode + "在" + period + "未找到计划成本记录，不能采用本月来源");
+    return eligibility;
+  }
+
   public static PlanEligibility allowed(String parentCode, String reason) {
     PlanEligibility eligibility = new PlanEligibility();
     eligibility.setParentCode(parentCode);

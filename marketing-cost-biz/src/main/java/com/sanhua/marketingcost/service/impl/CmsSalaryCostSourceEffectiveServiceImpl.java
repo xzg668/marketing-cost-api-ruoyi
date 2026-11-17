@@ -66,6 +66,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
 
   @Override
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SALARY"},wholeUnit=true)
   public CmsEffectiveSourceGenerateResponse generateDefaultSources(
       int costYear, String operator, String businessUnitType) {
     CmsEffectiveSourceGenerateResponse response = new CmsEffectiveSourceGenerateResponse();
@@ -77,6 +78,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
 
   @Override
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SALARY"},wholeUnit=true)
   public CmsEffectiveSourceGenerateResponse synchronizeDefaultSources(
       int costYear, String operator, String businessUnitType) {
     CmsEffectiveSourceGenerateResponse response = new CmsEffectiveSourceGenerateResponse();
@@ -105,6 +107,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
 
   @Override
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SALARY"},wholeUnit=true)
   public CmsCostSourceEffective refreshSource(
       CmsEffectiveSourceRefreshRequest request, String operator, String businessUnitType) {
     validateRefreshRequest(request);
@@ -138,6 +141,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
 
   @Override
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"SALARY"},wholeUnit=true)
   public CmsEffectiveSourceGenerateResponse refreshParentPeriod(
       CmsEffectiveSourceRefreshRequest request, String operator, String businessUnitType) {
     validateParentPeriodRefreshRequest(request);
@@ -218,7 +222,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
         PlanEligibility eligibility =
             eligibilityByKey.getOrDefault(
                 key(candidate.parentCode, candidate.period),
-                PlanEligibility.allowed(candidate.parentCode, candidate.period, "允许生效"));
+                PlanEligibility.missingPlan(candidate.parentCode, candidate.period));
         boolean allowed = SALARY_DIRECT.equals(sourceType) ? eligibility.isDirectLaborAllowed() : eligibility.isIndirectLaborAllowed();
         if (allowed) {
           selected = candidate;
@@ -385,7 +389,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
   private PlanEligibility eligibility(String parentCode, String period, String businessUnitType) {
     return planEligibilityService
         .checkEligibility(List.of(parentCode), List.of(period), normalizeBusinessUnit(businessUnitType))
-        .getOrDefault(key(parentCode, period), PlanEligibility.allowed(parentCode, period, "允许生效"));
+        .getOrDefault(key(parentCode, period), PlanEligibility.missingPlan(parentCode, period));
   }
 
   private void insertLog(

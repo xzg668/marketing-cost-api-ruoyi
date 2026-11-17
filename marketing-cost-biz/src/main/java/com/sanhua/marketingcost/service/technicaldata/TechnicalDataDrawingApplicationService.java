@@ -93,14 +93,26 @@ public class TechnicalDataDrawingApplicationService {
     var drawing = codec.drawingBom(version);
     var context = context(scope);
     var source = drawing == null ? null : sources.selectById(drawing.sourceVersionId());
+    // A manufacturing-only assignment still needs the public drawing rows above its node form.
+    // Never substitute a live source for a requested/submitted snapshot or another owner's draft.
+    boolean publicSource = drawing == null && versionId == null && selected == null
+        && "DRAWING_SOURCE_AVAILABLE".equals(scope.module().getRequirementReasonCode())
+        && "AVAILABLE".equals(scope.module().getSourceAvailability());
+    if (publicSource && context.sourceVersionId() != null) {
+      source = sources.selectById(context.sourceVersionId());
+    }
     if (source != null
         && (!Objects.equals(source.getOaFormItemId(), scope.product().getOaFormItemId())
-            || !Objects.equals(source.getPeriodMonth(), scope.product().getAccountingMonth())))
+            || !Objects.equals(source.getPeriodMonth(), scope.product().getAccountingMonth())
+            || !Objects.equals(source.getMaterialOrgCode(), context.materialOrgCode())))
       throw invalid("图库来源归属不一致");
     var nodes =
         source == null
             ? List.<ElectronicDrawingSourceNode>of()
             : sourceNodes.findByVersionId(source.getId());
+    if (publicSource && source != null && !nodes.isEmpty()) {
+      drawing = TechnicalDataDrawingSnapshot.from(context, source, nodes);
+    }
     var plan =
         nodes.isEmpty()
             ? null
@@ -115,7 +127,7 @@ public class TechnicalDataDrawingApplicationService {
         versionId != null || version != null && !"DRAFT".equals(version.getVersionStatus());
     boolean acquired =
         TechnicalDataDrawingRules.validate(drawing, scope.product()).isEmpty()
-            && (historical
+            && (publicSource || historical
                 || "DRAWING_SOURCE_VERIFIED".equals(scope.module().getLastValidationCode()));
     boolean composed = source != null && source.getCompositionFingerprint() != null;
     return new TechnicalDataDrawingResponse(

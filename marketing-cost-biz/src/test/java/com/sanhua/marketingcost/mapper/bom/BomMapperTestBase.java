@@ -285,6 +285,7 @@ public abstract class BomMapperTestBase {
       // 仅模拟升级前的历史表，正式初始化不再创建独立基价表。
       runScriptViaMysqlCli("/settlement/legacy-base-schema.sql", "legacy-settlement-base-fixture");
       runScriptViaMysqlCli("/db/V335__plate_material_mapping.sql", "V335");
+      runScriptViaMysqlCli("/db/V385__technical_complete_bom.sql", "V385");
       runScriptViaMysqlCli("/db/V336__plate_material_master_lookup_index.sql", "V336");
       runScriptViaMysqlCli("/db/V338__drawing_verification_evidence.sql", "V338");
       runScriptViaMysqlCli("/db/V347__drawing_finance_bom_correction.sql", "V347");

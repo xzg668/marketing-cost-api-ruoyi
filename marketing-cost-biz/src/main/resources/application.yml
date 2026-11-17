@@ -10,6 +10,9 @@ quote:
     connect-timeout: ${DRAWING_PDF_CONNECT_TIMEOUT:5s}
     request-timeout: ${DRAWING_PDF_REQUEST_TIMEOUT:5m}
   technical-data:
+    pending-refresh:
+      enabled: ${TECHNICAL_PENDING_REFRESH_ENABLED:true}
+      delay-ms: ${TECHNICAL_PENDING_REFRESH_DELAY_MS:1000}
     # 辅料原表随审批版本保留；部署时挂载持久目录并纳入备份。
     attachments-root: ${TECHNICAL_DATA_ATTACHMENTS_ROOT:./data/technical-data}
 

@@ -16,7 +16,7 @@ class TechnicalDataParticipantVersionsTest {
   private final TechnicalDataPlateMaterialPublication plateMaterialPublication = mock(TechnicalDataPlateMaterialPublication.class);
   private final TechnicalDataParticipantVersions service = new TechnicalDataParticipantVersions(
       repository, codec, dependencies, null, null, null, null, null, null, null, null, null, plateMaterialPublication,
-      mock(TechnicalDataUnchangedModuleReuse.class));
+      mock(TechnicalDataUnchangedModuleReuse.class), mock(TechnicalBomApplicationService.class), mock(TechnicalBomModuleCoverage.class));
 
   @Test void oneCompleteSubmissionIsItsOwnEffectiveVersionWithoutAnotherCopy() {
     var product = product();

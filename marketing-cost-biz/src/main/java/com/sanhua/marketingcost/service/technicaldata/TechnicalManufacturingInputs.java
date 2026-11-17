@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 /** 将技术版本的单件制造输入绑定到真实图库节点路径，供既有结算和制造件计算共同读取。 */
 @Service
 public class TechnicalManufacturingInputs {
+  private final TechnicalBomCostingInputs completeBom;
   private final TechnicalDataCostingSources sources;
   private final TechnicalDataVersionContentCodec codec;
   private final QuoteBomSupplementDetailMapper details;
@@ -21,7 +22,8 @@ public class TechnicalManufacturingInputs {
   public TechnicalManufacturingInputs(TechnicalDataCostingSources sources,
       TechnicalDataVersionContentCodec codec, QuoteBomSupplementDetailMapper details,
       ElectronicDrawingManufacturingInputs drawingInputs,
-      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse) {
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse, TechnicalBomCostingInputs completeBom) {
+    this.completeBom = completeBom;
     this.drawingReuse = drawingReuse;
     this.sources = sources;
     this.codec = codec;
@@ -31,6 +33,8 @@ public class TechnicalManufacturingInputs {
 
   public Map<String, Input> byParentPath(Long itemId, String month) {
     var selected = sources.preparationSources(itemId, month);
+    var full = selected.get("DRAWING_BOM");
+    if (full != null && codec.technicalBom(full.version()) != null) return completeBom.read(full);
     var result = new LinkedHashMap<>(drawingInputs.read(selected.get("DRAWING_BOM")));
     result.putAll(drawingReuse.costingInputs(itemId, month));
     var source = selected.get("MANUFACTURING");
@@ -106,6 +110,12 @@ public class TechnicalManufacturingInputs {
       throw new IllegalArgumentException("制造件计价对象与技术节点不一致");
     }
     return input;
+  }
+
+  public java.util.List<com.sanhua.marketingcost.entity.BomU9Source> completeBomChildren(BomCostingRow parent) {
+    if (parent == null || parent.getOaFormItemId() == null) return null;
+    var source = sources.preparationSources(parent.getOaFormItemId(), parent.getPeriodMonth(), java.util.Set.of("DRAWING_BOM")).get("DRAWING_BOM");
+    return completeBom.children(source, parent.getPath());
   }
 
   public com.sanhua.marketingcost.service.settlement.BomByproductSettlementReadResult byproducts(

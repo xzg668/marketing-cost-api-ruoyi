@@ -64,7 +64,7 @@ public class TechnicalPriceCorrectionWorkbook {
       TechnicalPriceCorrectionService.Scope scope, TechnicalPriceCorrection pending) {
     Set<String> keys = new HashSet<>();
     pending.items().forEach(row -> keys.add(row.itemKey()));
-    if (keys.isEmpty()) throw new IllegalArgumentException("本产品当前没有待修正的自行公式");
+    if (keys.isEmpty()) throw new IllegalArgumentException("本产品当前没有待处理的补录联动公式");
     try (var workbook = new XSSFWorkbook();
         var output = new ByteArrayOutputStream()) {
       var sheet = workbook.createSheet("联动价-部品6");
@@ -223,7 +223,7 @@ public class TechnicalPriceCorrectionWorkbook {
         model.setOrderType(value(row, columns, "订单类型"));
         model.setFormulaExpr(type2 ? "" : value(row, columns, "联动公式"));
         model.setTaxIncluded(value(row, columns, "是否含税"));
-        if (!Set.of("", "联动").contains(model.getOrderType())) issues.add("自行公式必须按联动价导入");
+        if (!Set.of("", "联动").contains(model.getOrderType())) issues.add("补录公式必须按联动价导入");
         if (!type2) {
           if (!Set.of("0", "1", "true", "false", "是", "否").contains(model.getTaxIncluded()))
             issues.add("请明确是否含税（0 或 1）");
@@ -247,7 +247,7 @@ public class TechnicalPriceCorrectionWorkbook {
         }
         result.add(new ImportRow(key, dataSheet, n + 1, model, List.copyOf(issues)));
       }
-      if (result.isEmpty()) throw new IllegalArgumentException("文件没有可关联的自行公式行");
+      if (result.isEmpty()) throw new IllegalArgumentException("文件没有可关联的补录联动公式行");
       if (needsFactorSheet && factorRowCount(bytes) == 0)
         throw new IllegalArgumentException("联动公式使用影响因素，请同时导入含有效数据的影响因素 Sheet");
       return new Plan(scope, List.copyOf(result));

@@ -54,6 +54,7 @@ public class ElectronicDrawingReusedManufacturing {
     if (current == null || current.getDrawingResultId() == null) return List.of();
     var chain = new ArrayList<QuoteBomSupplementVersion>();
     var seen = new java.util.HashSet<Long>();
+    boolean verified = false;
     var next = current;
     while (next != null) {
       if (!seen.add(next.getId())) throw new IllegalArgumentException("图库复用来源存在循环");
@@ -62,17 +63,18 @@ public class ElectronicDrawingReusedManufacturing {
         throw new IllegalArgumentException("复用制造件的产品或物料组织不一致");
       chain.add(next);
       if (chain.size() > 1 && "APPROVED".equals(next.getVersionStatus())
-          && !Objects.equals(current.getDrawingResultId(), next.getDrawingResultId())) return List.copyOf(chain);
+          && !Objects.equals(current.getDrawingResultId(), next.getDrawingResultId())) verified = true;
       next = next.getReusedFromVersionId() == null ? null : versions.selectById(next.getReusedFromVersionId());
     }
-    return List.of();
+    return verified ? List.copyOf(chain) : List.of();
   }
 
   public List<Reused> read(ElectronicDrawingWorkContext context) {
     var chain = lineage(context);
     if (chain.isEmpty()) return List.of();
     var current = chain.getFirst();
-    var previous = chain.getLast();
+    var previous = chain.stream().skip(1).filter(version -> "APPROVED".equals(version.getVersionStatus())
+        && !Objects.equals(current.getDrawingResultId(), version.getDrawingResultId())).findFirst().orElseThrow();
     var ancestry = new LinkedHashMap<Long, ElectronicDrawingSourceNode>();
     var originalIds = new java.util.HashSet<Long>();
     for (var version : chain) for (var node : nodes.findByVersionId(version.getId())) {
@@ -109,9 +111,25 @@ public class ElectronicDrawingReusedManufacturing {
       if (!matcher.matches()) throw new IllegalArgumentException("已确认制造件缺少补录版本依据");
       Long technicalId = Long.valueOf(matcher.group(1));
       var version = technicalVersions.selectById(technicalId);
+      boolean submittedCopy = version != null && "DRAFT".equals(version.getVersionStatus());
+      if (submittedCopy) {
+        var approved = technicalVersions.selectSubmittedManufacturingForDraft(
+            technicalId, previous.getOaFormItemId(), previous.getPeriodMonth());
+        if (approved != null && !Objects.equals(approved.getProductId(), version.getProductId()))
+          throw new IllegalArgumentException("制造件提交版本与原准备资料归属不一致");
+        version = approved;
+      }
       if (version == null || !TechnicalDataSubmissionState.submitted(version.getVersionStatus()))
         throw new IllegalArgumentException("原制造件补录没有有效提交版本");
       var manufacturing = content.manufacturing(version);
+      if (submittedCopy && (manufacturing == null || manufacturing.evidence() == null
+          || chain.stream().skip(1).noneMatch(source ->
+              Objects.equals(manufacturing.evidence().drawingSourceVersionId(), source.getId())
+              && Objects.equals(manufacturing.evidence().oaFormItemId(), source.getOaFormItemId())
+              && Objects.equals(manufacturing.evidence().accountingMonth(), source.getPeriodMonth())
+              && Objects.equals(source.getOaFormItemId(), previous.getOaFormItemId())
+              && Objects.equals(source.getPeriodMonth(), previous.getPeriodMonth()))))
+        throw new IllegalArgumentException("制造件提交版本与已审核BOM的图库来源不一致");
       var matching = manufacturing == null ? List.<RawMaterial>of() : manufacturing.items().stream()
           .filter(row -> matcher.group(2).equals(row.itemKey())
               && parent.getMaterialCode().equals(row.parentMaterialNo())
@@ -119,7 +137,7 @@ public class ElectronicDrawingReusedManufacturing {
               && Objects.equals(child.getUnit(), row.unit())
               && child.getQtyPerParent().compareTo(row.quantityPerParent()) == 0).toList();
       if (matching.size() != 1) throw new IllegalArgumentException("已确认 BOM 与原制造件补录内容不一致");
-      result.add(new Reused(node.getId(), technicalId, matcher.group(2), matching.getFirst()));
+      result.add(new Reused(node.getId(), version.getId(), matcher.group(2), matching.getFirst()));
     }
     return List.copyOf(result);
   }
@@ -134,7 +152,10 @@ public class ElectronicDrawingReusedManufacturing {
     var current = rows(context.sourceVersionId());
     for (var input : reused) {
       var parents = current.stream().filter(row -> "E_DRAWING".equals(row.getNodeSourceType())
-          && Objects.equals(row.getSourceElectronicNodeId(), input.nodeId())).toList();
+          && (Objects.equals(row.getSourceElectronicNodeId(), input.nodeId())
+              || row.getSourceElectronicNodeId() != null
+                  && row.getSourceElectronicNodeId().toString().equals(input.input().parentSourceNodeId()))).toList();
+      if (parents.size() > 1) throw new IllegalArgumentException("制造件原料对应的已审核BOM节点不唯一");
       if (parents.size() != 1) continue;
       var parent = parents.getFirst();
       var children = current.stream().filter(row -> Objects.equals(row.getLevel(), parent.getLevel() + 1)

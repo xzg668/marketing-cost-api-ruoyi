@@ -36,7 +36,8 @@ public final class MonthlyOriginalLinkedPriceSource {
     this.rows=rows;this.months=months;this.finance=finance;this.effective=effective;this.supplierInputs=supplierInputs;this.suppliers=suppliers;this.runtime=runtime;this.codec=codec;
   }
   private record PublicationInput(FactorPriceSnapshot financial,Map<Long,FinanceEffectivePrice> prices,RuntimeException error) {}
-  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){return read(context,requests,null);}
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests,String specialMonth){
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
@@ -45,12 +46,12 @@ public final class MonthlyOriginalLinkedPriceSource {
     }
     var financeCache=new HashMap<String,FactorPriceSnapshot>();var financeErrors=new HashMap<String,RuntimeException>();
     for(var organization:groups.entrySet()){
-      var selectedMonth=months.select(context.businessUnitType(),organization.getKey(),context.month().toString());
+      var selectedMonth=specialMonth==null?months.select(context.businessUnitType(),organization.getKey(),context.month().toString()):new PriceMonthSelection(context.month().toString(),specialMonth);
       if(selectedMonth==null)selectedMonth=new PriceMonthSelection(context.month().toString(),context.month().toString());
       var codes=new ArrayList<>(organization.getValue().keySet());
       for(int start=0;start<codes.size();start+=256){
         var batch=codes.subList(start,Math.min(start+256,codes.size()));
-        var byCode=new HashMap<String,List<PriceLinkedItem>>();rows.rules(context.businessUnitType(),organization.getKey(),selectedMonth.sourceMonth(),context.month().toString(),context.priceAsOfTime().toLocalDate(),batch).forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
+        var byCode=new HashMap<String,List<PriceLinkedItem>>();rows.rules(context.businessUnitType(),organization.getKey(),selectedMonth.sourceMonth(),context.month().toString(),context.priceAsOfTime().toLocalDate(),batch).stream().filter(row->specialMonth==null||specialMonth.equals(row.getPricingMonth())).forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
         var relationCodes=new TreeSet<>(byCode.keySet());
         var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!relationCodes.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),relationCodes).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
         var scopes=new HashMap<String,SupplierPriceScope>();for(String code:relationCodes)if(byCode.get(code).size()>1){var scope=scope(context,organization.getKey(),code);scopes.put(SupplierPriceSelectionService.scopeKey(scope),scope);}

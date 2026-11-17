@@ -100,6 +100,28 @@ class MonthlySupplementalFixedPriceSourceIntegrationTest {
     }
     return new Fixture(task,product,priceModule,personal,effective,flow,List.copyOf(codes));
   }
+  @Test void anotherOrganizationProbeDoesNotTurnAnEditablePriceGapIntoAnInvalidSource() {
+    var fixture=fixed(1,false);
+    jdbc.update("UPDATE lp_quote_tech_task SET task_status='IN_PROGRESS' WHERE id=?",fixture.task());
+    jdbc.update("UPDATE lp_quote_tech_product SET product_status='EDITING',effective_version_id=NULL WHERE id=?",fixture.product());
+    jdbc.update("UPDATE lp_quote_tech_module SET required_flag=1,module_status='PENDING',current_version_id=NULL,oa_edit_allowed=1 WHERE id=?",fixture.priceModule());
+    var own=request(fixture.materials().getFirst());
+    var other=new MonthlyPriceRequest(own.family(),"220",own.conditions(),own.priceBasisQuantity());
+    var result=source.read(context(),Set.of(own,other));
+    assertThat(result.values()).isEmpty();
+    assertThat(result.problems().get(own).reason()).isEqualTo(Failure.MISSING);
+    assertThat(result.problems().get(other).reason()).isEqualTo(Failure.MISSING);
+  }
+
+  @Test void anotherOrganizationProbeCannotAdoptTheSubmittedPriceOrInvalidateItsOriginalScope() {
+    var fixture=fixed(1,false);var own=request(fixture.materials().getFirst());
+    var other=new MonthlyPriceRequest(own.family(),"220",own.conditions(),own.priceBasisQuantity());
+    var result=source.read(context(),Set.of(own,other));
+    assertThat(result.problems().get(other).reason()).isEqualTo(Failure.MISSING);
+    assertThat(result.values()).containsOnlyKeys(own);
+    assertThat(result.values().get(own).selection().fact().price()).isEqualByComparingTo("7");
+  }
+
   @Test void anUntaxedDeclarationDoesNotMakeTheIncludedTaxProbeAnInvalidSource() {
     var fixture=fixed(1,false);var excluded=request(fixture.materials().getFirst());var family=excluded.family();
     var included=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(family.month(),family.businessUnitType(),

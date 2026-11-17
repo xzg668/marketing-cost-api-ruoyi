@@ -69,7 +69,7 @@ class MonthlyRepriceBomIntegrationTest {
     spring.registerBean(MonthlySnapshotU9BomGateway.class);
     spring.registerBean(QuoteBomStatusServiceImpl.class,()->new QuoteBomStatusServiceImpl(
         FORMS,ITEMS,STATUS,snapshots,spring.getBean(CurrentU9BomGateway.class),packaging,
-        contexts,new SupplementBomAvailabilityResolver(supplements)));
+        contexts,new SupplementBomAvailabilityResolver(supplements),mock(com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource.class)));
     spring.refresh();
     repricing=new MonthlyRepriceBomService(mapper,FORMS,ITEMS,contexts,
         spring.getBean(QuoteBomStatusService.class),json,manager);

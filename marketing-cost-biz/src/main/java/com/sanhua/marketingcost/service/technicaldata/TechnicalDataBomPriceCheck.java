@@ -89,7 +89,9 @@ public class TechnicalDataBomPriceCheck {
     var all = repository.lockModules(id);
     var price = all.stream().filter(row -> "PRICE".equals(row.getModuleType())).findFirst().orElseThrow();
     if (actor == null || !Integer.valueOf(1).equals(product.getActiveFlag())
-        || all.stream().noneMatch(row -> INPUTS.contains(row.getModuleType()) && actor.canEditModule(task, row)))
+        || all.stream().noneMatch(row -> (INPUTS.contains(row.getModuleType())
+            || "DRAWING_BOM".equals(row.getModuleType()) && Set.of("TECH_REFERENCE", "TECH_UPLOAD").contains(Objects.toString(row.getReferenceSourceType(), "")))
+            && actor.canEditModule(task, row)))
       throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.FORBIDDEN, "只能检查本人正在补录的产品");
     if (!Set.of("PENDING", "NOT_REQUIRED", "EDITING", "READY", "RETURNED").contains(price.getModuleStatus()))
       throw invalid("价格资料已提交，不能改变本次审批范围");

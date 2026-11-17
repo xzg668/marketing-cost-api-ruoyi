@@ -279,6 +279,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public PriceLinkedItemDto create(PriceLinkedItemUpdateRequest request) {
     if (request == null) {
       return null;
@@ -299,6 +300,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public PriceLinkedItemDto update(Long id, PriceLinkedItemUpdateRequest request) {
     if (id == null) {
       return null;
@@ -328,6 +330,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public List<PriceLinkedItemDto> importItems(PriceLinkedItemImportRequest request) {
     if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
       return List.of();
@@ -366,6 +369,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public boolean delete(Long id) {
     if (id == null) {
       return false;
@@ -414,6 +418,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public PriceItemImportResponse importExcel(
       InputStream input, String pricingMonth, boolean overwriteManual) {
     return importExcel(input, pricingMonth, overwriteManual, null, null);
@@ -421,6 +426,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public PriceItemImportResponse importExcel(
       InputStream input,
       String pricingMonth,
@@ -433,6 +439,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public PriceItemImportResponse importExcel(
       InputStream input,
       String pricingMonth,
@@ -453,6 +460,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public PriceItemImportResponse importExcel(
       InputStream input,
       String pricingMonth,
@@ -476,6 +484,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PRICE"},wholeUnit=true)
   public PriceItemImportResponse importExcel(PriceLinkedImportCommand command) {
     return importWorkbook(
         new ByteArrayInputStream(command.getFileBytes()),

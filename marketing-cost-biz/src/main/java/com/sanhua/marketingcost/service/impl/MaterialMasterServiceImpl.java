@@ -64,6 +64,7 @@ public class MaterialMasterServiceImpl implements MaterialMasterService {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","MANUFACTURING","PRICE","NET_LOSS"})
   public MaterialMaster create(MaterialMasterRequest request) {
     if (request == null) {
       return null;
@@ -80,6 +81,7 @@ public class MaterialMasterServiceImpl implements MaterialMasterService {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","MANUFACTURING","PRICE","NET_LOSS"})
   public MaterialMaster update(Long id, MaterialMasterRequest request) {
     if (id == null) {
       return null;
@@ -95,12 +97,14 @@ public class MaterialMasterServiceImpl implements MaterialMasterService {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","MANUFACTURING","PRICE","NET_LOSS"})
   public boolean delete(Long id) {
     return id != null && materialMasterMapper.deleteById(id) > 0;
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"PROFILE","MANUFACTURING","PRICE","NET_LOSS"})
   public List<MaterialMaster> importItems(MaterialMasterImportRequest request) {
     if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
       return List.of();

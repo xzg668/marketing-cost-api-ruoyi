@@ -45,6 +45,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private final QuoteBomContextResolver contextResolver;
   private final SupplementBomAvailabilityResolver supplementBomAvailabilityResolver;
   private final Clock clock;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom;
 
   @Autowired
   public QuoteBomStatusServiceImpl(
@@ -55,7 +56,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       CurrentU9BomGateway u9BomGateway,
       U9ProductPackagingTypeResolver productPackagingTypeResolver,
       QuoteBomContextResolver contextResolver,
-      SupplementBomAvailabilityResolver supplementBomAvailabilityResolver) {
+      SupplementBomAvailabilityResolver supplementBomAvailabilityResolver,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom) {
     this(
         oaFormMapper,
         oaFormItemMapper,
@@ -65,7 +67,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
         productPackagingTypeResolver,
         contextResolver,
         supplementBomAvailabilityResolver,
-        Clock.systemDefaultZone());
+        Clock.systemDefaultZone(), completeBom);
   }
 
   QuoteBomStatusServiceImpl(
@@ -77,7 +79,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       U9ProductPackagingTypeResolver productPackagingTypeResolver,
       QuoteBomContextResolver contextResolver,
       SupplementBomAvailabilityResolver supplementBomAvailabilityResolver,
-      Clock clock) {
+      Clock clock, com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom) {
+    this.completeBom = completeBom;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -247,6 +250,17 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       return;
     }
 
+    if (!monthlyReprice) {
+      var technical = completeBom.snapshot(item.getId(), context.costPeriodMonth(), requiredBusinessUnit(form, item),
+          context.organization().priceOrgCode(), key.getCustomerCode(), key.getPackageMethod());
+      if (technical != null) {
+        if ("SUCCESS".equals(technical.getSyncStatus())) applyReusedSnapshot(status, technical, now);
+        else applyNoBomStatus(status, BomAvailability.unavailable("完整技术BOM已保存，请按原流程提交并确认资料后核算"),
+            u9.monthlySnapshotId(), u9.monthlySnapshotCreated(), now);
+        return;
+      }
+    }
+
     // U9 的 NOT_FOUND 已按月冻结；之后只在电子图库审核结果和人工补录链路内继续。
     BomAvailability noU9 = BomAvailability.unavailable(u9.message());
     BomAvailability supplement = monthlyReprice
@@ -292,6 +306,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
                 .eq("package_method", key.getPackageMethod())
                 .eq("cost_period_month", key.getCostPeriodMonth())
                 .isNull("snapshot_identity_key")
+                .notIn("bom_source", "TECH_REFERENCE", "TECH_UPLOAD")
                 .eq("sync_status", SNAPSHOT_STATUS_SUCCESS)
                 .eq("active_flag", 1)
                 .orderByDesc("sync_at")

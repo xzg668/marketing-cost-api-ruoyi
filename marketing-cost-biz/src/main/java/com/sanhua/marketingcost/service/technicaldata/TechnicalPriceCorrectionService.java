@@ -15,7 +15,7 @@ import java.util.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 自行公式交接范围及当前缺口。公共／共享取价仍由现有统一取价服务决定。 */
+/** 补录联动公式交接范围及当前缺口。公共／共享取价仍由现有统一取价服务决定。 */
 @Service
 public class TechnicalPriceCorrectionService {
   public record Scope(
@@ -83,7 +83,7 @@ public class TechnicalPriceCorrectionService {
               row.itemKey(),
               row.materialNo(),
               "TECH_PRICE_CORRECTION_REQUIRED",
-              Objects.toString(price.getRemark(), "自行公式尚未形成可用价格")));
+              Objects.toString(price.getRemark(), "补录联动公式尚未形成可用价格")));
     }
     var flow =
         scope.task().getOaFlowId() == null ? null : workflow.findFlow(scope.task().getOaFlowId());
@@ -183,17 +183,18 @@ public class TechnicalPriceCorrectionService {
     if (!Objects.equals(fingerprint, version.getContentFingerprint()))
       throw new IllegalArgumentException("价格提交内容与冻结指纹不一致");
     var content = codec.prices(version);
-    List<PriceItem> manual =
+    List<PriceItem> formulas =
         content == null
             ? List.of()
-            : content.items().stream().filter(row -> "MANUAL".equals(row.entryMode())).toList();
-    for (var row : manual) {
+            : content.items().stream()
+                .filter(row -> Set.of("MANUAL", "REFERENCE").contains(row.entryMode())).toList();
+    for (var row : formulas) {
       var owner = ownership.find(row.materialNo());
       if (owner == null
           || !Objects.equals(owner.productId(), product.getId())
           || !Objects.equals(owner.versionId(), version.getId()))
         throw new IllegalArgumentException("料号原补录来源已变化：" + row.materialNo());
     }
-    return new Scope(oaNo, itemId, month, businessUnit, task, product, version, manual);
+    return new Scope(oaNo, itemId, month, businessUnit, task, product, version, formulas);
   }
 }

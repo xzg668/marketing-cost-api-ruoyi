@@ -71,6 +71,7 @@ public class TechnicalDataNetLossApplicationService {
   }
 
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},productArgument=0)
   public TechnicalDataNetLossResponse save(Long productId, TechnicalDataNetLossSaveRequest request, TechnicalDataActor actor) {
     if (request == null || request.getExpectedVersion() == null || request.getExpectedVersion() < 0
         || !request.getUnknownFields().isEmpty()

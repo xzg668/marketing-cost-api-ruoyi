@@ -39,7 +39,7 @@ class TechnicalDataSourceCheckServiceTest {
   private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope scope =
       new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope(versions, savedDetails, mock(com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.class));
   private final TechnicalDataPublicSourceCheck publicSources = new TechnicalDataPublicSourceCheck(u9, salary, codec,
-      drawings, manufacturing, packaging, netLoss, shared, drawingSources, scope, mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing.class));
+      drawings, manufacturing, packaging, netLoss, shared, drawingSources, scope, mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing.class), mock(TechnicalBomSavedSourceQuery.class), mock(TechnicalBomAbsenceQuery.class));
   private final TechnicalDataSourceCheckService service = new TechnicalDataSourceCheckService(publicSources, prices,
       codec, mock(QuoteTechnicalDataRepository.class), mock(TechnicalDataPriceRequirements.class), mock(TechnicalDataPriceOwnership.class));
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L, 2L, "OA-1", "2026-09", "COMMERCIAL",
@@ -98,6 +98,31 @@ class TechnicalDataSourceCheckServiceTest {
           .allSatisfy(row -> assertThat(row.availability()).isEqualTo(TechnicalDataAvailability.MISSING));
       return null;
     });
+  }
+
+  @Test void pendingSalaryDoesNotReadBomManufacturingPackagingOrRunAnyPriceCalculation() {
+    var result = service.preview(context, workspace, java.util.Set.of(TechnicalDataModuleType.SALARY));
+    assertThat(result.facts()).extracting(TechnicalDataSourceFact::moduleType).containsExactly(TechnicalDataModuleType.SALARY);
+    verifyNoInteractions(u9, drawings, manufacturing, packaging, netLoss, prices);
+    verify(salary).read(anyString(), anyInt(), anyString());
+  }
+
+  @Test void pendingPriceStillUsesTheActualCalculatorAndDoesNotPretendMissingPriceWasResolved() {
+    when(prices.calculateForTechnical(any())).thenReturn(priceResult(List.of(), "READY"));
+    var result = service.preview(context, workspace, java.util.Set.of(TechnicalDataModuleType.PRICE));
+    assertThat(result.facts()).extracting(TechnicalDataSourceFact::moduleType).containsExactly(TechnicalDataModuleType.PRICE);
+    verify(prices).calculateForTechnical(any());
+    verify(prices, never()).calculate(any());
+    verifyNoInteractions(u9, drawings, manufacturing, packaging, salary, netLoss);
+  }
+
+  @Test void partialSourceReadDoesNotPoisonTheSubsequentFullSourceFacts() {
+    publicSources.checkDataSources(context, java.util.Set.of(TechnicalDataModuleType.SALARY));
+    var full = publicSources.checkDataSources(context);
+    assertThat(full).extracting(TechnicalDataSourceFact::moduleType).contains(TechnicalDataModuleType.PROFILE,
+        TechnicalDataModuleType.DRAWING_BOM, TechnicalDataModuleType.PACKAGE, TechnicalDataModuleType.MANUFACTURING,
+        TechnicalDataModuleType.NET_LOSS, TechnicalDataModuleType.SALARY);
+    verify(u9).read(context);
   }
 
   @Test void noOriginalBomRequiresProductDrawingAuxiliaryAndSolderEvenWhenReferenceDataExists() {

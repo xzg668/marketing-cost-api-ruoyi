@@ -52,7 +52,8 @@ class QuoteBomStatusServiceImplTest {
         .thenReturn(U9ProductPackagingTypeResolver.Result.unknown(null));
     service = new QuoteBomStatusServiceImpl(
         formMapper, itemMapper, statusMapper, snapshotMapper, u9Gateway,
-        packagingResolver, new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-06"), supplementResolver, clock);
+        packagingResolver, new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-06"), supplementResolver, clock,
+        mock(com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource.class));
   }
 
   @Test

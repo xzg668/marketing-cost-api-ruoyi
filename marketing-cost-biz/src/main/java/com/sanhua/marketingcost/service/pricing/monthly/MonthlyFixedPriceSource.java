@@ -23,7 +23,8 @@ public final class MonthlyFixedPriceSource {
   private final MonthlyPriceDocumentCodec codec;
   public MonthlyFixedPriceSource(MonthlyFixedSourceMapper rows,MonthlySupplierInputMapper supplierInputs,SupplierPriceSelectionService suppliers,MonthlyPriceDocumentCodec codec){this.rows=rows;this.supplierInputs=supplierInputs;this.suppliers=suppliers;this.codec=codec;}
 
-  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){
+  public Candidates read(Context context,Set<MonthlyPriceRequest> requests){return readSpecial(context,requests,null);}
+  public Candidates readSpecial(Context context,Set<MonthlyPriceRequest> requests,Boolean currentOnly){
     var values=new LinkedHashMap<MonthlyPriceRequest,Candidate>();var problems=new LinkedHashMap<MonthlyPriceRequest,Problem>();
     var groups=new TreeMap<String,Map<String,List<MonthlyPriceRequest>>>();
     for(var request:requests){
@@ -41,7 +42,13 @@ public final class MonthlyFixedPriceSource {
         var scopes=new HashMap<String,SupplierPriceScope>();for(String code:ratioCodes)if(byCode.get(code).size()>1)scopes.put(code,scope(context,organization.getKey(),code));
         var decisions=new HashMap<String,SupplierPriceDecision>();if(!scopes.isEmpty())supplierInputs.decisions(scopes.values().stream().map(SupplierPriceSelectionService::scopeKey).distinct().toList()).forEach(row->decisions.put(row.getScopeKey(),row));
         for(String code:batch)for(var request:organization.getValue().get(code)){
-          var candidates=byCode.getOrDefault(code,List.of()).stream().filter(row->request.matchesSpecification(row.getSpecModel())).toList();if(candidates.isEmpty())continue;
+          var candidates=byCode.getOrDefault(code,List.of()).stream().filter(row->request.matchesSpecification(row.getSpecModel())).toList();
+          if(currentOnly!=null) {
+            String month=context.month().toString();
+            String chosenMonth=currentOnly?month:candidates.stream().map(PriceFixedItem::getPricingMonth).filter(Objects::nonNull).filter(m->m.compareTo(month)<=0).max(String::compareTo).orElse(month);
+            candidates=candidates.stream().filter(row->chosenMonth.equals(row.getPricingMonth())).toList();
+          }
+          if(candidates.isEmpty())continue;
           try{
             String requested=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
             var scoped=requested==null?candidates:candidates.stream().filter(row->requested.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()))).toList();

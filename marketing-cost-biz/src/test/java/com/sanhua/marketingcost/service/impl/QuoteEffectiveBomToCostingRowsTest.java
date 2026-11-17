@@ -122,7 +122,8 @@ class QuoteEffectiveBomToCostingRowsTest {
             rawMapper,
             monthlyDetails,
             manufacturingInputs,
-            noHouseholdPrices(objectMapper));
+            noHouseholdPrices(objectMapper),
+            mock(com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource.class));
     when(settlementRules.listEnabledCandidates()).thenReturn(List.of());
     when(byproductRules.listEnabledCandidates()).thenReturn(List.of());
     when(byproductAdapter.read(any(), any(), any(), any(), any()))

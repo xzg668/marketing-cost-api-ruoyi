@@ -35,7 +35,7 @@ public final class MonthlyPriceDatabase implements AutoCloseable {
       storage=new MonthlyPriceStorage(sql.getMapper(MonthlyPriceStorageMapper.class),codec,sql.getMapper(MonthlyPriceLinkMapper.class));transactions=new DataSourceTransactionManager(pool);
     }catch(Exception constructionFailure){pool.close();throw constructionFailure;}
   }
-  public MonthlyMaterialPriceService createService(MonthlyPriceCandidateResolver sources){return new MonthlyMaterialPriceService(storage,transactions,codec,sources,ACQUISITION_BUDGET);}
+  public MonthlyMaterialPriceService createService(MonthlyPriceCandidateResolver sources){return new MonthlyMaterialPriceService(storage,transactions,codec,sources,ACQUISITION_BUDGET).withSpecialPolicies(new com.sanhua.marketingcost.service.pricing.MaterialSpecialPricePolicies(new org.springframework.jdbc.core.JdbcTemplate(pool),codec));}
   HikariDataSource pool(){return pool;}
   public int maximumPoolSize(){return pool.getMaximumPoolSize();}
   @Override public void close(){pool.close();}
