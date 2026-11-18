@@ -137,4 +137,21 @@ class MakePartPriceGroupsIntegrationTest extends OriginalPricingIntegrationTestB
     var q=query();q.setStatus("OK");assertThat(groups.page(q).total()).isZero();
     assertThat(groups.details(group.id(),1,20).materials()).hasSize(2);
   }
+
+  @Test void modelSearchKeepsEveryInputAndUsesTheSameGroupsForExport() throws Exception {
+    long occurrence=keys.incrementAndGet();
+    var a=row("OA-MODEL","MODEL",occurrence,"RAW-A","1");a.put("drawing_no","RFK-01");insert(a);
+    var b=row("OA-MODEL","MODEL",occurrence,"RAW-B","1");b.put("drawing_no",null);insert(b);
+    one("OTHER");
+    var q=query();q.setModel(" rfk ");q.setPageSize(1);
+    var page=groups.page(q);assertThat(page.total()).isEqualTo(1);
+    assertThat(page.records().getFirst().detailCount()).isEqualTo(2);
+    assertThat(groups.details(page.records().getFirst().id(),1,20).materials()).hasSize(2);
+    var out=new ByteArrayOutputStream();assertThat(groups.export(q,out)).isEqualTo(1);
+    try(var book=WorkbookFactory.create(new ByteArrayInputStream(out.toByteArray()))) {
+      assertThat(book.getSheet("原料废料明细").getLastRowNum()).isEqualTo(2);
+    }
+    q.setModel("%");assertThat(groups.page(q).total()).isZero();
+    q.setModel("  ");assertThat(groups.page(q).total()).isEqualTo(2);
+  }
 }

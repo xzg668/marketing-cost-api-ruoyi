@@ -46,7 +46,7 @@ public class HouseholdInquiryController {
 
   @GetMapping
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:list')")
-  public CommonResult<PricePage> current(@RequestParam(required=false) String materialCode,@RequestParam(required=false) String sourceMonth,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) { return CommonResult.success(service.current(unit(),materialCode,sourceMonth,page,size)); }
+  public CommonResult<PricePage> current(@RequestParam(required=false) String materialCode,@RequestParam(required=false) String sourceMonth,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size,@RequestParam(required=false) String model) { return CommonResult.success(service.current(unit(),materialCode,sourceMonth,page,size,model)); }
 
   @GetMapping("/history")
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:query')")

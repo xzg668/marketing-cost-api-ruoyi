@@ -137,11 +137,38 @@ class OaTechnicalDispatchRequestBuilderTest {
         .hasMessageContaining("控制字符");
   }
 
+  @Test void modelAndSpecificationIdentifyProductsWithoutMaterialNumber() {
+    var person = assignment("12410185", "吴梦梦", "PROFILE");
+    var row = new OaTechnicalDispatchRequest.Product("216", null, "S95BH-160HZ-01", "板换规格", List.of(person));
+    assertThat(builder.build(command(row), "0009").path("remark").asText())
+        .contains("产品（型号：S95BH-160HZ-01；规格：板换规格）", "吴梦梦（12410185）").doesNotContain("产品null");
+  }
+
+  @Test void specificationOnlyAcceptsOriginalMultilineDescriptionAndDistinguishesRows() {
+    var person = assignment("001", "甲", "PROFILE");
+    var first = new OaTechnicalDispatchRequest.Product("1", " ", null, "板换\n160HZ", List.of(person));
+    var second = new OaTechnicalDispatchRequest.Product("2", null, null, "板换 160HZ", List.of(person));
+    assertThat(builder.build(command(first, second), "0009").path("remark").asText())
+        .contains("产品（规格：板换 160HZ）（明细行1）", "产品（规格：板换 160HZ）（明细行2）");
+  }
+
+  @Test void missingAllProductIdentifiersExplainsTheActualRequiredChoice() {
+    var row = new OaTechnicalDispatchRequest.Product("216", null, " ", null, List.of(assignment("001", "甲", "PROFILE")));
+    assertThatThrownBy(() -> builder.build(command(row), "0009"))
+        .hasMessage("产品行 216 的料号、型号、规格至少填写一项");
+  }
+
+  @Test void existingMaterialNumberKeepsItsOriginalRemarkWhenModelIsAlsoAvailable() {
+    var row = new OaTechnicalDispatchRequest.Product("1", " A ", "MODEL", "SPEC", List.of(assignment("001", "甲", "SALARY")));
+    assertThat(builder.build(command(row), "0009").path("remark").asText())
+        .isEqualTo("技术补录：产品A：甲（001）补工资。");
+  }
+
   static OaTechnicalDispatchRequest command(OaTechnicalDispatchRequest.Product... products) {
     return new OaTechnicalDispatchRequest("1137224760702033922", "FI-SC-005", null, List.of(products));
   }
   static OaTechnicalDispatchRequest.Product product(String row, String product, OaTechnicalDispatchRequest.Assignment... assignments) {
-    return new OaTechnicalDispatchRequest.Product(row, product, List.of(assignments));
+    return new OaTechnicalDispatchRequest.Product(row, product, null, null, List.of(assignments));
   }
   static OaTechnicalDispatchRequest.Assignment assignment(String employee, String name, String... modules) {
     return new OaTechnicalDispatchRequest.Assignment(employee, name, List.of(modules));

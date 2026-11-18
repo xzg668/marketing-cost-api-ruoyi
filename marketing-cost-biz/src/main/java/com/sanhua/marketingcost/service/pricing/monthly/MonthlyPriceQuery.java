@@ -21,11 +21,17 @@ public final class MonthlyPriceQuery {
       String taxBasis,
       String supplier,
       int page,
-      int size) {
+      int size,
+      String model) {
+    public Filter(String month, String materialCode, String organization, String pricingType,
+        String specification, String unit, String currency, String taxBasis, String supplier, int page, int size) {
+      this(month, materialCode, organization, pricingType, specification, unit, currency, taxBasis, supplier, page, size, null);
+    }
     public Filter {
       if (month == null || !month.matches("[1-9][0-9]{3}-(0[1-9]|1[0-2])"))
         throw new IllegalArgumentException("请选择核算月份（YYYY-MM）");
       YearMonth.parse(month);
+      model = text(com.sanhua.marketingcost.service.pricing.PriceModelSearch.normalize(model));
       materialCode = text(materialCode);
       organization = text(organization);
       pricingType = text(pricingType);

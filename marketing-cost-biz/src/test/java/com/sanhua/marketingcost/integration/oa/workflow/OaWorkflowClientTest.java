@@ -189,7 +189,7 @@ class OaWorkflowClientTest {
     try (var validation = Validation.buildDefaultValidatorFactory()) {
       var builder = new OaTechnicalDispatchRequestBuilder(json, validation.getValidator(), properties);
       var assignment = new OaTechnicalDispatchRequest.Assignment("0002", "张三", List.of("SALARY"));
-      var product = new OaTechnicalDispatchRequest.Product("ROW-1", "P1", List.of(assignment));
+      var product = new OaTechnicalDispatchRequest.Product("ROW-1", "P1", null, null, List.of(assignment));
       var command = new OaTechnicalDispatchRequest("00123", process, null, List.of(product));
       var body = builder.build(command, "0001");
 

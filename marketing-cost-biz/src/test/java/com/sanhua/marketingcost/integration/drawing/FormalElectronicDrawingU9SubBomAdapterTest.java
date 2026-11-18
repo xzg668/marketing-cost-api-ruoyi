@@ -75,10 +75,10 @@ class FormalElectronicDrawingU9SubBomAdapterTest {
         "M", "2026-08", null, false, List.of(),
         "未在 lp_bom_raw_hierarchy 找到正式 BOM"));
     when(sourceDataService.listDedupedChildren(
-        eq("M"), eq(LocalDate.of(2026, 8, 1)), eq("210")))
+        eq("M"), org.mockito.ArgumentMatchers.isNull(), eq("210")))
         .thenReturn(List.of(u9Row(11L, "M", "SUB", "制造件", "2", "件", 1)));
     when(sourceDataService.listDedupedChildren(
-        eq("SUB"), eq(LocalDate.of(2026, 8, 1)), eq("210")))
+        eq("SUB"), org.mockito.ArgumentMatchers.isNull(), eq("210")))
         .thenReturn(List.of(u9Row(12L, "SUB", "RAW", "采购件", "3", "kg", 1)));
 
     var result = adapter.query(query());
@@ -94,6 +94,22 @@ class FormalElectronicDrawingU9SubBomAdapterTest {
     assertThat(result.nodes().get(1).parentNodeKey())
         .isEqualTo(result.nodes().getFirst().nodeKey());
     assertThat(result.nodes().get(1).sourceU9BomId()).isEqualTo(12L);
+  }
+
+  @Test
+  void currentU9RelationsAreNotFilteredByEarlierDrawingVersionDate() {
+    when(readService.read(any(QuoteBomReadContext.class))).thenReturn(new FormalBomReadResult(
+        "M", "2026-08", null, false, List.of(), "未在 lp_bom_raw_hierarchy 找到正式 BOM"));
+    var row = u9Row(11L, "M", "SUB", "制造件", "1", "只", 1);
+    row.setEffectiveFrom(LocalDate.of(2026, 8, 5));
+    when(sourceDataService.listDedupedChildren(eq("M"), org.mockito.ArgumentMatchers.isNull(), eq("210")))
+        .thenReturn(List.of(row));
+    when(sourceDataService.listDedupedChildren(eq("SUB"), org.mockito.ArgumentMatchers.isNull(), eq("210")))
+        .thenReturn(List.of(u9Row(12L, "SUB", "RAW", "采购件", "0.00013", "kg", 1)));
+    var result = adapter.query(query());
+    assertThat(result.status()).isEqualTo(Status.AVAILABLE);
+    assertThat(result.nodes()).extracting(n -> n.materialCode()).containsExactly("SUB", "RAW");
+    assertThat(result.nodes().get(1).qtyPerParent()).isEqualByComparingTo("0.00013");
   }
 
   @Test

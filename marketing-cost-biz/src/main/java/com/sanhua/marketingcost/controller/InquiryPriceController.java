@@ -62,8 +62,9 @@ public class InquiryPriceController {
       @RequestParam String priceMonth,
       @RequestParam(required = false) String search,
       @RequestParam(defaultValue = "1") int page,
-      @RequestParam(defaultValue = "20") int size) {
-    return CommonResult.success(service.current(unit(), priceMonth, search, page, size));
+      @RequestParam(defaultValue = "20") int size,
+      @RequestParam(required = false) String model) {
+    return CommonResult.success(service.current(unit(), priceMonth, search, page, size, model));
   }
 
   @GetMapping("/history")

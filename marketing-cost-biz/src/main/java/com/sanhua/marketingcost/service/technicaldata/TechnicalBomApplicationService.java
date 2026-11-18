@@ -69,6 +69,11 @@ public class TechnicalBomApplicationService {
     return referencePreview(target, code);
   }
   @Transactional(readOnly=true)
+  public Response sourceForQuote(Long itemId, String accountingMonth, TechnicalDataActor actor) {
+    var target = contexts.readPreview(itemId, accountingMonth, actor);
+    return new Response(null, null, null, false, false, target.product(), absence.read(target.context()), null);
+  }
+  @Transactional(readOnly=true)
   public List<TechnicalBomReferenceQuery.Candidate> searchForQuote(Long itemId, String accountingMonth, String keyword, TechnicalDataActor actor) {
     return references.search(contexts.readQuote(itemId, accountingMonth, actor).context(), keyword);
   }

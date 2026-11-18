@@ -11,7 +11,7 @@ import java.time.LocalDate;
  */
 public interface BomHierarchyQueryService {
 
-  /** 按顶层料号查询已由 EasyData 准备好的嵌套 BOM 树。 */
+  /** 查询顶层整树，或从已有有效树提取以所查自制件为根的子树；不保存结果。 */
   BomHierarchyTreeDto getHierarchyTree(
       String topProductCode,
       String bomPurpose,

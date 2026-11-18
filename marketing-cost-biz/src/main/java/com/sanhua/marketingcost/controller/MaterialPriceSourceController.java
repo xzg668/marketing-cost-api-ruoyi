@@ -21,10 +21,10 @@ public class MaterialPriceSourceController {
   @PreAuthorize("@ss.hasPermi('price:material-sources:list')")
   public CommonResult<Page> list(@RequestParam(required=false) String month,
       @RequestParam(required = false) String materialCode, @RequestParam(required = false) String organization,
-      @RequestParam(required=false) String materialAttribute,
+      @RequestParam(required=false) String materialAttribute, @RequestParam(required=false) String model,
       @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int size) {
     return CommonResult.success(service.list(BusinessUnitContext.getCurrentBusinessUnitType(),
-        new Filter(month, materialCode, organization, materialAttribute, page, size)));
+        new Filter(month, materialCode, organization, materialAttribute, page, size, model)));
   }
 
   @PatchMapping("/attribute")
@@ -36,11 +36,11 @@ public class MaterialPriceSourceController {
   @GetMapping("/export")
   @PreAuthorize("@ss.hasPermi('price:material-sources:list')")
   public void export(@RequestParam(required=false) String month,@RequestParam(required=false) String materialCode,
-      @RequestParam(required=false) String organization,@RequestParam(required=false) String materialAttribute,
+      @RequestParam(required=false) String organization,@RequestParam(required=false) String materialAttribute, @RequestParam(required=false) String model,
       jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
     response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     response.setHeader("Content-Disposition","attachment; filename*=UTF-8''"+java.net.URLEncoder.encode("物料多形态属性价格表.xlsx",java.nio.charset.StandardCharsets.UTF_8));
-    service.export(BusinessUnitContext.getCurrentBusinessUnitType(),new Filter(month,materialCode,organization,materialAttribute,1,100),response.getOutputStream());
+    service.export(BusinessUnitContext.getCurrentBusinessUnitType(),new Filter(month,materialCode,organization,materialAttribute,1,100,model),response.getOutputStream());
   }
 
   @PatchMapping("/attribute/batch")

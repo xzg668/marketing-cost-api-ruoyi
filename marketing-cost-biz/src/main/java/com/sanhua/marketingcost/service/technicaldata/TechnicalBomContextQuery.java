@@ -45,6 +45,17 @@ public class TechnicalBomContextQuery {
   public Target readQuote(Long itemId, String accountingMonth, TechnicalDataActor actor) {
     if (actor == null || actor.userId() == null || !actor.admin() || actor.oaSession())
       throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.FORBIDDEN, "仅管理员可试查BOM填写内容");
+    return quoteTarget(itemId, accountingMonth, actor);
+  }
+
+  /** 未分派产品只读核实来源，沿用补录总览的报价可见范围，不开放管理员试填权限。 */
+  public Target readPreview(Long itemId, String accountingMonth, TechnicalDataActor actor) {
+    if (actor == null || actor.userId() == null || !actor.canViewSupplementOverview())
+      throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.FORBIDDEN, "无权查看本产品BOM来源预览");
+    return quoteTarget(itemId, accountingMonth, actor);
+  }
+
+  private Target quoteTarget(Long itemId, String accountingMonth, TechnicalDataActor actor) {
     try { YearMonth.parse(accountingMonth); }
     catch (RuntimeException error) { throw new IllegalArgumentException("核算月份应为 YYYY-MM"); }
     var item = itemId == null ? null : items.selectById(itemId);

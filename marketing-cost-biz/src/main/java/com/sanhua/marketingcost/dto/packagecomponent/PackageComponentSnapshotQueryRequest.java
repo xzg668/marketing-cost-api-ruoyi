@@ -8,6 +8,7 @@ import lombok.Setter;
 public class PackageComponentSnapshotQueryRequest {
   private String periodMonth;
   private String packageMaterialCode;
+  private String model;
   private String status;
   private Integer page;
   private Integer pageSize;

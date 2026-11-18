@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceFixedItemImportRequest;
@@ -31,10 +33,11 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
 
   @Override
   public Page<PriceFixedItem> page(String materialCode, String supplierCode, String sourceType,
-      String pricingMonth, int page, int pageSize) {
+      String pricingMonth, int page, int pageSize, String model) {
     requireCurrentSource(sourceType);
     var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
         .apply("(source_type IS NULL OR UPPER(TRIM(source_type)) NOT LIKE 'SETTLE%')");
+    PriceModelSearch.apply(query, model, "spec_model");
     if (StringUtils.hasText(materialCode)) {
       query.like(PriceFixedItem::getMaterialCode, materialCode.trim());
     }

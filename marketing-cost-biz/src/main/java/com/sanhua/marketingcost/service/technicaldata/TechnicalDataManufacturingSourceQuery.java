@@ -38,6 +38,7 @@ public class TechnicalDataManufacturingSourceQuery {
     }
   }
 
+  private final TechnicalDataManufacturingAdoptedBom adoptedBom;
   private final ElectronicDrawingSourceNodeRepository sources;
   private final ElectronicDrawingBomScope scope;
   private final OaMessageCodec codec;
@@ -48,7 +49,9 @@ public class TechnicalDataManufacturingSourceQuery {
   public TechnicalDataManufacturingSourceQuery(ElectronicDrawingSourceNodeRepository sources,
       ElectronicDrawingBomScope scope, OaMessageCodec codec,
       QuoteBomSupplementVersionMapper versions, MaterialMasterRawMapper materials,
-      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse) {
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse,
+      com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper details) {
+    this.adoptedBom = new TechnicalDataManufacturingAdoptedBom(details);
     this.drawingReuse = drawingReuse;
     this.sources = sources; this.scope = scope; this.codec = codec; this.versions = versions;
     this.materials = materials;
@@ -64,12 +67,14 @@ public class TechnicalDataManufacturingSourceQuery {
         || !ElectronicDrawingSourceKind.isDrawing(version.getBomSource())) {
       return assessment(context, List.of(), "图库来源与本产品、月份或物料组织不一致");
     }
-    // 与混合组树使用同一来源版本生效日；未记录时按本核算月首日检查。
+    // 生效日仍供组树规则使用；未采用分支的当前 U9 下级查询不按此日期过滤。
     LocalDate effectiveDate = version.getEffectiveFrom() == null
         ? YearMonth.parse(context.accountingMonth()).atDay(1) : version.getEffectiveFrom();
     var rows = sources.findByVersionId(context.sourceVersionId());
     if (rows.isEmpty()) return assessment(context, List.of(), "当前图库来源版本没有明细，请重新检查");
     try {
+      var adopted = adoptedBom.read(context, version, rows);
+      if (adopted != null) return assessment(context, adopted, null);
       var plan = scope.inspect(context, rows, effectiveDate);
       var reused = drawingReuse.read(context).stream().map(row -> row.nodeId()).collect(java.util.stream.Collectors.toSet());
       var materialWeights = missingDrawingWeights(context, plan);

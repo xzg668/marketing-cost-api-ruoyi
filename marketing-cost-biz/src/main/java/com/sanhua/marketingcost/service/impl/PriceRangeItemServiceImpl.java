@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
@@ -52,9 +54,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     if (StringUtils.hasText(supplierCode)) {
       query.like(PriceRangeItem::getSupplierCode, supplierCode.trim());
     }
-    if (StringUtils.hasText(specModel)) {
-      query.like(PriceRangeItem::getSpecModel, specModel.trim());
-    }
+    PriceModelSearch.apply(query, specModel, "spec_model");
     if (StringUtils.hasText(effectiveFrom)) {
       String ym = effectiveFrom.trim();
       LocalDate start = LocalDate.parse(ym + "-01");

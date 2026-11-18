@@ -27,8 +27,47 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 class TechnicalBomAdminPreviewIntegrationTest extends TechnicalCompleteBomCostingIntegrationTest {
   @LocalServerPort int port;
   @org.springframework.beans.factory.annotation.Autowired TechnicalDataAttachmentStore attachments;
+  @org.springframework.beans.factory.annotation.Autowired com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort drawingContexts;
+  @org.springframework.beans.factory.annotation.Autowired com.sanhua.marketingcost.service.electronicdrawing.DrawingVerificationService verification;
+  @org.springframework.beans.factory.annotation.Autowired com.sanhua.marketingcost.mapper.OaFormItemMapper quoteItems;
+  @org.springframework.beans.factory.annotation.Autowired com.sanhua.marketingcost.mapper.DrawingVerificationTaskMapper drawingTasks;
+  @org.springframework.beans.factory.annotation.Autowired com.sanhua.marketingcost.service.electronicdrawing.DrawingVerificationStore drawingStore;
+  @org.springframework.beans.factory.annotation.Autowired com.sanhua.marketingcost.integration.drawing.DrawingVerificationCodec drawingCodec;
   private static final List<String> PROTECTED = List.of("lp_quote_tech_task", "lp_quote_tech_product",
-      "lp_quote_tech_module", "lp_quote_tech_data_version", "lp_quote_cost_run_version", "lp_bom_raw_hierarchy");
+      "lp_quote_tech_module", "lp_quote_tech_data_version", "lp_quote_cost_run_version", "lp_bom_raw_hierarchy",
+      "lp_quote_bom_preparation_record", "lp_drawing_verification_task", "lp_drawing_verification_result", "lp_electronic_drawing_source_node");
+
+  private void receivedDrawing() throws Exception {
+    String drawing = code + "-MODEL-MX";
+    jdbc.update("UPDATE lp_material_master_raw SET drawing_no=? WHERE material_code=? AND organization_code='COMMERCIAL'",drawing,code);
+    var scope=drawingContexts.load(item,"COMMERCIAL","210",month);
+    String input=org.springframework.test.util.ReflectionTestUtils.invokeMethod(verification,"snapshot",scope,quoteItems.selectById(item),drawing);
+    String key=org.springframework.test.util.ReflectionTestUtils.invokeMethod(verification,"scopeKey",scope);
+    var task=new com.sanhua.marketingcost.entity.DrawingVerificationTask();task.setSourceSystem("DRAWING_PDF");task.setRequestId(UUID.randomUUID().toString());
+    task.setOaNo(code);task.setOaFormItemId(item);task.setBusinessUnitType("COMMERCIAL");task.setMaterialOrgCode("COMMERCIAL");task.setPriceOrgCode("210");task.setAccountingMonth(month);
+    task.setDrawingNo(drawing);task.setInputSnapshotJson(input);task.setActiveScopeKey(key);task.setTaskState("REQUESTING");task.setConsumptionState("NOT_READY");task.setRowVersion(0);
+    task.setCreatedAt(java.time.LocalDateTime.now());task.setUpdatedAt(task.getCreatedAt());drawingTasks.insert(task);
+    var json=new ObjectMapper();var root=json.createObjectNode();
+    root.put("taskId","isolated-"+task.getId()).put("status","reviewRequired").put("differenceCount",0).put("schemaVersion",2).put("revision",1).put("deliveryAttempts",0);
+    for(String field:List.of("verificationStatus","editUrl","expiresAt","confirmedAt","deliveryStatus","engine","draftEngine")) root.putNull(field);
+    root.putArray("reviewReasons");root.putObject("drafts");root.putArray("plm_data").addObject().put("drawingNo",drawing).put("plmVersion","V001");
+    var group=root.putObject("data").putObject("_unknown_1");group.put("company","隔离测试");var rows=group.putObject("params").putArray("items");
+    for(int i=1;i<=29;i++) {var node=rows.addObject().put("no",String.valueOf(i)).put("code","PART-"+i).put("name","图库部件"+i).put("qty","1");
+      node.put("mat","").put("grade","B").put("hsf","A").putNull("weight").put("note","");}
+    drawingStore.append(task,com.sanhua.marketingcost.service.electronicdrawing.DrawingVerificationStore.INITIAL,drawingCodec.parse(root.toString()),null,"RECEIVED",java.time.LocalDateTime.now());
+    jdbc.update("UPDATE lp_drawing_verification_task SET consumption_state='FAILED',error_code='CONSUMPTION_FAILED',error_message=? WHERE id=?","已接收明细中没有本产品图号的有效行："+drawing,task.getId());
+  }
+
+  @Test void sourcePreviewUsesCurrentReceivedResultWithoutCreatingTasksOrConsumingIt() throws Exception {
+    assertThat(boms.sourceForQuote(item,month,ADMIN).source().state()).isEqualTo("MISSING");
+    receivedDrawing();var before=snapshot();
+    var result=boms.sourceForQuote(item,month,ADMIN);
+    assertThat(result.source().state()).isEqualTo("UNCONFIRMED");assertThat(result.source().message()).contains("图库已返回资料");
+    assertThat(result.editable()).isFalse();assertThat(result.bom()).isNull();assertThat(result.productId()).isNull();
+    assertThat(boms.sourceForQuote(item,month,new TechnicalDataActor(12L,"报价员",Set.of("ingest:quote:cost-run:execute"))).source()).isEqualTo(result.source());
+    assertThatThrownBy(()->boms.sourceForQuote(item,month,new TechnicalDataActor(13L,"技术员",Set.of("technical:data:task:edit")))).hasMessageContaining("无权");
+    assertThat(snapshot()).isEqualTo(before);
+  }
 
   private Map<String, List<Map<String,Object>>> snapshot() {
     var data = new LinkedHashMap<String, List<Map<String,Object>>>();
@@ -103,6 +142,7 @@ class TechnicalBomAdminPreviewIntegrationTest extends TechnicalCompleteBomCostin
   void browserSession() throws Exception {
     var state = Path.of(System.getProperty("admin.bom.preview.browser.state"));
     assertThat(Files.exists(state)).isFalse();
+    if(Boolean.getBoolean("admin.bom.preview.received")) receivedDrawing();
     var before = snapshot(); var beforeFiles=storedFiles();
     String username="bom_view_"+UUID.randomUUID().toString().substring(0,8), password=UUID.randomUUID().toString();
     jdbc.update("INSERT INTO sys_user(user_name,nick_name,password,business_unit_type,status,del_flag,create_by,create_time,update_by,update_time) VALUES(?,'BOM预览验收',?,'COMMERCIAL','0','0','TEST',NOW(),'TEST',NOW())",username,new BCryptPasswordEncoder().encode(password));
@@ -115,7 +155,8 @@ class TechnicalBomAdminPreviewIntegrationTest extends TechnicalCompleteBomCostin
     data.putAll(Map.of("apiPort",port,"item",item,"month",month,"username",username,"password",password,
         "sample",sample,"material",material,"oaNo",code,"model",code+"-MODEL"));
     data.put("uploadFile",uploadFile.toString());data.put("invalidFile",invalidFile.toString());
-    data.put("expected",boms.reference(product,sample,ADMIN));
+    if(Boolean.getBoolean("admin.bom.preview.received")) data.put("expectedSource",boms.sourceForQuote(item,month,ADMIN));
+    else data.put("expected",boms.reference(product,sample,ADMIN));
     Files.createFile(state,PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
     Files.writeString(state,json.findAndRegisterModules().writeValueAsString(data));
     var release=Path.of(state+".release"); long deadline=System.nanoTime()+Duration.ofMinutes(15).toNanos();

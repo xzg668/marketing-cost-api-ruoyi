@@ -175,6 +175,17 @@ public class JjbExcelRenderer {
       }
       numeric(row, 6, v.grossWeight(), grossSource == null ? DECIMAL : DECIMAL + "\"（" + grossSource + "）\"");
       numeric(row, 7, v.netWeight(), DECIMAL);
+      if (v.settlementCopperWeightG() != null) {
+        boolean hasNet = v.netWeight() != null && !v.netWeight().isBlank();
+        String note = " g\n（家用结算Cu重）";
+        String format = hasNet ? "@" : DECIMAL + "\"" + note + "\"";
+        if (hasNet) string(row, 7, v.netWeight() + "\n" + v.settlementCopperWeightG() + note);
+        else numeric(row, 7, v.settlementCopperWeightG(), format);
+        var cell = row.getCell(col(7));
+        cell.setCellStyle(formatted(cell.getCellStyle(), format, false));
+        row.setHeightInPoints(Math.max(row.getHeightInPoints(), hasNet ? 48 : 34));
+        sheet.setColumnWidth(col(7), Math.max(sheet.getColumnWidth(col(7)), 23 * 256));
+      }
       numeric(row, 8, v.rawUnitPrice(), MONEY); numeric(row, 9, v.scrapUnitPrice(), MONEY);
       string(row, 10, v.material()); string(row, 11, v.shape());
       string(row, 12, "HOUSEHOLD".equals(v.kind()) && v.priceSource() == null ? "询价（家用部件）" : v.priceSource());

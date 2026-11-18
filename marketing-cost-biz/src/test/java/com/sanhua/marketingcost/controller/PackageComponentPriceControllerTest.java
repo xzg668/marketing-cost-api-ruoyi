@@ -61,7 +61,7 @@ class PackageComponentPriceControllerTest {
 
     CommonResult<PackageComponentPricePageResponse> result =
         controller.listPrices(
-            "2026-05", "9830000026238", "1079900000536", "MISSING_CHILD_PRICE", 2, 50);
+            "2026-05", "9830000026238", " RFK ", "1079900000536", "MISSING_CHILD_PRICE", 2, 50);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData()).isSameAs(mocked);
@@ -70,6 +70,7 @@ class PackageComponentPriceControllerTest {
     verify(queryService).pagePrices(captor.capture());
     assertThat(captor.getValue().getPeriodMonth()).isEqualTo("2026-05");
     assertThat(captor.getValue().getPackageMaterialCode()).isEqualTo("9830000026238");
+    assertThat(captor.getValue().getModel()).isEqualTo(" RFK ");
     assertThat(captor.getValue().getTopProductCode()).isEqualTo("1079900000536");
     assertThat(captor.getValue().getPriceStatus()).isEqualTo("MISSING_CHILD_PRICE");
     assertThat(captor.getValue().getPage()).isEqualTo(2);
@@ -206,7 +207,7 @@ class PackageComponentPriceControllerTest {
     when(queryService.pageSnapshots(any())).thenReturn(mocked);
 
     CommonResult<PackageComponentSnapshotPageResponse> result =
-        controller.listSnapshots("2026-05", "9830000026238", "NORMAL", 3, 40);
+        controller.listSnapshots("2026-05", "9830000026238", " RFK ", "NORMAL", 3, 40);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData()).isSameAs(mocked);
@@ -215,6 +216,7 @@ class PackageComponentPriceControllerTest {
     verify(queryService).pageSnapshots(captor.capture());
     assertThat(captor.getValue().getPeriodMonth()).isEqualTo("2026-05");
     assertThat(captor.getValue().getPackageMaterialCode()).isEqualTo("9830000026238");
+    assertThat(captor.getValue().getModel()).isEqualTo(" RFK ");
     assertThat(captor.getValue().getStatus()).isEqualTo("NORMAL");
     assertThat(captor.getValue().getPage()).isEqualTo(3);
     assertThat(captor.getValue().getPageSize()).isEqualTo(40);
@@ -238,7 +240,7 @@ class PackageComponentPriceControllerTest {
     when(queryService.pageGaps(any())).thenReturn(mocked);
 
     CommonResult<PackageComponentGapPageResponse> result =
-        controller.listGaps("2026-05", "9830000026238", "MISSING_PRICE", "NOT_PUSHED", 1, 20);
+        controller.listGaps("2026-05", "9830000026238", " RFK ", "MISSING_PRICE", "NOT_PUSHED", 1, 20);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData()).isSameAs(mocked);
@@ -247,6 +249,7 @@ class PackageComponentPriceControllerTest {
     verify(queryService).pageGaps(captor.capture());
     assertThat(captor.getValue().getPeriodMonth()).isEqualTo("2026-05");
     assertThat(captor.getValue().getPackageMaterialCode()).isEqualTo("9830000026238");
+    assertThat(captor.getValue().getModel()).isEqualTo(" RFK ");
     assertThat(captor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(captor.getValue().getOaPushStatus()).isEqualTo("NOT_PUSHED");
   }

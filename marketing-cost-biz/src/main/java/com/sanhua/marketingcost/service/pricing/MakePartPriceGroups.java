@@ -97,7 +97,7 @@ public class MakePartPriceGroups {
     var q=request==null?new MakePartPriceCalcQueryRequest():request;
     if(text(q.getBusinessUnitType())!=null&&!unit.equals(text(q.getBusinessUnitType())))throw new AccessDeniedException("不能读取其他业务单元的制造件价格");
     var p=new HashMap<String,Object>();p.put("unit",unit);p.put("month",text(q.getPricingMonth()));
-    p.put("parent",text(q.getParentMaterialNo()));p.put("oa",text(q.getOaNo()));p.put("batch",text(q.getCalcBatchId()));
+    p.put("model", PriceModelSearch.normalize(q.getModel()));p.put("parent",text(q.getParentMaterialNo()));p.put("oa",text(q.getOaNo()));p.put("batch",text(q.getCalcBatchId()));
     p.put("child",text(q.getChildMaterialNo()));p.put("scrap",text(q.getScrapCode()));p.put("process",text(q.getItemProcessType()));
     p.put("onlyError",Boolean.TRUE.equals(q.getOnlyError())?1:0);
     p.put("status",Boolean.TRUE.equals(q.getOnlyError())?null:text(q.getStatus()));
@@ -135,7 +135,7 @@ public class MakePartPriceGroups {
         +"raw_price_type,raw_unit_price,raw_source_price_record_id,raw_source_price_batch_no,scrap_code,scrap_name,scrap_price_type,scrap_unit_price,"
         +"scrap_source_price_record_id,scrap_source_price_batch_no,no_scrap_confirmed,no_scrap_confirmation_id,outsource_fee,cost_price,parent_total_cost_price,price_complete,status,"
         +sourceBasis("raw")+","+sourceBasis("scrap")+") AS CHAR),256) line_hash,"
-        +"IF((:oa IS NULL OR oa_no=:oa) AND (:batch IS NULL OR calc_batch_id=:batch) AND (:child IS NULL OR child_material_no=:child) "
+        +"IF((:model='' OR " + PriceModelSearch.condition(":model", "drawing_no") + ") AND (:oa IS NULL OR oa_no=:oa) AND (:batch IS NULL OR calc_batch_id=:batch) AND (:child IS NULL OR child_material_no=:child) "
         +"AND (:scrap IS NULL OR scrap_code=:scrap) AND (:process IS NULL OR item_process_type=:process),1,0) eligible FROM scoped),"
         +"occurrences AS (SELECT occurrence_key,MAX(oa_no) oa_no,MAX(organization) organization,MAX(id) representative_id,MAX(created_at) latest_generated_at,"
         +"COUNT(*) detail_count,MAX(eligible) eligible,COALESCE(MIN(NULLIF(COALESCE(status,'UNKNOWN'),'OK')),'OK') group_status,"

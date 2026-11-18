@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.MaterialPriceTypePageResponse;
@@ -37,7 +39,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
   @Override
   @Transactional(readOnly = true)
   public MaterialPriceTypePageResponse page(String materialCode, String period, String priceOrgCode,
-      int page, int pageSize) {
+      int page, int pageSize, String model) {
     String businessUnit = businessUnit();
     String month = FactorPriceScope.month(period);
     var query = Wrappers.lambdaQuery(MaterialPriceType.class)
@@ -49,6 +51,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
         .eq(StringUtils.hasText(priceOrgCode), MaterialPriceType::getPriceOrgCode,
             priceOrgCode == null ? null : priceOrgCode.trim())
         .orderByAsc(MaterialPriceType::getMaterialCode).orderByAsc(MaterialPriceType::getPriceOrgCode);
+    PriceModelSearch.applyMaster(query, model, "lp_material_price_type.material_code", "lp_material_price_type.price_org_code");
     var result = mapper.selectPage(new Page<>(Math.max(1, page), Math.min(100, Math.max(1, pageSize))), query);
     return new MaterialPriceTypePageResponse(result.getTotal(), result.getRecords().stream().map(this::view).toList());
   }

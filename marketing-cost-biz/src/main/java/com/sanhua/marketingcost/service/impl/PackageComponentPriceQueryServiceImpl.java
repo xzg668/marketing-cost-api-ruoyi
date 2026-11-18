@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -84,6 +86,7 @@ public class PackageComponentPriceQueryServiceImpl implements PackageComponentPr
     LambdaQueryWrapper<PackageComponentPrice> query = Wrappers.lambdaQuery();
     eqIfText(query, PackageComponentPrice::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PackageComponentPrice::getPackageMaterialCode, request.getPackageMaterialCode());
+    PriceModelSearch.applyMaster(query, request.getModel(), "lp_package_component_price.package_material_code", "lp_package_component_price.price_org_code");
     eqIfText(query, PackageComponentPrice::getSourceTopProductCode, request.getTopProductCode());
     eqIfText(query, PackageComponentPrice::getPriceStatus, request.getPriceStatus());
     return query;
@@ -94,6 +97,7 @@ public class PackageComponentPriceQueryServiceImpl implements PackageComponentPr
     LambdaQueryWrapper<PackageComponentSnapshot> query = Wrappers.lambdaQuery();
     eqIfText(query, PackageComponentSnapshot::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PackageComponentSnapshot::getPackageMaterialCode, request.getPackageMaterialCode());
+    PriceModelSearch.applyMaster(query, request.getModel(), "lp_package_component_snapshot.package_material_code", "lp_package_component_snapshot.price_org_code");
     eqIfText(query, PackageComponentSnapshot::getStatus, request.getStatus());
     return query;
   }
@@ -103,6 +107,12 @@ public class PackageComponentPriceQueryServiceImpl implements PackageComponentPr
     LambdaQueryWrapper<PackageComponentGapItem> query = Wrappers.lambdaQuery();
     eqIfText(query, PackageComponentGapItem::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PackageComponentGapItem::getPackageMaterialCode, request.getPackageMaterialCode());
+    String model = PriceModelSearch.normalize(request.getModel());
+    if (!model.isEmpty()) query.apply("EXISTS (SELECT 1 FROM lp_package_component_snapshot model_snapshot"
+        + " WHERE model_snapshot.business_unit_type=lp_package_component_gap_item.business_unit_type"
+        + " AND model_snapshot.period_month=lp_package_component_gap_item.period_month"
+        + " AND model_snapshot.package_material_code=lp_package_component_gap_item.package_material_code AND "
+        + PriceModelSearch.masterCondition("model_snapshot.package_material_code", "model_snapshot.price_org_code", "{0}") + ")", model);
     eqIfText(query, PackageComponentGapItem::getGapType, request.getGapType());
     eqIfText(query, PackageComponentGapItem::getOaPushStatus, request.getOaPushStatus());
     return query;

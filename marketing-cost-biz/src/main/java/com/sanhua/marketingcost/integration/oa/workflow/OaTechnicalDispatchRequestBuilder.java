@@ -47,10 +47,10 @@ public class OaTechnicalDispatchRequestBuilder {
     var people = new TreeMap<String, String>();
     Map<String, List<String>> groupedProducts = new LinkedHashMap<>();
     Map<String, Long> productCounts = command.products().stream().collect(Collectors.groupingBy(
-        product -> product.productNo().trim(), Collectors.counting()));
+        OaTechnicalDispatchRequestBuilder::productLabel, Collectors.counting()));
     for (var product : command.products()) {
       String rowId = singleLine(product.rowId(), "产品行编号");
-      String productNo = singleLine(product.productNo(), "产品编号");
+      String productLabel = productLabel(product);
       if (!rowIds.add(rowId)) throw new IllegalArgumentException("同一产品行不能重复分派：" + rowId);
       Map<TechnicalDataModuleType, String> owners = new HashMap<>();
       Map<String, EnumSet<TechnicalDataModuleType>> groups = new TreeMap<>();
@@ -80,15 +80,36 @@ public class OaTechnicalDispatchRequestBuilder {
             .collect(Collectors.joining("、"));
         assignments.add(people.get(group.getKey()) + "（" + group.getKey() + "）补" + scope);
       }
-      String rowLabel = productCounts.get(productNo) > 1 ? "（明细行" + rowId + "）" : "";
+      String rowLabel = productCounts.get(productLabel) > 1 ? "（明细行" + rowId + "）" : "";
       groupedProducts.computeIfAbsent(String.join("；", assignments), ignored -> new ArrayList<>())
-          .add("产品" + productNo + rowLabel);
+          .add(productLabel + rowLabel);
     }
 
     String remark = "技术补录：" + groupedProducts.entrySet().stream()
         .map(group -> String.join("、", group.getValue()) + "：" + group.getKey() + "。")
         .collect(Collectors.joining("\n"));
     return OaTechnicalPeopleRequest.build(json, peopleDataKey, requestId, operator, people.keySet(), remark);
+  }
+
+  private static String productLabel(OaTechnicalDispatchRequest.Product product) {
+    if (product.productNo() != null && !product.productNo().isBlank()) {
+      return "产品" + singleLine(product.productNo(), "产品编号");
+    }
+    List<String> identity = new ArrayList<>();
+    if (product.productModel() != null && !product.productModel().isBlank()) {
+      identity.add("型号：" + description(product.productModel(), "产品型号"));
+    }
+    if (product.specification() != null && !product.specification().isBlank()) {
+      identity.add("规格：" + description(product.specification(), "产品规格"));
+    }
+    if (identity.isEmpty()) {
+      throw new IllegalArgumentException("产品行 " + product.rowId() + " 的料号、型号、规格至少填写一项");
+    }
+    return "产品（" + String.join("；", identity) + "）";
+  }
+
+  private static String description(String value, String label) {
+    return singleLine(value.strip().replaceAll("\\s+", " "), label);
   }
 
   private static String employeeNo(String value, String label) {

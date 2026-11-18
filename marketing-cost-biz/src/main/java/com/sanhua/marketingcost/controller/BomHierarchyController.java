@@ -24,7 +24,7 @@ public class BomHierarchyController {
   }
 
   /**
-   * 按顶层料号查嵌套树（供 T6 前端树查看器）。
+   * 按顶层产品或自制件料号查嵌套树，路径参数沿用 topProductCode。
    *
    * <p>{@code asOfDate} 决定拿哪个版本（多版本并存时用生效期过滤）；不传默认当天。
    */

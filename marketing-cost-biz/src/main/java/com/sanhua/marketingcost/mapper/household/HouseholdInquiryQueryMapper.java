@@ -31,6 +31,7 @@ public interface HouseholdInquiryQueryMapper {
           <if test="material != null">AND (p.material_code=#{material} OR p.specification=#{material})</if>
         </otherwise>
       </choose>
+      <if test="model != null and model != ''">AND LOCATE(#{model},LOWER(COALESCE(p.specification,''))) &gt; 0</if>
       """;
   @Select("SELECT * FROM lp_household_inquiry_import_batch WHERE business_unit_type=#{unit} AND publish_request_id=#{request}")
   HouseholdInquiryBatchRow batchByRequest(@Param("unit") String unit,@Param("request") String request);
@@ -65,10 +66,10 @@ public interface HouseholdInquiryQueryMapper {
 
   @Select("<script>SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256 "
       + LIST_FROM + " ORDER BY <choose><when test='sourceMonth == null'>p.current_match</when><otherwise>p.match_key</otherwise></choose> LIMIT #{size} OFFSET #{offset}</script>")
-  List<HouseholdInquiryPriceRow> page(@Param("unit") String unit,@Param("material") String material,@Param("sourceMonth") String sourceMonth,@Param("size") int size,@Param("offset") int offset);
+  List<HouseholdInquiryPriceRow> page(@Param("unit") String unit,@Param("material") String material,@Param("sourceMonth") String sourceMonth,@Param("size") int size,@Param("offset") int offset,@Param("model") String model);
 
   @Select("<script>SELECT COUNT(*) " + LIST_FROM + "</script>")
-  long count(@Param("unit") String unit,@Param("material") String material,@Param("sourceMonth") String sourceMonth);
+  long count(@Param("unit") String unit,@Param("material") String material,@Param("sourceMonth") String sourceMonth,@Param("model") String model);
 
   @Select("""
       SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256

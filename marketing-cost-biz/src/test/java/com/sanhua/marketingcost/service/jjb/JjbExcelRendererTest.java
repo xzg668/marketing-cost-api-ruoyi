@@ -48,6 +48,27 @@ public class JjbExcelRendererTest {
     }
   }
 
+  @Test void settlementCopperIsAnnotatedInNetColumnAndRemainsNumeric() throws Exception {
+    for(String existingNet:Arrays.asList(null,"5")) {
+      var base=model(1,0,0);var rows=new ArrayList<>(base.rows());
+      rows.set(0,rows.getFirst().toBuilder().netWeight(existingNet).settlementCopperWeightG("0.119").build());
+      var value=new JjbReadModel(base.identity(),base.header(),rows,base.monthlyPrices(),base.totals(),base.warnings());
+      var bytes=new ByteArrayOutputStream();new JjbExcelRenderer().write(value,bytes);
+      try(var book=new XSSFWorkbook(new ByteArrayInputStream(bytes.toByteArray()))) {
+        var row=java.util.stream.StreamSupport.stream(book.getSheetAt(0).spliterator(),false)
+            .filter(r->r.getCell(0)!=null && r.getCell(0).toString().equals(rows.getFirst().code())).findFirst().orElseThrow();
+        var net=row.getCell(8);
+        assertThat(net.getCellType()).isEqualTo(existingNet==null?CellType.NUMERIC:CellType.STRING);
+        if(existingNet==null)assertThat(net.getNumericCellValue()).isEqualTo(0.119);
+        else assertThat(net.getStringCellValue()).startsWith("5\n");
+        assertThat(new DataFormatter(Locale.CHINA).formatCellValue(net)).contains("0.119 g", "家用结算Cu重").doesNotContain("Zn");
+        assertThat(net.getCellStyle().getWrapText()).isTrue();
+        assertThat(row.getHeightInPoints()).isGreaterThanOrEqualTo(34);
+        assertThat(row.getCell(6).getNumericCellValue()).isEqualTo(3.086418);
+      }
+    }
+  }
+
   public static JjbReadModel model(int ordinary, int household, int fees) {
     List<JjbReadModel.Row> rows = new ArrayList<>();
     for (int i = 0; i < ordinary; i++)

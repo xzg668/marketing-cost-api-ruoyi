@@ -11,6 +11,7 @@ public class MakePartPriceCalcQueryRequest {
   private String oaNo;
   private String businessUnitType;
   private String parentMaterialNo;
+  private String model;
   private String childMaterialNo;
   private String scrapCode;
   private String itemProcessType;

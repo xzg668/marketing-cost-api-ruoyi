@@ -130,6 +130,43 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     return new QuoteCostingPreparationService.Request(item, month, false);
   }
 
+  private long emptySupplementTask(String period, int active) {
+    String task = "ENTRY-" + UUID.randomUUID();
+    jdbc.update("INSERT INTO lp_quote_tech_task(task_no,oa_form_id,oa_no,accounting_month,business_unit_type,applicable_org_code,task_status,oa_form_item_id,active_flag,active_lock_key) VALUES(?,?,?,?,'COMMERCIAL','210','UNASSIGNED',?,?,?)",
+        task, formId, oaNo, period, items.getFirst(), active, active == 1 ? "ITEM:"+items.getFirst()+":MONTH:"+period : null);
+    return jdbc.queryForObject("SELECT id FROM lp_quote_tech_task WHERE task_no=?", Long.class, task);
+  }
+
+  @Test void emptyCurrentOrHistoricalTasksDoNotExposeAnEmptySupplementEntry() {
+    long task = emptySupplementTask(month, 1);
+    assertThat(service.state(oaNo, items.getFirst()).hasSupplement()).isFalse();
+    assertThat(service.state(oaNo).hasSupplement()).isFalse();
+    String previousMonth = java.time.YearMonth.parse(month).minusMonths(1).toString();
+    long historical = emptySupplementTask(previousMonth, 1);
+    assertThat(service.state(oaNo, items.getFirst()).hasSupplement()).isFalse();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_task WHERE id=?",Integer.class,historical)).isEqualTo(1);
+    jdbc.update("UPDATE lp_quote_tech_task SET active_flag=0,active_lock_key=NULL WHERE id=?",task);
+    assertThat(service.state(oaNo).hasSupplement()).isFalse();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_task WHERE id=?",Integer.class,task)).isEqualTo(1);
+  }
+
+  @Test void currentRequiredModuleRetainsEntryAndResolvedModuleRemovesItWithoutDeletingHistory() {
+    long task = emptySupplementTask(month, 1);
+    jdbc.update("INSERT INTO lp_quote_tech_product(task_id,oa_form_item_id,quote_no,accounting_month,source_snapshot_json,source_fingerprint,active_lock_key) VALUES(?,?,?,?,'{}',REPEAT('a',64),?)",task,items.getFirst(),oaNo,month,"ITEM:"+items.getFirst()+":MONTH:"+month);
+    long product = jdbc.queryForObject("SELECT id FROM lp_quote_tech_product WHERE task_id=?",Long.class,task);
+    jdbc.update("INSERT INTO lp_quote_tech_module(product_id,module_type,required_flag,requirement_reason_code,requirement_reason,module_status) VALUES(?,'SALARY',1,'SALARY_SOURCE_MISSING','缺工资','PENDING')",product);
+    assertThat(service.state(oaNo,items.getFirst()).hasSupplement()).isTrue();
+    assertThat(service.state(oaNo).hasSupplement()).isTrue();
+    assertThat(service.state(oaNo,items.getLast()).hasSupplement()).isFalse();
+    jdbc.update("UPDATE lp_quote_tech_module SET required_flag=0,module_status='NOT_REQUIRED' WHERE product_id=?",product);
+    assertThat(service.state(oaNo,items.getFirst()).hasSupplement()).isFalse();
+    assertThat(service.state(oaNo).hasSupplement()).isFalse();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_module WHERE product_id=?",Integer.class,product)).isEqualTo(1);
+    jdbc.update("UPDATE lp_quote_tech_module SET required_flag=1,module_status='PENDING' WHERE product_id=?",product);
+    jdbc.update("UPDATE lp_quote_tech_task SET active_flag=0,active_lock_key=NULL WHERE id=?",task);
+    assertThat(service.state(oaNo,items.getFirst()).hasSupplement()).isFalse();
+  }
+
   @Test void explicitProductRecalculationPreservesForceThroughCheckAndExecution() throws Exception {
     var request = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
         "{\"itemId\":"+items.getFirst()+",\"periodMonth\":\""+month+"\",\"force\":true}",

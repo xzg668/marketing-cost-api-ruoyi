@@ -8,6 +8,7 @@ import lombok.Setter;
 public class PackageComponentPriceQueryRequest {
   private String periodMonth;
   private String packageMaterialCode;
+  private String model;
   private String topProductCode;
   private String priceStatus;
   private Integer page;

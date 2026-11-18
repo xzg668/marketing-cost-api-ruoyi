@@ -65,6 +65,7 @@ public class PackageComponentPriceController {
   public CommonResult<PackageComponentPricePageResponse> listPrices(
       @RequestParam(required = false) String periodMonth,
       @RequestParam(required = false) String packageMaterialCode,
+      @RequestParam(required = false) String model,
       @RequestParam(required = false) String topProductCode,
       @RequestParam(required = false) String priceStatus,
       @RequestParam(required = false, defaultValue = "1") Integer page,
@@ -72,6 +73,7 @@ public class PackageComponentPriceController {
     PackageComponentPriceQueryRequest request = new PackageComponentPriceQueryRequest();
     request.setPeriodMonth(periodMonth);
     request.setPackageMaterialCode(packageMaterialCode);
+    request.setModel(model);
     request.setTopProductCode(topProductCode);
     request.setPriceStatus(priceStatus);
     request.setPage(page);
@@ -147,12 +149,14 @@ public class PackageComponentPriceController {
   public CommonResult<PackageComponentSnapshotPageResponse> listSnapshots(
       @RequestParam(required = false) String periodMonth,
       @RequestParam(required = false) String packageMaterialCode,
+      @RequestParam(required = false) String model,
       @RequestParam(required = false) String status,
       @RequestParam(required = false, defaultValue = "1") Integer page,
       @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
     PackageComponentSnapshotQueryRequest request = new PackageComponentSnapshotQueryRequest();
     request.setPeriodMonth(periodMonth);
     request.setPackageMaterialCode(packageMaterialCode);
+    request.setModel(model);
     request.setStatus(status);
     request.setPage(page);
     request.setPageSize(pageSize);
@@ -175,6 +179,7 @@ public class PackageComponentPriceController {
   public CommonResult<PackageComponentGapPageResponse> listGaps(
       @RequestParam(required = false) String periodMonth,
       @RequestParam(required = false) String packageMaterialCode,
+      @RequestParam(required = false) String model,
       @RequestParam(required = false) String gapType,
       @RequestParam(required = false) String oaPushStatus,
       @RequestParam(required = false, defaultValue = "1") Integer page,
@@ -182,6 +187,7 @@ public class PackageComponentPriceController {
     PackageComponentGapQueryRequest request = new PackageComponentGapQueryRequest();
     request.setPeriodMonth(periodMonth);
     request.setPackageMaterialCode(packageMaterialCode);
+    request.setModel(model);
     request.setGapType(gapType);
     request.setOaPushStatus(oaPushStatus);
     request.setPage(page);

@@ -253,10 +253,30 @@ class TechnicalDataSourceCheckServiceTest {
     verify(salary, times(2)).read("PRODUCT",2026,"COMMERCIAL");
   }
 
-  @Test void absentOrSingleUnconfirmedWageDoesNotBecomeAMissingTask() {
-    assertThat(fact(TechnicalDataModuleType.SALARY).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
-    when(salary.read(anyString(),anyInt(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(wage(1,"SALARY_DIRECT","2.5")),null));
-    assertThat(fact(TechnicalDataModuleType.SALARY).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
+  @Test void unapprovedOrUnconfirmedSalaryEntersTechnicalSalarySupplement() {
+    for (var rows : List.of(List.<CmsCostSourceEffective>of(), List.of(wage(1,"SALARY_INDIRECT","0.1715")))) {
+      when(salary.read(anyString(),anyInt(),anyString()))
+          .thenReturn(new TechnicalDataSalarySourceQuery.Source(rows, null));
+      var requirements = new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts());
+      assertThat(requirements).filteredOn(row -> row.moduleType().equals("SALARY"))
+          .allSatisfy(row -> {
+            assertThat(row.required()).as("工资未审批也应进入技术补录").isTrue();
+            assertThat(row.availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+            assertThat(row.reasonCode()).isEqualTo("SALARY_SOURCE_UNCONFIRMED");
+            assertThat(row.reason()).contains("补录", "审批");
+            assertThat(row.sourceReference()).contains("cms_cost_source_effective");
+          });
+    }
+  }
+
+  @Test void salaryReadFailureCannotCreateTechnicalSalarySupplement() {
+    when(salary.read(anyString(),anyInt(),anyString())).thenThrow(new IllegalStateException("source unavailable"));
+    assertThat(new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts()))
+        .filteredOn(row -> row.moduleType().equals("SALARY"))
+        .allSatisfy(row -> {
+          assertThat(row.required()).isFalse();
+          assertThat(row.availability()).isEqualTo(TechnicalDataAvailability.ERROR);
+        });
   }
 
   @Test void bothWagesConfirmedAbsentProduceOnlySalaryGapWhenU9Exists() {

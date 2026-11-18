@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.scrap;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.entity.ScrapPrice;
@@ -27,6 +29,11 @@ public class ScrapPriceQueryService {
       String supplier,
       int page,
       int size) {
+    return list(businessUnit, month, keyword, priceType, supplier, page, size, null);
+  }
+
+  public Page<ScrapPrice> list(String businessUnit, String month, String keyword,
+      String priceType, String supplier, int page, int size, String model) {
     String unit = ScrapPriceIdentity.businessUnit(businessUnit);
     String priceMonth = FactorPriceScope.month(month);
     if (page < 1 || size < 1 || size > 200) throw new IllegalArgumentException("分页参数无效");
@@ -51,6 +58,7 @@ public class ScrapPriceQueryService {
               q.like(ScrapPrice::getSupplierCode, supplier.trim())
                   .or()
                   .like(ScrapPrice::getSupplierName, supplier.trim()));
+    PriceModelSearch.apply(query, model, "specification");
     query.orderByAsc(ScrapPrice::getMaterialCode, ScrapPrice::getSupplierKey);
     return prices.selectPage(new Page<>(page, size), query);
   }

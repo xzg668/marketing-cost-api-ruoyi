@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.sanhua.marketingcost.dto.LinkedImportedFileDto;
 import com.sanhua.marketingcost.service.pricing.FactorPriceScope;
 import org.springframework.security.access.AccessDeniedException;
@@ -226,7 +228,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   public PageResult<PriceLinkedItemDto> page(
-      String pricingMonth, String materialCode, boolean includeHistory, int page, int pageSize) {
+      String pricingMonth, String materialCode, boolean includeHistory, int page, int pageSize, String model) {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
     var query =
         Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
@@ -249,6 +251,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
                   + " COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(newer.source_input_snapshot_json,'$.ruleSetRevision')) AS UNSIGNED),newer.rule_revision)>COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(lp_price_linked_item.source_input_snapshot_json,'$.ruleSetRevision')) AS UNSIGNED),lp_price_linked_item.rule_revision)");
     }
     query.orderByAsc(PriceLinkedItem::getId);
+    PriceModelSearch.apply(query, model, "spec_model");
     Page<PriceLinkedItem> result =
         itemMapper.selectPage(new Page<>(normalizePage(page), normalizePageSize(pageSize)), query);
     return new PageResult<>(

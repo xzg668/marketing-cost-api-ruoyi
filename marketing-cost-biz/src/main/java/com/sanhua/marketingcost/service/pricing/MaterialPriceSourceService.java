@@ -30,7 +30,7 @@ public class MaterialPriceSourceService {
       if (available.isEmpty()) return new Page(null,0,List.of(),new RefreshState(0,null,null,0,0));
       month=available.getFirst();
     }
-    var params=parameters(unit,new Filter(month,filter.materialCode(),filter.organization(),filter.materialAttribute(),filter.page(),filter.size()));
+    var params=parameters(unit,new Filter(month,filter.materialCode(),filter.organization(),filter.materialAttribute(),filter.page(),filter.size(),filter.model()));
     return repository.list(params);
   }
 
@@ -51,7 +51,7 @@ public class MaterialPriceSourceService {
     try(var writer=com.alibaba.excel.EasyExcel.write(output).autoCloseStream(false).head(headers).build()) {
       var sheet=com.alibaba.excel.EasyExcel.writerSheet("物料多形态属性价格表").build();
       if(month==null) {writer.write(List.of(),sheet);return;}
-      var params=parameters(unit,new Filter(month,filter.materialCode(),filter.organization(),filter.materialAttribute(),1,100));
+      var params=parameters(unit,new Filter(month,filter.materialCode(),filter.organization(),filter.materialAttribute(),1,100,filter.model()));
       params.put("limit",500);
       for(long offset=0;;offset+=500) {
         params.put("offset",offset);
@@ -234,6 +234,7 @@ public class MaterialPriceSourceService {
     int size=Math.max(1,Math.min(100,filter.size()));
     var params=new HashMap<String,Object>();
     params.put("unit",unit);params.put("month",month);params.put("code",code);params.put("organization",org);
+    params.put("model",PriceModelSearch.normalize(filter.model()));
     params.put("attributeFilter",attribute);params.put("sourceType","");params.put("exact",0);
     params.put("limit",size);params.put("offset",((long)Math.max(1,filter.page())-1)*size);
     return params;

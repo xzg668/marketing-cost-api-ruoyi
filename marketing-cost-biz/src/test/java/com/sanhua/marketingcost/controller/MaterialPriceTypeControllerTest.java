@@ -44,14 +44,14 @@ class MaterialPriceTypeControllerTest {
   @Test
   void listForwardsMonthlyFiltersWithoutWriting() throws Exception {
     login("base:material-price-type:list");
-    when(service.page("M1", "2026-10", "220", 2, 10))
+    when(service.page("M1", "2026-10", "220", 2, 10, "rfk"))
         .thenReturn(new MaterialPriceTypePageResponse(0, List.of()));
     mvc.perform(get("/api/v1/material-price-types").param("period", "2026-10")
-            .param("materialCode", "M1").param("priceOrgCode", "220")
+            .param("materialCode", "M1").param("model", "rfk").param("priceOrgCode", "220")
             .param("page", "2").param("pageSize", "10"))
         .andExpect(status().isOk()).andExpect(jsonPath("$.code").value(0))
         .andExpect(jsonPath("$.data.total").value(0));
-    verify(service).page("M1", "2026-10", "220", 2, 10);
+    verify(service).page("M1", "2026-10", "220", 2, 10, "rfk");
     verifyNoMoreInteractions(service);
   }
 
@@ -61,7 +61,7 @@ class MaterialPriceTypeControllerTest {
     mvc.perform(get("/api/v1/material-price-types"))
         .andExpect(status().isBadRequest());
     verifyNoInteractions(service);
-    when(service.page(null, "2026-13", null, 1, 20))
+    when(service.page(null, "2026-13", null, 1, 20, null))
         .thenThrow(new IllegalArgumentException("价格月份格式必须为 yyyy-MM"));
     mvc.perform(get("/api/v1/material-price-types").param("period", "2026-13"))
         .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value(400));

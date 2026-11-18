@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.ExcelWriter;
 import com.alibaba.excel.write.metadata.WriteSheet;
@@ -206,6 +208,7 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
     eqIfText(query, MakePartPriceCalcRow::getOaNo, safe.getOaNo());
     eqIfText(query, MakePartPriceCalcRow::getBusinessUnitType, safe.getBusinessUnitType());
     eqIfText(query, MakePartPriceCalcRow::getParentMaterialNo, safe.getParentMaterialNo());
+    PriceModelSearch.apply(query, safe.getModel(), "drawing_no");
     eqIfText(query, MakePartPriceCalcRow::getChildMaterialNo, safe.getChildMaterialNo());
     eqIfText(query, MakePartPriceCalcRow::getScrapCode, safe.getScrapCode());
     eqIfText(query, MakePartPriceCalcRow::getItemProcessType, safe.getItemProcessType());
@@ -225,6 +228,12 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
     eqIfTextGap(query, MakePartPriceGapItem::getOaNo, safe.getOaNo());
     eqIfTextGap(query, MakePartPriceGapItem::getBusinessUnitType, safe.getBusinessUnitType());
     eqIfTextGap(query, MakePartPriceGapItem::getParentMaterialNo, safe.getParentMaterialNo());
+    String model = PriceModelSearch.normalize(safe.getModel());
+    if (!model.isEmpty()) query.apply("EXISTS (SELECT 1 FROM lp_make_part_price_calc_row model_row"
+        + " WHERE model_row.business_unit_type=lp_make_part_price_gap_item.business_unit_type"
+        + " AND model_row.calc_batch_id=lp_make_part_price_gap_item.calc_batch_id"
+        + " AND model_row.parent_material_no=lp_make_part_price_gap_item.parent_material_no"
+        + " AND " + PriceModelSearch.condition("{0}", "model_row.drawing_no") + ")", model);
     eqIfTextGap(query, MakePartPriceGapItem::getChildMaterialNo, safe.getChildMaterialNo());
     eqIfTextGap(query, MakePartPriceGapItem::getScrapCode, safe.getScrapCode());
     eqIfTextGap(query, MakePartPriceGapItem::getMissingPriceRole, safe.getMissingPriceRole());

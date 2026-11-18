@@ -102,8 +102,10 @@ public class TechnicalDataPendingProductQuery {
           AND EXISTS (
             SELECT 1 FROM JSON_TABLE(COALESCE(JSON_EXTRACT(w.technical_check_json,'$.pending.check'),JSON_EXTRACT(w.technical_check_json,'$.check')), '$.modules[*]' COLUMNS (
               module_type VARCHAR(40) PATH '$.moduleType', required_flag INT PATH '$.required',
-              reason_code VARCHAR(80) PATH '$.reasonCode')) m
-            WHERE m.required_flag=1
+              reason_code VARCHAR(80) PATH '$.reasonCode',
+              availability VARCHAR(40) PATH '$.availability', checked_at VARCHAR(64) PATH '$.checkedAt')) m
+            WHERE (m.required_flag=1 OR (m.module_type='SALARY' AND m.reason_code='SALARY_SOURCE_UNCONFIRMED'
+              AND m.availability='UNCONFIRMED' AND m.checked_at IS NOT NULL))
               AND (m.module_type<>'DRAWING_BOM' OR (%s) IS NULL)
               AND NOT EXISTS (
               SELECT 1 FROM JSON_TABLE(COALESCE(JSON_EXTRACT(w.technical_check_json,'$.pending.check'),JSON_EXTRACT(w.technical_check_json,'$.check')), '$.sharedModules[*]' COLUMNS (
@@ -130,7 +132,11 @@ public class TechnicalDataPendingProductQuery {
   }
 
   public boolean hasPendingItem(String oaNo, long itemId) {
-    Query query = scope("ALL", null, null, null, oaNo, itemId);
+    return hasPendingItem(oaNo, itemId, null);
+  }
+
+  public boolean hasPendingItem(String oaNo, long itemId, String month) {
+    Query query = scope("ALL", null, month, null, oaNo, itemId);
     return readPage(query, 0, 1, true).total() > 0;
   }
 
@@ -190,7 +196,7 @@ public class TechnicalDataPendingProductQuery {
           row.getString("period_month"),row.getObject("current_drawing_source_id",Long.class),check);
     },args.toArray());
     java.util.function.Function<Candidate,TechnicalDataWorkbenchRowResponse> project=row -> {
-      var check=row.check();Long drawingSourceId=row.drawing();
+      var check=TechnicalDataSalarySupplement.apply(row.check());Long drawingSourceId=row.drawing();
       var modules=TechnicalDataSharedModuleQuery.applySharedSources(check.modules(),check.sharedModules()).stream().map(module ->
           "DRAWING_BOM".equals(module.moduleType()) && drawingSourceId!=null
               ? new TechnicalDataModuleResponse(null,module.moduleType(),false,"DRAWING_SOURCE_AVAILABLE",

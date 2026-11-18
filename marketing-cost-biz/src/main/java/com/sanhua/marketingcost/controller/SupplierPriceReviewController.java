@@ -1,7 +1,7 @@
 package com.sanhua.marketingcost.controller;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.SupplierPriceConfirmationResponse;
 import com.sanhua.marketingcost.service.pricing.SupplierPriceReviewWorkflow;
 import com.sanhua.marketingcost.service.pricing.SupplierPriceReviewExportService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -37,12 +37,12 @@ public class SupplierPriceReviewController {
 
   @PostMapping("/confirm")
   @PreAuthorize("@ss.hasPermi('ingest:quote:cost-run:execute')")
-  public CommonResult<QuotePricePrepareWorkbenchResponse> confirm(@PathVariable String oaNo,
+  public CommonResult<SupplierPriceConfirmationResponse> confirm(@PathVariable String oaNo,
       @PathVariable Long itemId, @RequestBody SupplierPriceReviewWorkflow.Confirmation request,
       Authentication authentication) {
     try {
       var decision = workflow.confirm(oaNo, itemId, request, authentication.getName());
-      return CommonResult.success(workflow.reprice(decision));
+      return CommonResult.success(workflow.repriceConfirmed(decision));
     } catch (IllegalArgumentException error) {
       return CommonResult.error(400, error.getMessage());
     }

@@ -8,7 +8,11 @@ public final class MaterialPriceSourceCatalog {
   private MaterialPriceSourceCatalog() {}
 
   public record Filter(String month, String materialCode, String organization,
-      String materialAttribute, int page, int size) {}
+      String materialAttribute, int page, int size, String model) {
+    public Filter(String month, String materialCode, String organization, String materialAttribute, int page, int size) {
+      this(month, materialCode, organization, materialAttribute, page, size, null);
+    }
+  }
   public record Price(String value, String unit, String currency, String taxBasis,
       String supplierCode, String supplierName, String condition, String status) {}
   public record Key(String materialCode, String organization, String sourceType) {}

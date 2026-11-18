@@ -66,14 +66,15 @@ public class PriceLinkedItemController {
       @RequestParam(required = false) String materialCode,
       @RequestParam(required = false, defaultValue = "false") Boolean includeHistory,
       @RequestParam(required = false, defaultValue = "1") Integer page,
-      @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
+      @RequestParam(required = false, defaultValue = "20") Integer pageSize,
+      @RequestParam(required = false) String model) {
     return CommonResult.success(
         priceLinkedItemService.page(
             pricingMonth,
             materialCode,
             Boolean.TRUE.equals(includeHistory),
             page == null ? 1 : page,
-            pageSize == null ? 20 : pageSize));
+            pageSize == null ? 20 : pageSize, model));
   }
 
   /** 修改联动价格明细 */

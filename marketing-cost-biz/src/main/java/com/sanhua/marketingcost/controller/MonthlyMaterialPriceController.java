@@ -25,6 +25,7 @@ public class MonthlyMaterialPriceController {
       @RequestParam(required = false) String organization,
       @RequestParam(required = false) String pricingType,
       @RequestParam(required = false) String specification,
+      @RequestParam(required = false) String model,
       @RequestParam(required = false) String unit,
       @RequestParam(required = false) String currency,
       @RequestParam(required = false) String taxBasis,
@@ -45,7 +46,7 @@ public class MonthlyMaterialPriceController {
                 taxBasis,
                 supplier,
                 page,
-                size)));
+                size, model)));
   }
 
   @GetMapping("/{id}")

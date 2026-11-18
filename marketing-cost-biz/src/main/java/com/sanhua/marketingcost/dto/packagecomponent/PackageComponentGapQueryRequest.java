@@ -8,6 +8,7 @@ import lombok.Setter;
 public class PackageComponentGapQueryRequest {
   private String periodMonth;
   private String packageMaterialCode;
+  private String model;
   private String gapType;
   private String oaPushStatus;
   private Integer page;

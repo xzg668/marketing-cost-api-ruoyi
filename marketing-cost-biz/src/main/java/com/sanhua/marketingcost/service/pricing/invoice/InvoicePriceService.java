@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.pricing.invoice;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
@@ -80,9 +82,15 @@ public final class InvoicePriceService {
   }
 
   public Page current(String unit,String org,String material,int page,int size) {
+    return current(unit, org, material, page, size, null);
+  }
+
+  public Page current(String unit,String org,String material,int page,int size,String model) {
     scope(unit,org); pagination(page,size); material = material(material);
     String where = "p.business_unit_type=? AND p.org_code=?"; var args = new ArrayList<Object>(List.of(unit,org));
     if (material != null) { where += " AND p.material_code=?"; args.add(material); }
+    String modelKey = PriceModelSearch.normalize(model);
+    if (!modelKey.isEmpty()) { where += " AND " + PriceModelSearch.condition("?", "p.specification"); args.add(modelKey); }
     where += " AND p.batch_id=(SELECT MAX(v.batch_id) FROM lp_invoice_price v WHERE v.business_unit_type=p.business_unit_type AND v.org_code=p.org_code AND v.material_code=p.material_code)";
     long total = Objects.requireNonNull(jdbc.queryForObject("SELECT COUNT(*) FROM lp_invoice_price p WHERE " + where,Long.class,args.toArray()));
     args.add(size); args.add((page-1)*size);

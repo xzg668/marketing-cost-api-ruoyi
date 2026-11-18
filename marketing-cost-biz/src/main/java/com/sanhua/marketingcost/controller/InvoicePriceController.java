@@ -31,8 +31,8 @@ public class InvoicePriceController {
   @GetMapping
   @PreAuthorize("@ss.hasPermi('price:invoice:list')")
   public CommonResult<InvoicePriceService.Page> current(@RequestParam String orgCode,@RequestParam(required=false) String materialCode,
-      @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) {
-    return CommonResult.success(service.current(unit(),orgCode,materialCode,page,size));
+      @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size,@RequestParam(required=false) String model) {
+    return CommonResult.success(service.current(unit(),orgCode,materialCode,page,size,model));
   }
   @GetMapping("/history")
   @PreAuthorize("@ss.hasPermi('price:invoice:query')")

@@ -27,7 +27,9 @@ public class TechnicalDataPendingState {
       w.last_checked_at IS NOT NULL AND w.technical_check_json IS NOT NULL
       AND w.technical_check_fingerprint IS NOT NULL
       AND (JSON_CONTAINS(JSON_EXTRACT(w.technical_check_json,'$.check.modules[*].required'),'true')
-        OR JSON_CONTAINS(JSON_EXTRACT(w.technical_check_json,'$.check.modules[*].reasonCode'),'"PRICE_BASIS_UNCONFIRMED"'))
+        OR JSON_CONTAINS(JSON_EXTRACT(w.technical_check_json,'$.check.modules[*].reasonCode'),'"PRICE_BASIS_UNCONFIRMED"')
+        OR JSON_CONTAINS(w.technical_check_json,JSON_OBJECT('moduleType','SALARY','availability','UNCONFIRMED',
+          'reasonCode','SALARY_SOURCE_UNCONFIRMED'),'$.check.modules'))
       AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_task t WHERE t.oa_form_item_id=w.oa_form_item_id
         AND BINARY t.accounting_month=BINARY w.period_month AND t.active_flag=1)
       """+" AND "+ACTIVE_PRODUCT;
@@ -60,6 +62,9 @@ public class TechnicalDataPendingState {
       if(!first) sql.append(" OR ");first=false;
       sql.append("JSON_CONTAINS(w.technical_check_json,JSON_OBJECT('moduleType',?,'required',CAST('true' AS JSON)),'$.check.modules')");
       args.add(module);
+      if("SALARY".equals(module)) {
+        sql.append(" OR JSON_CONTAINS(w.technical_check_json,JSON_OBJECT('moduleType','SALARY','availability','UNCONFIRMED','reasonCode','SALARY_SOURCE_UNCONFIRMED'),'$.check.modules')");
+      }
       if("PRICE".equals(module)) {
         sql.append(" OR JSON_CONTAINS(w.technical_check_json,JSON_OBJECT('moduleType','PRICE','reasonCode','PRICE_BASIS_UNCONFIRMED'),'$.check.modules')");
       }
@@ -114,7 +119,7 @@ public class TechnicalDataPendingState {
             || !java.util.Objects.equals(check.fingerprint(),row.getString("technical_check_fingerprint")))
           throw new IllegalStateException("待办检查身份或版本不一致");
         return new Work(row.getLong("id"),row.getLong("oa_form_item_id"),row.getString("period_month"),
-            row.getString("business_unit_type"),row.getString("technical_check_fingerprint"),row.getString("token"),check);
+            row.getString("business_unit_type"),row.getString("technical_check_fingerprint"),row.getString("token"),TechnicalDataSalarySupplement.apply(check));
       } catch(com.fasterxml.jackson.core.JsonProcessingException | RuntimeException ex) {
         retry(new Work(row.getLong("id"),row.getLong("oa_form_item_id"),row.getString("period_month"),
             row.getString("business_unit_type"),row.getString("technical_check_fingerprint"),row.getString("token"),null));

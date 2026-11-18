@@ -18,7 +18,9 @@ public record OaTechnicalDispatchRequest(
 
   public record Product(
       @NotBlank @Size(max = 128) String rowId,
-      @NotBlank @Size(max = 128) String productNo,
+      @Size(max = 128) String productNo,
+      String productModel,
+      String specification,
       @NotEmpty @Size(max = 9) List<@NotNull @Valid Assignment> assignments) {
     @JsonAnySetter
     public void rejectUnknown(String name, JsonNode value) { unknown(name); }

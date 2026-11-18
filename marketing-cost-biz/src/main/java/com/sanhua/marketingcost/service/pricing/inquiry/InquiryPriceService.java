@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.pricing.inquiry;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.util.*;
@@ -92,11 +94,16 @@ public final class InquiryPriceService {
   }
 
   public Page<Current> current(String unit, String month, String search, int page, int size) {
+    return current(unit, month, search, page, size, null);
+  }
+
+  public Page<Current> current(String unit, String month, String search, int page, int size, String model) {
     scope(unit, month);
     pagination(page, size);
     String key = InquiryNames.normalize(search);
     var sources =
         repository.current(unit, month, false).stream()
+            .filter(source -> PriceModelSearch.matches(model, source.rule().specification()))
             .filter(
                 source ->
                     key.isBlank()

@@ -34,9 +34,10 @@ public class ScrapPriceController {
       @RequestParam(required = false) String priceType,
       @RequestParam(required = false) String supplier,
       @RequestParam(defaultValue = "1") int page,
-      @RequestParam(defaultValue = "20") int size) {
+      @RequestParam(defaultValue = "20") int size,
+      @RequestParam(required = false) String model) {
     return CommonResult.success(
-        query.list(unit(), priceMonth, keyword, priceType, supplier, page, size));
+        query.list(unit(), priceMonth, keyword, priceType, supplier, page, size, model));
   }
 
   @GetMapping("/{id}")

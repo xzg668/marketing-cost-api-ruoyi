@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.pricing;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -14,10 +15,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import org.apache.poi.ss.usermodel.BorderStyle;
-import org.apache.poi.ss.usermodel.FillPatternType;
-import org.apache.poi.ss.usermodel.IndexedColors;
-import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -135,51 +132,21 @@ public class SupplierPriceReviewExportService {
   private byte[] workbook(Map<String, String> codes, Map<String, SupplierPriceReviewMaterials.Material> materials,
       Map<String, Map<String, Relation>> groups, Map<String, LinkedHashSet<String>> messages) throws IOException {
     try (var book = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
-      var sheet = book.createSheet("供货比率补齐");
-      var headerStyle = book.createCellStyle();
-      headerStyle.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
-      headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-      var font = book.createFont(); font.setBold(true); font.setColor(IndexedColors.WHITE.getIndex());
-      headerStyle.setFont(font);
-      var textStyle = book.createCellStyle(); textStyle.setDataFormat(book.createDataFormat().getFormat("@"));
-      textStyle.setWrapText(true);
-      var ratioStyle = book.createCellStyle(); ratioStyle.setDataFormat(book.createDataFormat().getFormat("0.0000%"));
-      ratioStyle.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex());
-      ratioStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-      ratioStyle.setBorderBottom(BorderStyle.HAIR);
-      var headers = List.of("物料代码", "物料名称", "规格", "型号", "单位", "物料形态属性", "供应商代码", "供应商名称", "供货比例", "说明", "取价规则");
-      var header = sheet.createRow(0); header.setHeightInPoints(28);
-      for (int i = 0; i < headers.size(); i++) {
-        var cell = header.createCell(i); cell.setCellValue(headers.get(i)); cell.setCellStyle(headerStyle);
-      }
-      int rowIndex = 1;
+      var sheet = new SupplierSupplyRatioWorkbook(book);
+      int count = 0;
       for (var entry : groups.entrySet()) {
         var material = materials.get(entry.getKey());
         for (var relation : entry.getValue().values()) {
-          var row = sheet.createRow(rowIndex++); row.setHeightInPoints(32);
-          String[] values = {codes.get(entry.getKey()), material.materialName(), material.specification(),
-              material.model(), material.unit(), material.materialShape(), relation.supplierCode(),
-              relation.supplierName(), null, String.join("；", messages.get(entry.getKey())), relation.selectionRule()};
-          for (int i = 0; i < values.length; i++) {
-            var cell = row.createCell(i); cell.setCellStyle(i == 8 ? ratioStyle : textStyle);
-            if (values[i] != null) cell.setCellValue(values[i]);
-          }
-          if (relation.ratio() != null) row.getCell(8).setCellValue(relation.ratio().doubleValue());
+          sheet.append(new SupplierSupplyRatioWorkbook.Entry(codes.get(entry.getKey()), material.materialName(),
+              material.specification(), material.model(), material.unit(), material.materialShape(),
+              relation.supplierCode(), relation.supplierName(), relation.ratio(),
+              String.join("；", messages.get(entry.getKey())), relation.selectionRule()));
+          count++;
         }
       }
-      if (rowIndex == 1) throw new IllegalArgumentException("当前没有可导出的供应商关系");
-      int[] widths = {21, 30, 48, 48, 12, 20, 20, 38, 18, 50, 32};
-      for (int i = 0; i < widths.length; i++) sheet.setColumnWidth(i, widths[i] * 256);
-      sheet.createFreezePane(1, 1);
-      sheet.setAutoFilter(new CellRangeAddress(0, rowIndex - 1, 0, headers.size() - 1));
-      var drawing = sheet.createDrawingPatriarch();
-      var comment = drawing.createCellComment(book.getCreationHelper().createClientAnchor());
-      comment.setAuthor("财务导入说明");
-      comment.setString(book.getCreationHelper().createRichTextString(
-          "黄色列填写0%至100%的供货比例；空白为未维护，0%为明确退出供货。\n"
-          + "保留同一料号完整供应商集合，补齐后到供货比率表导入。名称缺失时也需补齐；型号未维护时保留空白。\n"
-          + "本表包含待确认和已确认最高价的物料，以及其当前全部供货关系。导出不会确认审核、重算或修改已保存成本。"));
-      header.getCell(8).setCellComment(comment);
+      if (count == 0) throw new IllegalArgumentException("当前没有可导出的供应商关系");
+      sheet.finish();
+      SupplierSupplyRatioWorkbook.addInstructions(book);
       book.write(output);
       return output.toByteArray();
     }

@@ -164,11 +164,13 @@ public class TechnicalDataOaDispatchService {
       var flow = workflow.bindFlow(task, document.peer());
       workflow.bindDispatch(task, flow, version, Objects.requireNonNull(firstMessage));
       var product = products.findProducts(task.getId()).getFirst();
-      // 产品料号来自任务源记录，模块负责人来自本次已校验的分工。
+      // 无料号新品沿用任务保存的型号、规格，不将其伪装成料号。
       productCommands.add(
         new OaTechnicalDispatchRequest.Product(
           task.getOaFormItemId().toString(),
           product.getMaterialNo(),
+          product.getSourceModel(),
+          product.getSourceSpec(),
           assignments
         )
       );

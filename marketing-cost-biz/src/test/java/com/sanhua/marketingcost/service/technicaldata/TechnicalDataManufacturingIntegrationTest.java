@@ -64,6 +64,28 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
   @Autowired private TechnicalDataBomPriceCheck bomPriceCheck;
   @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository oaRecipients;
 
+  @Autowired private TechnicalDataManufacturingSourceQuery manufacturingSourceQuery;
+
+  @Test void approvedCompleteTreeKeepsSavedTechnicalInputsWhenCurrentU9CannotBeRead() {
+    confirmC();
+    service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    var context = contexts.load(itemId, "COMMERCIAL", "210", "2026-09");
+    var source = drawingVersions.selectById(context.sourceVersionId());
+    assertThat(source.getCompositionFingerprint()).isNotBlank();
+    source.setVersionStatus("APPROVED"); drawingVersions.updateById(source);
+    var before = jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? ORDER BY id", source.getId());
+    var saved = service.read(productId, null, WANG).saved();
+    org.mockito.Mockito.reset(u9);
+    when(u9.query(any())).thenThrow(new IllegalStateException("current U9 unavailable"));
+    var assessment = manufacturingSourceQuery.inspect(context);
+    assertThat(assessment.unavailableReason()).isNull();
+    assertThat(assessment.hasMissing()).isFalse();
+    assertThat(assessment.hasUnresolved()).isFalse();
+    assertThat(service.read(productId, null, WANG).saved()).isEqualTo(saved);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? ORDER BY id", source.getId())).isEqualTo(before);
+    org.mockito.Mockito.verifyNoInteractions(u9);
+  }
+
   @Test void savingCompleteManufacturingChecksOrdinaryPurchasedBomChildrenBeforeApproval() {
     confirmC();
     jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?", key + "-C");

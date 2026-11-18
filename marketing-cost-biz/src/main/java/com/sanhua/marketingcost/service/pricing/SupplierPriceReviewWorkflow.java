@@ -4,12 +4,15 @@ import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.SupplierPriceConfirmationResponse;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.SupplierPriceDecision;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.SupplierPriceDecisionMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
+import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDateTime;
 import java.util.Objects;
@@ -19,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 通用确认流程，不读取任何一种价格源表。每种价格通过价格准备返回统一候选快照。 */
 @Service
 public class SupplierPriceReviewWorkflow {
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SupplierPriceReviewWorkflow.class);
   private final QuotePricingPeriod pricingPeriods;
 
   public record Confirmation(String periodMonth, String scopeKey, String fingerprint,
@@ -89,7 +93,46 @@ public class SupplierPriceReviewWorkflow {
     return decision;
   }
 
-  /** 确认事务提交后重新生成；失败不能抹掉已经确认的审计记录。 */
+  /** 仅在 confirm 的独立事务提交后调用；后续失败仍须返回已经保存的选择。 */
+  public SupplierPriceConfirmationResponse repriceConfirmed(SupplierPriceDecision decision) {
+    String saved = SupplierPriceSelectionService.FALLBACK_HIGH.equals(decision.getDecision())
+        ? "最高价选择已保存" : "新增审核选择已保存";
+    try {
+      var result = reprice(decision);
+      return new SupplierPriceConfirmationResponse(decision.getId(), decision.getDecision(),
+          "COMPLETED", saved + "，取价结果已更新", result);
+    } catch (RuntimeException failure) {
+      boolean blocked = failure instanceof EffectiveTechnicalDataException
+          || failure instanceof QuoteIngestException || failure instanceof IllegalArgumentException;
+      String reason = blocked && failure.getMessage() != null && !failure.getMessage().isBlank()
+          ? failure.getMessage() : "暂时无法完成，请稍后在核算工作台重试";
+      String message = saved + "；重新取价未完成：" + reason;
+      log.warn("Confirmed supplier decision {} could not complete repricing", decision.getId(), failure);
+      try {
+        // 只补充仍待处理记录的原因，不能覆盖并发完成的状态或改写已确认的选择。
+        decisions.update(null, Wrappers.<SupplierPriceDecision>lambdaUpdate()
+            .eq(SupplierPriceDecision::getId, decision.getId())
+            .eq(SupplierPriceDecision::getRetryStatus, "WAITING")
+            .set(SupplierPriceDecision::getRetryMessage, message.length() > 500 ? message.substring(0, 500) : message));
+      } catch (RuntimeException recordingFailure) {
+        log.warn("Could not record repricing failure for confirmed supplier decision {}", decision.getId(), recordingFailure);
+      }
+      QuotePricePrepareWorkbenchResponse current = null;
+      try {
+        var query = new QuotePricePrepareGenerateRequest();
+        query.setPeriodMonth(decision.getPeriodMonth());
+        query.setPriceAsOfTime(decision.getPricingDate().atStartOfDay());
+        query.setRefreshCandidates(true);
+        current = prices.checkPriceSources(decision.getOaNo(), decision.getOaFormItemId(), query);
+      } catch (RuntimeException readFailure) {
+        log.warn("Could not refresh price view for confirmed supplier decision {}", decision.getId(), readFailure);
+      }
+      return new SupplierPriceConfirmationResponse(decision.getId(), decision.getDecision(),
+          blocked ? "BLOCKED" : "FAILED", message, current);
+    }
+  }
+
+  /** 确认事务提交后重新生成；导入重试仍沿用原异常与重试处理。 */
   public QuotePricePrepareWorkbenchResponse reprice(SupplierPriceDecision decision) {
     var request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(decision.getPeriodMonth());

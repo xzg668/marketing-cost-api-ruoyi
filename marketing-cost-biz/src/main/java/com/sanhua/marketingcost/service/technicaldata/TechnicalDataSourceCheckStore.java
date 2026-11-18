@@ -49,7 +49,7 @@ public class TechnicalDataSourceCheckStore {
       if (!Objects.equals(workspace.getTechnicalCheckFingerprint(), check.fingerprint())) {
         throw new IllegalStateException("一键核算保存的资料检查版本不一致");
       }
-      return check;
+      return TechnicalDataSalarySupplement.apply(check);
     } catch (JsonProcessingException exception) {
       throw new IllegalStateException("一键核算保存的资料检查结果无法读取", exception);
     }

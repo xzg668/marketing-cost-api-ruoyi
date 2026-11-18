@@ -18,8 +18,9 @@ class TechnicalBomAbsenceQueryTest {
   final ElectronicDrawingSourceNodeRepository nodes=mock(ElectronicDrawingSourceNodeRepository.class);
   final ElectronicDrawingProductLookup products=mock(ElectronicDrawingProductLookup.class);
   final DrawingVerificationService verification=mock(DrawingVerificationService.class);
+  final DrawingVerificationResultMapper results=mock(DrawingVerificationResultMapper.class);
   final TechnicalBomAbsenceQuery query=new TechnicalBomAbsenceQuery(u9,monthly,contexts,nodes,products,verification,
-      mock(DrawingVerificationResultMapper.class),mock(DrawingVerificationCodec.class));
+      results,new DrawingVerificationCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
   final QuoteBomReadContext context=new QuoteBomReadContext(1L,2L,"OA","2026-11","COMMERCIAL","NEW","新品","","MODEL",
       "210","COMMERCIAL",LocalDate.of(2026,11,16),LocalDateTime.of(2026,11,16,12,0));
 
@@ -43,6 +44,29 @@ class TechnicalBomAbsenceQueryTest {
     }
     when(contexts.load(2L,"COMMERCIAL","210","2026-11")).thenReturn(drawing(ElectronicDrawingWorkflowStage.NOT_FOUND));
     assertThat(query.read(context).allowsEntry()).isTrue();
+  }
+  @Test void receivedUnknownGroupWithFailedImportIsNotAbsenceAndNeverTriggersAnotherDrawingRequest() {
+    when(u9.readLive(context)).thenReturn(CurrentU9BomResult.notFound("已核实不存在"));
+    var scope=drawing(ElectronicDrawingWorkflowStage.VALIDATION_FAILED);
+    when(contexts.load(2L,"COMMERCIAL","210","2026-11")).thenReturn(scope);
+    var task=new com.sanhua.marketingcost.entity.DrawingVerificationTask();task.setId(49L);
+    task.setTaskState("RECEIVED");task.setConsumptionState("FAILED");task.setCurrentResultId(45L);
+    when(verification.current(scope)).thenReturn(java.util.Optional.of(task));
+    when(verification.matchesCurrentInputs(scope,task)).thenReturn(true);
+    var result=new com.sanhua.marketingcost.entity.DrawingVerificationResult();result.setId(45L);result.setVerificationTaskId(49L);
+    result.setRawSummaryJson("""
+      {"taskId":"received-source","status":"reviewRequired","differenceCount":0,
+       "data":{"_unknown_1":{"company":"test","params":{"items":[{"no":"1","code":"RFK-A04-005224","name":"感温部件","qty":"1","mat":"","grade":"B","hsf":"A","weight":null,"note":""}]}}},
+       "plm_data":[{"drawingNo":"RFGQ05E-2.5-0326-MX","plmVersion":"V001"}],
+       "verificationStatus":"partial","editUrl":null,"reviewReasons":[],"expiresAt":null,"revision":1,"confirmedAt":null,
+       "deliveryStatus":null,"deliveryAttempts":0,"engine":null,"drafts":{},"draftEngine":null,"schemaVersion":2}
+      """);
+    when(results.findById(45L)).thenReturn(result);
+    var state=query.read(context);
+    assertThat(state.state()).isEqualTo("UNCONFIRMED");assertThat(state.message()).contains("图库已返回资料");
+    assertThat(state.allowsEntry()).isFalse();
+    verify(verification,never()).start(any(),any());verify(verification,never()).restart(any(),any(),any());
+    verifyNoInteractions(products);
   }
   private ElectronicDrawingWorkContext drawing(String stage) {
     return new ElectronicDrawingWorkContext(null,0,1L,null,1L,2L,null,"OA","NEW",null,

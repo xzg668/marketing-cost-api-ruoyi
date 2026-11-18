@@ -45,11 +45,12 @@ public class PriceFixedItemController {
       @RequestParam(required = false) String sourceType,
       @RequestParam(required = false) String pricingMonth,
       @RequestParam(required = false, defaultValue = "1") Integer page,
-      @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
+      @RequestParam(required = false, defaultValue = "20") Integer pageSize,
+      @RequestParam(required = false) String model) {
     int current = page == null || page < 1 ? 1 : page;
     int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
     Page<PriceFixedItem> pager =
-        priceFixedItemService.page(materialCode, supplierCode, sourceType, pricingMonth, current, size);
+        priceFixedItemService.page(materialCode, supplierCode, sourceType, pricingMonth, current, size, model);
     return CommonResult.success(new PriceFixedItemPageResponse(pager.getTotal(), pager.getRecords()));
   }
 

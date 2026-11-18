@@ -29,4 +29,14 @@ class QuoteProductIdentityUtilsTest {
     String code = QuoteProductIdentityUtils.resolveCostingCode(null, "M".repeat(100), null);
     assertThat(code).startsWith("MODEL#").hasSize(64);
   }
+  @Test void specificationAloneProvidesStableIdentityWithoutChangingExistingKeys() {
+    OaFormItem item = new OaFormItem(); item.setSpec(" 160hz 板换 ");
+    assertThat(QuoteProductIdentityUtils.resolveCostingCode(item)).isEqualTo("SPEC:160HZ 板换");
+    item.setCustomerDrawing("D-1");
+    assertThat(QuoteProductIdentityUtils.resolveCostingCode(item)).isEqualTo("DRAWING:D-1");
+    item.setSunlModel("M-1");
+    assertThat(QuoteProductIdentityUtils.resolveCostingCode(item)).isEqualTo("MODEL:M-1");
+    item.setMaterialNo("P-1");
+    assertThat(QuoteProductIdentityUtils.resolveCostingCode(item)).isEqualTo("P-1");
+  }
 }

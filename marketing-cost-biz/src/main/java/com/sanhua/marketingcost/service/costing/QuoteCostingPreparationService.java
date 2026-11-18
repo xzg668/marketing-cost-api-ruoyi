@@ -94,27 +94,23 @@ public class QuoteCostingPreparationService {
     else if (view != null && !view.canCost()) {
       message = view.syncError() != null ? view.syncError() : "当前为" + view.label() + "，暂不能核算";
     }
-    boolean supplement =
-        Boolean.TRUE.equals(
-            jdbc.queryForObject(
-                "SELECT EXISTS(SELECT 1 FROM lp_quote_tech_task WHERE oa_form_id=? AND (? IS NULL"
-                    + " OR oa_form_item_id=?))",
-                Boolean.class,
-                formId,
-                itemId,
-                itemId));
+    String month = pricingPeriods.currentMonth();
+    // 存在旧任务不代表当前还有可填写内容；入口必须与当前月份实际模块／待补产品一致。
+    var supplements = gaps.forForm(formId, itemId, month);
+    boolean supplement = !supplements.isEmpty()
+        || (itemId == null
+            ? pendingProducts.count("ALL", null, month, null, oaNo) > 0
+            : pendingProducts.hasPendingItem(oaNo, itemId, month));
     return new State(
         formId,
         allowed ? "AVAILABLE" : "WAITING",
         view == null ? null : view.state(),
         allowed,
-        supplement
-            || (itemId == null
-                ? pendingProducts.count("ALL", null, null, null, oaNo) > 0
-                : pendingProducts.hasPendingItem(oaNo, itemId)),
+        supplement,
         itemId == null ? items.size() : 1,
         message,
-        gaps.forForm(formId, itemId, pricingPeriods.currentMonth()));
+        supplements);
+
   }
 
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)

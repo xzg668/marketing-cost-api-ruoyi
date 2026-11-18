@@ -356,9 +356,9 @@ public class TechnicalDataPublicSourceCheck {
         return fact(
             context,
             TechnicalDataModuleType.SALARY,
-            TechnicalDataAvailability.UNCONFIRMED,
+            TechnicalDataAvailability.MISSING,
             "SALARY_SOURCE_UNCONFIRMED",
-            "尚无完整 CMS 发布证据，不能把未查到的工资当作确实不存在",
+            TechnicalDataSalarySupplement.REASON,
             reference);
       return fact(
           context,

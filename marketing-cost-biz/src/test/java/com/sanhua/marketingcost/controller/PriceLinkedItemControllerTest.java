@@ -79,16 +79,16 @@ class PriceLinkedItemControllerTest {
   void page_delegatesToService() {
     PriceLinkedItemDto row = new PriceLinkedItemDto();
     row.setId(12L);
-    when(priceLinkedItemService.page(eq("2026-05"), eq("M001"), eq(false), eq(2), eq(50)))
+    when(priceLinkedItemService.page(eq("2026-05"), eq("M001"), eq(false), eq(2), eq(50), eq(" rfk ")))
         .thenReturn(new PageResult<>(List.of(row), 101L));
 
     CommonResult<PageResult<PriceLinkedItemDto>> result =
-        controller.page("2026-05", "M001", false, 2, 50);
+        controller.page("2026-05", "M001", false, 2, 50, " rfk ");
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getTotal()).isEqualTo(101L);
     assertThat(result.getData().getList()).hasSize(1);
-    verify(priceLinkedItemService).page("2026-05", "M001", false, 2, 50);
+    verify(priceLinkedItemService).page("2026-05", "M001", false, 2, 50, " rfk ");
   }
 
   @Test

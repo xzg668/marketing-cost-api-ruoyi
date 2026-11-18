@@ -73,4 +73,33 @@ class TechnicalBomPreviewContextTest {
     assertThatThrownBy(() -> query.readQuote(20L,"2026-10",admin)).hasMessageContaining("无权");
     verifyNoInteractions(organizations);
   }
+
+  @Test void quoteStaffCanReadSourceButCannotUseAdminTrialEndpoints() {
+    fixture(); var quote = new TechnicalDataActor(3L,"quote",Set.of("ingest:quote:cost-run:execute"));
+    var result = query.readPreview(20L,"2026-10",quote);
+    assertThat(result.context().oaFormItemId()).isEqualTo(20L);
+    assertThat(result.context().accountingMonth()).isEqualTo("2026-10");
+    assertThatThrownBy(() -> query.readQuote(20L,"2026-10",quote)).hasMessageContaining("管理员");
+    assertThat(query.readPreview(20L,"2026-10",admin).product()).isEqualTo(result.product());
+  }
+
+  @Test void sourcePreviewDoesNotGrantUnassignedQuotesToTechniciansOrOaSessions() {
+    for (var actor : List.of(new TechnicalDataActor(2L,"tech",Set.of("technical:data:task:list","technical:data:task:edit")),
+        new TechnicalDataActor(1L,"oa",Set.of("*:*:*"),10L))) {
+      assertThatThrownBy(() -> query.readPreview(20L,"2026-10",actor)).hasMessageContaining("无权");
+    }
+    verifyNoInteractions(items,forms,organizations);
+  }
+
+  @Test void sourcePreviewRejectsCrossBusinessUnitDeletedProductsAndInvalidMonths() {
+    fixture();
+    assertThatThrownBy(() -> query.readPreview(20L,"2026-13",admin)).hasMessageContaining("月份");
+    items.selectById(20L).setDeleted(1);
+    assertThatThrownBy(() -> query.readPreview(20L,"2026-10",admin)).hasMessageContaining("不存在");
+    items.selectById(20L).setDeleted(0);
+    var auth = new UsernamePasswordAuthenticationToken("admin",null,List.of());
+    auth.setDetails(Map.of("businessUnitType","HOUSEHOLD"));SecurityContextHolder.getContext().setAuthentication(auth);
+    assertThatThrownBy(() -> query.readPreview(20L,"2026-10",admin)).hasMessageContaining("无权");
+    verifyNoInteractions(organizations);
+  }
 }

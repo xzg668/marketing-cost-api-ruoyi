@@ -109,9 +109,9 @@ class SavedCostGapExportBrowserSession extends OriginalPricingIntegrationTestBas
       byte[] workbook=exports.export(prefix,QuoteCostingGapExportService.Category.RATIO);
       try(var book=new XSSFWorkbook(new ByteArrayInputStream(workbook))) {
         var sheet=book.getSheetAt(0);assertThat(sheet.getLastRowNum()).isEqualTo(3);
-        assertThat(sheet.getRow(0).getPhysicalNumberOfCells()).isEqualTo(10);
+        assertThat(sheet.getRow(0).getPhysicalNumberOfCells()).isEqualTo(11);
         assertThat(book.getSheetAt(1).getLastRowNum()).isEqualTo(1);
-        for(int i=1;i<=3;i++) assertThat(sheet.getRow(i).getCell(6).getStringCellValue()).isEqualTo(ratio);
+        for(int i=1;i<=3;i++) assertThat(sheet.getRow(i).getCell(0).getStringCellValue()).isEqualTo(ratio);
       }
       var parsed=new SupplierSupplyRatioWorkbookParserImpl().parse(new ByteArrayInputStream(workbook),"待补.xlsx",null);
       assertThat(parsed.getErrors()).isEmpty();assertThat(parsed.getRows()).hasSize(3);

@@ -18,8 +18,8 @@ public class MaterialPriceTypeController {
   public CommonResult<MaterialPriceTypePageResponse> list(@RequestParam String period,
       @RequestParam(required = false) String materialCode,
       @RequestParam(required = false) String priceOrgCode,
-      @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int pageSize) {
-    return CommonResult.success(service.page(materialCode, period, priceOrgCode, page, pageSize));
+      @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int pageSize, @RequestParam(required = false) String model) {
+    return CommonResult.success(service.page(materialCode, period, priceOrgCode, page, pageSize, model));
   }
 
   @PreAuthorize("@ss.hasPermi('base:material-price-type:edit')")

@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
@@ -38,8 +39,7 @@ public class QuoteCostingGapExportService {
   private static final Pattern SUMMARY = Pattern.compile(
       "(缺少供货比率|供货比率不足|缺少原料价格|缺少废料价格|缺少可用价格|原料价格待核对|废料价格待核对|价格待核对|计价资料待完善|取价异常|价格待就绪)：([^；]+)");
   private static final Pattern ERROR_MATERIAL = Pattern.compile("(?:物料|料号|父件)[=:：]([^，；,\\s]+)");
-  public static final List<String> RATIO_HEADERS = List.of("组织", "来源", "供应商名称", "供应商代码", "采购分类",
-      "物料名称", "物料代码", "规格型号", "所属事业部", "供货比例");
+  public static final List<String> RATIO_HEADERS = SupplierSupplyRatioWorkbook.HEADERS;
   private final QuoteRequestQueryService quotes;
   private final MaterialMasterRawMapper materials;
   private final SupplierSupplyRatioMapper ratios;
@@ -73,6 +73,7 @@ public class QuoteCostingGapExportService {
     try (var book = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
       if (category == Category.RATIO) ratioSheet(book, data.gaps(), data.masters(), data.unit(), data.month());
       detailSheet(book, category.label + "明细", data.gaps(), data.masters());
+      if (category == Category.RATIO) SupplierSupplyRatioWorkbook.addInstructions(book);
       book.write(output); return output.toByteArray();
     }
   }
@@ -248,8 +249,8 @@ public class QuoteCostingGapExportService {
 
   private void ratioSheet(XSSFWorkbook book, Map<String, Gap> gaps, Map<String, MaterialMasterRaw> masters,
       String unit, String month) {
-    var sheet = sheet(book, "供货比率补齐", RATIO_HEADERS);
-    if (gaps.isEmpty()) return;
+    var sheet = new SupplierSupplyRatioWorkbook(book);
+    if (gaps.isEmpty()) { sheet.finish(); return; }
     var params = new HashMap<String, Object>(); params.put("unit", unit); params.put("codes", gaps.values().stream().map(g -> g.code).toList());
     params.put("date", LocalDate.now(CostPricingPeriodUtils.BUSINESS_ZONE)); params.put("month", month);
     Map<String, LinkedHashMap<String, Map<String, Object>>> suppliers = new LinkedHashMap<>();
@@ -271,20 +272,13 @@ public class QuoteCostingGapExportService {
       row.put("supplier_name", relation.getSupplierName()); row.put("ratio", relation.getSupplyRatio());
       row.put("rule", relation.getSelectionRule()); row.put("material_name", relation.getMaterialName());
       row.put("spec_model", relation.getSpecModel());
+      row.put("unit", relation.getUnit()); row.put("shape", relation.getMaterialShape());
       var group = suppliers.get(key(relation.getRequestedMaterialCode()));
       if (group == null) continue;
       String identity = supplierKey(row);
       if (identity.isBlank()) continue;
       var prior = group.computeIfAbsent(identity, ignored -> new HashMap<>()); prior.putAll(row);
     }
-    var percent = book.createCellStyle(); percent.setDataFormat(book.createDataFormat().getFormat("0.00%"));
-    percent.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex()); percent.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-    var comment = sheet.createDrawingPatriarch().createCellComment(book.getCreationHelper().createClientAnchor());
-    comment.setAuthor("供货比率填写说明");
-    comment.setString(book.getCreationHelper().createRichTextString(
-        "填写实际供货比例，如5%；也可填写“无供货比率，取最高价”。空白表示未维护，0%表示退出供货。"
-        + "请保留同一料号全部供应商，填好后到供货比率页面导入。型号、规格与原因见第二张明细表。"));
-    sheet.getRow(0).getCell(9).setCellComment(comment);
     for (var gap : gaps.values()) {
       var master = masters.get(key(gap.code)); var group = suppliers.get(key(gap.code));
       // 供应商按代码去重；旧的仅名称关系只在唯一同名代码存在时合并，保留其比率。
@@ -301,21 +295,19 @@ public class QuoteCostingGapExportService {
       }
       if (group.isEmpty()) group.put("", Map.of());
       for (var supplier : group.values()) {
-        var row = sheet.createRow(sheet.getLastRowNum() + 1);
-        String[] values = {first(text(supplier.get("org_code")), unit.equals("PLATE") ? "220" : "210"),
-            text(supplier.get("source_name")), text(supplier.get("supplier_name")), text(supplier.get("supplier_code")),
-            first(text(supplier.get("purchase_class")), master == null ? null : master.getPurchaseCategory()),
-            first(master == null ? null : master.getMaterialName(), text(supplier.get("material_name"))), gap.code,
-            first(master == null ? null : master.getMaterialSpec(), master == null ? null : master.getMaterialModel(), text(supplier.get("spec_model"))),
-            master == null ? "" : text(master.getProductionDivision()), text(supplier.get("rule"))};
-        cells(row, values);
-        var cell = row.getCell(9); cell.setCellStyle(percent);
-        if (supplier.get("ratio") instanceof BigDecimal ratio) cell.setCellValue(ratio.doubleValue());
+        // 规格和型号分别写入；有档案但型号缺失时保持空白，不用规格冒充型号。
+        sheet.append(new SupplierSupplyRatioWorkbook.Entry(gap.code,
+            first(master == null ? null : master.getMaterialName(), text(supplier.get("material_name"))),
+            master == null ? null : master.getMaterialSpec(),
+            master == null ? text(supplier.get("spec_model")) : master.getMaterialModel(),
+            first(master == null ? null : master.getUnit(), text(supplier.get("unit"))),
+            first(master == null ? null : master.getShapeAttr(), text(supplier.get("shape"))),
+            text(supplier.get("supplier_code")), text(supplier.get("supplier_name")),
+            supplier.get("ratio") instanceof BigDecimal ratio ? ratio : null,
+            String.join("；", gap.reasons), text(supplier.get("rule"))));
       }
     }
-    finish(sheet, RATIO_HEADERS.size());
-    int[] widths = {10, 20, 40, 20, 20, 28, 22, 45, 22, 30};
-    for (int i=0;i<widths.length;i++) sheet.setColumnWidth(i,widths[i]*256);
+    sheet.finish();
   }
 
   private void detailSheet(XSSFWorkbook book, String title, Map<String, Gap> gaps, Map<String, MaterialMasterRaw> masters) {

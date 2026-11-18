@@ -18,6 +18,7 @@ WHERE business_unit_type=#{bu} AND pricing_month=#{q.month}
 <if test="q.materialCode != null">AND material_code=#{q.materialCode} AND BINARY material_code=BINARY #{q.materialCode}</if>
 <if test="q.organization != null">AND (organization_mask &amp; #{q.organizationMask}) != 0</if>
 <if test="q.pricingType != null">AND pricing_type=#{q.pricingType}</if>
+<if test="q.model != null">AND LOCATE(#{q.model},LOWER(COALESCE(specification,''))) &gt; 0</if>
 <if test="q.specification != null">AND BINARY specification=BINARY #{q.specification}</if>
 <if test="q.unit != null">AND BINARY pricing_unit=BINARY #{q.unit}</if>
 <if test="q.currency != null">AND currency=#{q.currency}</if>

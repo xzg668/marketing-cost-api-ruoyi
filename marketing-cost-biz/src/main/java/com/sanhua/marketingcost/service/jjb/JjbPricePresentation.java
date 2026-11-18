@@ -10,7 +10,7 @@ import java.util.*;
 
 /** Displays the original adopted source and its unit, without selecting today's prices. */
 final class JjbPricePresentation {
-  private record Fact(Long id, String material, String unit, String source) {}
+  private record Fact(Long id, String material, String unit, String source, String settlementCopperWeightG) {}
   private final ObjectMapper json;
   private final MonthlyPriceDocumentCodec codec;
 
@@ -24,8 +24,9 @@ final class JjbPricePresentation {
     var facts = new ArrayList<Fact>();
     if (calculation != null) for (var adopted : calculation.adoptedPrices()) {
       var family = adopted.request().family();
+      var evidence = tree(adopted.selection().fact().evidence().json());
       facts.add(new Fact(adopted.selection().monthlyPriceId(), family.materialCode(), family.unit(),
-          source(tree(adopted.selection().fact().evidence().json()).path("sourceKind").asText())));
+          source(evidence.path("sourceKind").asText()), settlementCopperWeight(evidence)));
     }
     var byPreparation = new HashMap<Long, Fact>();
     for (var prepared : preparations) {
@@ -38,7 +39,7 @@ final class JjbPricePresentation {
       var evidence = tree(captured.path("selection").path("fact").path("evidence").path("json").asText(null));
       if (Objects.equals(prepared.getMaterialCode(), family.path("materialCode").asText()))
         byPreparation.put(prepared.getId(), new Fact(prepared.getMonthlyPriceId(), prepared.getMaterialCode(),
-            text(family, "unit"), source(text(evidence, "sourceKind"))));
+            text(family, "unit"), source(text(evidence, "sourceKind")), settlementCopperWeight(evidence)));
     }
     var result = new ArrayList<Row>();
     for (var row : rows) {
@@ -51,10 +52,22 @@ final class JjbPricePresentation {
           .filter(fact -> Objects.equals(row.code(), fact.material())).toList();
       var units = matching.stream().map(Fact::unit).filter(Objects::nonNull).distinct().toList();
       var sources = matching.stream().map(Fact::source).filter(Objects::nonNull).distinct().toList();
+      var copperWeights = matching.stream().map(Fact::settlementCopperWeightG).distinct().toList();
       result.add(row.toBuilder().unit(units.size() == 1 ? units.getFirst() : row.unit())
-          .priceSource(sources.isEmpty() ? source(row.priceSource()) : String.join("、", sources)).build());
+          .priceSource(sources.isEmpty() ? source(row.priceSource()) : String.join("、", sources))
+          .settlementCopperWeightG(copperWeights.size() == 1 ? copperWeights.getFirst() : null).build());
     }
     return result;
+  }
+
+  private static String settlementCopperWeight(JsonNode evidence) {
+    if (!Set.of("SETTLE_FIXED", "SETTLE_LINKED", "SETTLEMENT_FIXED", "SETTLEMENT_LINKED")
+        .contains(evidence.path("sourceKind").asText())) return null;
+    var rule = evidence.path("source").path("rule");
+    String value = text(rule, "copperWeightG");
+    if (value == null) value = text(rule, "originalCopperWeightG");
+    if (value == null) return null;
+    return new java.math.BigDecimal(value).stripTrailingZeros().toPlainString();
   }
 
   static String source(String kind) {

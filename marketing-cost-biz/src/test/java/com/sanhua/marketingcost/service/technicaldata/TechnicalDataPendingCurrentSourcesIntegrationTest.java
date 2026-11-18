@@ -70,6 +70,64 @@ class TechnicalDataPendingCurrentSourcesIntegrationTest extends OriginalPricingI
     SecurityContextHolder.clearContext();
   }
 
+  @Test void oldUnapprovedSalaryAppearsWithoutReplayingCostingOrWritingSavedCheck() throws Exception {
+    var now=LocalDateTime.now();
+    var saved=new TechnicalDataSourceCheckResponse(itemId,"2026-11","old-check",now,List.of(
+        new TechnicalDataModuleRequirement("SALARY",false,"SALARY_SOURCE_UNCONFIRMED","工时未审批，工资尚未生效",
+            TechnicalDataAvailability.UNCONFIRMED,"original-salary-evidence",now)),null,List.of());
+    jdbc.update("UPDATE lp_quote_costing_workspace SET technical_check_json=? WHERE oa_form_item_id=?",
+        json.writeValueAsString(Map.of("check",saved,"pending",Map.of("check",saved))),itemId);
+    var before=protectedRows();
+    clearInvocations(sources);
+    var page=tasks.workbench(1,20,null,"2026-11",null,oaNo,ADMIN);
+    assertThat(page.total()).isEqualTo(1);
+    assertThat(page.summary().total()).isEqualTo(1);
+    assertThat(page.records().getFirst().product().modules()).filteredOn(m -> m.required())
+        .singleElement().satisfies(m -> {
+          assertThat(m.moduleType()).isEqualTo("SALARY");
+          assertThat(m.sourceAvailability()).isEqualTo("MISSING");
+          assertThat(m.requirementReason()).contains("补录", "审批");
+          assertThat(m.sourceReference()).isEqualTo("original-salary-evidence");
+        });
+    assertThat(pending.hasPendingItem(oaNo,itemId)).isTrue();
+    verifyNoInteractions(sources);
+    assertThat(protectedRows()).isEqualTo(before);
+  }
+
+  @Test void uncheckedOrFailedSalaryDoesNotBecomeASupplementTask() throws Exception {
+    var now=LocalDateTime.now();
+    for (var module : List.of(
+        new TechnicalDataModuleRequirement("SALARY",false,"SALARY_QUERY_FAILED","查询失败",TechnicalDataAvailability.ERROR,null,now),
+        new TechnicalDataModuleRequirement("SALARY",false,"SOURCE_NOT_CHECKED","未检查",TechnicalDataAvailability.UNCONFIRMED,null,null),
+        new TechnicalDataModuleRequirement("SALARY",false,"SALARY_SOURCE_UNCONFIRMED","未检查",TechnicalDataAvailability.UNCONFIRMED,null,null))) {
+      var saved=new TechnicalDataSourceCheckResponse(itemId,"2026-11","old-check",now,List.of(module),null,List.of());
+      jdbc.update("UPDATE lp_quote_costing_workspace SET technical_check_json=? WHERE oa_form_item_id=?",
+          json.writeValueAsString(Map.of("check",saved)),itemId);
+      assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isZero();
+      assertThat(pending.hasPendingItem(oaNo,itemId)).isFalse();
+    }
+  }
+
+  @Test void oldUnapprovedSalaryLeavesPendingAfterApprovedPublicSalaryArrives() throws Exception {
+    var now=LocalDateTime.now();
+    var saved=new TechnicalDataSourceCheckResponse(itemId,"2026-11","old-check",now,List.of(
+        new TechnicalDataModuleRequirement("SALARY",false,"SALARY_SOURCE_UNCONFIRMED","工资未审批",
+            TechnicalDataAvailability.UNCONFIRMED,"original-salary-evidence",now)),null,List.of());
+    jdbc.update("UPDATE lp_quote_costing_workspace SET technical_check_json=? WHERE oa_form_item_id=?",
+        json.writeValueAsString(Map.of("check",saved,"pending",Map.of("check",saved))),itemId);
+    var before=jdbc.queryForMap("SELECT technical_check_fingerprint,last_checked_at,workspace_status FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId);
+    when(sources.check(any(),any())).thenReturn(new TechnicalDataSourceCheckService.Check(List.of(
+        new TechnicalDataSourceFact(TechnicalDataModuleType.SALARY,TechnicalDataAvailability.AVAILABLE,
+            "SALARY_SOURCE_AVAILABLE","工资审批已生效","approved",now)),Map.of()));
+    assertThat(pendingState.changed(new TechnicalDataPendingState.Change(java.util.Set.of("SALARY"),
+        "COMMERCIAL",java.util.Set.of(oaNo),java.util.Set.of(itemId)))).isEqualTo(1);
+    assertThat(pendingRefresh.runBatch()).isEqualTo(1);
+    assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isZero();
+    assertThat(jdbc.queryForMap("SELECT technical_check_fingerprint,last_checked_at,workspace_status FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId)).isEqualTo(before);
+    assertThat(json.readTree(jdbc.queryForObject("SELECT technical_check_json FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",String.class,itemId)).path("check"))
+        .isEqualTo(json.readTree(json.writeValueAsString(saved)));
+  }
+
   @Test void importingMissingPublicDataRemovesPendingRowWithoutAnySupplementWrites() {
     assertThat(pending.count("ALL",null,"2026-11",null,oaNo)).isEqualTo(1);
     var before=protectedRows();

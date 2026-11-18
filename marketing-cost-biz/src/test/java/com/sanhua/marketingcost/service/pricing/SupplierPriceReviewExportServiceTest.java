@@ -9,6 +9,7 @@ import com.sanhua.marketingcost.entity.monthly.MonthlySupplierRatioInput;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.impl.SupplierSupplyRatioWorkbookParserImpl;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook;
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -61,6 +62,11 @@ class SupplierPriceReviewExportServiceTest {
         .singleElement().satisfies(row -> assertThat(row.getSpecModel()).isNull());
     try (var book = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
       var sheet = book.getSheetAt(0);
+      assertThat(sheet.getSheetName()).isEqualTo(SupplierSupplyRatioWorkbook.SHEET_NAME);
+      assertThat(java.util.stream.IntStream.range(0, sheet.getRow(0).getLastCellNum())
+          .mapToObj(i -> sheet.getRow(0).getCell(i).getStringCellValue()).toList())
+          .isEqualTo(SupplierSupplyRatioWorkbook.HEADERS);
+      assertThat(book.getSheet("填写说明")).isNotNull();
       assertThat(sheet.getRow(1).getCell(0).getCellType()).isEqualTo(CellType.STRING);
       assertThat(sheet.getRow(1).getCell(2).getStringCellValue()).isEqualTo("真正规格");
       assertThat(sheet.getRow(5).getCell(9).getStringCellValue()).contains("最高价");

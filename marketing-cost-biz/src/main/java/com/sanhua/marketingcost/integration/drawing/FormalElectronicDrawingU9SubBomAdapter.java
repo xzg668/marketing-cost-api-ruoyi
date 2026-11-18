@@ -137,11 +137,12 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
   /**
    * 原始层只会为已经进入报价的顶层产品建立快照。电子图库分支中的制造件可能尚未成为
    * 顶层产品，因此正式原始层查无结果时，继续复用现有 U9 ODS 直接子项读取服务。
+   * 当前关系不按图库版本生效日过滤；正式月度快照和已确认完整 BOM 的读取保持原样。
    */
   private SubBomResult queryCurrentU9Source(
       SubBomQuery query, String parentCode, String formalGap) {
     List<BomU9Source> roots = sourceDataService.listDedupedChildren(
-        parentCode, query.effectiveDate(), query.priceOrgCode());
+        parentCode, null, query.priceOrgCode());
     if (roots == null || roots.isEmpty()) {
       return SubBomResult.failure(Status.NOT_FOUND, parentCode, formalGap);
     }
@@ -189,7 +190,7 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
           row.getQtyPerParent(), row.getParentBaseQty(), unit(row), row.getChildSeq()));
       if (!isPurchase(nature)) {
         List<BomU9Source> children = sourceDataService.listDedupedChildren(
-            materialCode, query.effectiveDate(), query.priceOrgCode());
+            materialCode, null, query.priceOrgCode());
         if (children != null && !children.isEmpty()) {
           appendCurrentU9Source(
               query, materialCode, nodeKey, children, ancestors, sourceKeys, nodes, depth + 1);

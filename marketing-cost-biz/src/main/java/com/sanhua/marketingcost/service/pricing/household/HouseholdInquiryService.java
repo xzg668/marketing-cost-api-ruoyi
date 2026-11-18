@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.pricing.household;
 
+import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
+
 import static com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryModels.*;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -186,9 +188,13 @@ public class HouseholdInquiryService {
     });
   }
   public PricePage current(String unit,String material,String sourceMonth,int page,int size) {
+    return current(unit, material, sourceMonth, page, size, null);
+  }
+  public PricePage current(String unit,String material,String sourceMonth,int page,int size,String model) {
+    model=PriceModelSearch.normalize(model);
     scope(unit);pagination(page,size);material=optionalSearch(material);
     if(sourceMonth!=null)month(sourceMonth);
-    return new PricePage(queries.page(unit,material,sourceMonth,size,(page-1)*size).stream().map(this::view).toList(),queries.count(unit,material,sourceMonth),page,size);
+    return new PricePage(queries.page(unit,material,sourceMonth,size,(page-1)*size,model).stream().map(this::view).toList(),queries.count(unit,material,sourceMonth,model),page,size);
   }
   public PricePage history(String unit,String material,int page,int size) {
     scope(unit);pagination(page,size);material=optionalMaterial(material);

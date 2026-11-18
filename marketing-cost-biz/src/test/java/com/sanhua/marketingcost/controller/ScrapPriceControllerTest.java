@@ -43,8 +43,8 @@ class ScrapPriceControllerTest {
   @Test
   void listPermissionDoesNotAllowImportOrEdit() throws Exception {
     authenticate("price:scrap:list");
-    controller.list("2026-10", null, null, null, 1, 20);
-    verify(query).list("HOUSEHOLD", "2026-10", null, null, null, 1, 20);
+    controller.list("2026-10", null, null, null, 1, 20, null);
+    verify(query).list("HOUSEHOLD", "2026-10", null, null, null, 1, 20, null);
     assertThatThrownBy(() -> controller.preview(file, "2026-10"))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> controller.confirm(file, "2026-10", "token", () -> "test"))
@@ -69,7 +69,7 @@ class ScrapPriceControllerTest {
   @Test
   void noPermissionCannotReadPrices() {
     authenticate("unrelated");
-    assertThatThrownBy(() -> controller.list("2026-10", null, null, null, 1, 20))
+    assertThatThrownBy(() -> controller.list("2026-10", null, null, null, 1, 20, null))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> controller.detail(1L)).isInstanceOf(AccessDeniedException.class);
     verifyNoInteractions(query);

@@ -44,6 +44,13 @@ public class TechnicalBomPreviewController {
     return execute(() -> service.searchForQuote(itemId, accountingMonth, keyword, actors.current()));
   }
 
+  @GetMapping("/source")
+  @PreAuthorize("@ss.hasRole('admin') or @ss.hasAnyPermi('technical:data:admin:operate','ingest:quote:cost-run:execute')")
+  public CommonResult<TechnicalBomApplicationService.Response> source(
+      @PathVariable Long itemId, @RequestParam String accountingMonth) {
+    return execute(() -> service.sourceForQuote(itemId, accountingMonth, actors.current()));
+  }
+
   @GetMapping("/reference")
   public CommonResult<TechnicalBomApplicationService.Preview> reference(
       @PathVariable Long itemId, @RequestParam String accountingMonth, @RequestParam String code) {

@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.service.pricing.inquiry.InquiryWorkbookParser;
 import com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryWorkbookParser;
 import com.sanhua.marketingcost.service.platematerial.PlateMaterialWorkbookParser;
 import com.sanhua.marketingcost.service.scrap.ScrapPriceWorkbookParser;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
@@ -57,6 +58,36 @@ class DownloadedWorkbookContractTest {
   @Test void supplierAllowsActualPercentageWithoutLosingIdentity() throws Exception {
     var result=new SupplierSupplyRatioWorkbookParserImpl().parse(new ByteArrayInputStream(fixture("supplier")),"供货.xlsx",null);
     assertThat(result.getErrors()).isEmpty();assertThat(result.getRows()).hasSize(1);
+    assertThat(result.getRows().getFirst().getMaterialCode()).isEqualTo("001234");
+    assertThat(result.getRows().getFirst().getSpecModel()).isEqualTo("MODEL");
+    assertThat(result.getRows().getFirst().getSupplyRatio()).isEqualByComparingTo("0.25");
+  }
+  @Test void supplierTemplateAndListExportShareBackendHeadersAndInstructionsAndRoundTrip() throws Exception {
+    for (String suffix : List.of("blank", "filled", "data")) {
+      var bytes=Files.readAllBytes(Path.of(System.getProperty("workbook.fixture.dir"),"supplier-"+suffix+".xlsx"));
+      try(var book=WorkbookFactory.create(new ByteArrayInputStream(bytes));var expected=new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+        assertThat(book.getSheetAt(0).getSheetName()).isEqualTo(SupplierSupplyRatioWorkbook.SHEET_NAME);
+        var header=book.getSheetAt(0).getRow(0);
+        assertThat(java.util.stream.IntStream.range(0,header.getLastCellNum())
+            .mapToObj(i->header.getCell(i).getStringCellValue()).toList()).isEqualTo(SupplierSupplyRatioWorkbook.HEADERS);
+        SupplierSupplyRatioWorkbook.addInstructions(expected);
+        var actualHelp=book.getSheet("填写说明");var expectedHelp=expected.getSheet("填写说明");
+        assertThat(actualHelp.getLastRowNum()).isEqualTo(expectedHelp.getLastRowNum());
+        var formatter=new org.apache.poi.ss.usermodel.DataFormatter();
+        for(int r=0;r<=expectedHelp.getLastRowNum();r++)for(int c=0;c<3;c++)
+          assertThat(formatter.formatCellValue(actualHelp.getRow(r).getCell(c)))
+              .as("%s instructions row %s column %s",suffix,r,c)
+              .isEqualTo(formatter.formatCellValue(expectedHelp.getRow(r).getCell(c)));
+      }
+      if(suffix.equals("data")) {
+        var parsed=new SupplierSupplyRatioWorkbookParserImpl().parse(new ByteArrayInputStream(bytes),"列表.xlsx",null);
+        assertThat(parsed.getErrors()).isEmpty();assertThat(parsed.getRows()).hasSize(3);
+        assertThat(parsed.getRows().get(0).getSupplyRatio()).isZero();
+        assertThat(parsed.getRows().get(1).getSupplyRatio()).isNull();
+        assertThat(parsed.getRows().get(1).getSelectionRule()).isEqualTo("无供货比率，取最高价");
+        assertThat(parsed.getRows().get(2).getSupplyRatio()).isEqualByComparingTo("0.000001");
+      }
+    }
   }
   @Test void plateAndScrapContractsRemainCompatible() throws Exception {
     var plate=new PlateMaterialWorkbookParser().parse(fixture("plate"),"板片.xlsx");assertThat(plate.errors()).isEmpty();assertThat(plate.rows()).hasSize(1);

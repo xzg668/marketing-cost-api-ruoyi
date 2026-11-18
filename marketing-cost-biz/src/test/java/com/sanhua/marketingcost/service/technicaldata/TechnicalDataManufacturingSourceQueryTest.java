@@ -27,9 +27,11 @@ class TechnicalDataManufacturingSourceQueryTest {
   private final MaterialMasterRawMapper materials = mock(MaterialMasterRawMapper.class);
   private final ElectronicDrawingU9SubBomPort u9 = mock(ElectronicDrawingU9SubBomPort.class);
   private final QuoteBomSupplementVersionMapper versions = mock(QuoteBomSupplementVersionMapper.class);
+  private final com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper details = mock(com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper.class);
   private final TechnicalDataManufacturingSourceQuery query = new TechnicalDataManufacturingSourceQuery(
       sources, com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingTestScope.create(materials, u9),
-      new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), versions, materials, mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing.class));
+      new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), versions, materials, mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing.class),
+      details);
   private final ElectronicDrawingWorkContext context = new ElectronicDrawingWorkContext(11L, 2, 21L, 31L,
       10L, 11L, "TASK", "OA", "TOP", null, null, null, null, null, "FULL_BOM", "2026-09",
       "210", "COMMERCIAL", "COMMERCIAL", "210", true, true, "EDITING", "MATERIALS_MATCHED", null, null, null);
@@ -134,6 +136,73 @@ class TechnicalDataManufacturingSourceQueryTest {
     assertThat(result.nodes().getFirst().sourceNetWeight()).isEqualByComparingTo("0.010");
     assertThat(result.nodes().getFirst().sourceNetWeightUnit()).isEqualTo("kg");
     verify(materials, times(1)).selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL"));
+  }
+
+  @Test void approvedExpandedBranchUsesSavedPurchaseDescendantsDespiteChangedCurrentU9() {
+    version.setVersionStatus("APPROVED"); version.setQuoteProductCode("TOP");
+    version.setCompositionFingerprint("accepted-tree");
+    var core = node(1, "CORE", null);
+    var membrane = node(2, "721850074", "1");
+    var ambiguous = node(3, null, "1"); ambiguous.setMatchStatus("AMBIGUOUS");
+    when(sources.findByVersionId(31L)).thenReturn(List.of(core, membrane, ambiguous));
+    when(details.selectList(any())).thenReturn(List.of(
+        saved(0, "TOP", null, "/TOP/", null, null, "E_DRAWING"),
+        saved(1, "CORE", "TOP", "/TOP/ED:1/", "制造件", 1L, "E_DRAWING"),
+        saved(2, "721850074", "CORE", "/TOP/ED:1/U9:2/", "制造件", 1L, "U9_EXPANDED"),
+        saved(3, "3012402681163", "721850074", "/TOP/ED:1/U9:2/U9:3/", "制造件", 1L, "U9_EXPANDED"),
+        saved(4, "301240268", "3012402681163", "/TOP/ED:1/U9:2/U9:3/U9:4/", "采购件", 1L, "U9_EXPANDED")));
+    var result = query.inspect(context);
+    assertThat(result.unavailableReason()).isNull();
+    assertThat(result.hasMissing()).isFalse(); assertThat(result.hasUnresolved()).isFalse();
+    var film = result.nodes().stream().filter(row -> row.sourceNodeId().equals(2L)).findFirst().orElseThrow();
+    assertThat(film.state()).isEqualTo(TechnicalDataManufacturingSourceQuery.State.U9_READY);
+    assertThat(film.existingChildren()).extracting(U9Node::materialCode).containsExactly("3012402681163", "301240268");
+    verifyNoInteractions(u9, materials);
+  }
+
+  @Test void savedSameCodeInAnotherBranchDoesNotFillMissingManufacturingLeaf() {
+    version.setVersionStatus("APPROVED"); version.setQuoteProductCode("TOP"); version.setCompositionFingerprint("saved");
+    when(sources.findByVersionId(31L)).thenReturn(List.of(node(1, "M", null), node(2, "M", null)));
+    when(details.selectList(any())).thenReturn(List.of(
+        saved(0, "TOP", null, "/TOP/", null, null, "E_DRAWING"),
+        saved(1, "M", "TOP", "/TOP/A/", "制造件", 1L, "E_DRAWING"),
+        saved(1, "M", "TOP", "/TOP/B/", "制造件", 2L, "E_DRAWING"),
+        saved(2, "RAW", "M", "/TOP/B/RAW/", "采购件", 2L, "U9_EXPANDED")));
+    var result = query.inspect(context);
+    assertThat(result.nodes()).extracting(Node -> Node.state().name()).containsExactly("MISSING_RAW", "U9_READY");
+    assertThat(result.hasMissing()).isTrue();
+    verifyNoInteractions(u9);
+  }
+
+  @Test void approvedEmptyOrForeignTreeIsAnErrorAndNeverRebuiltByRead() {
+    version.setVersionStatus("APPROVED"); version.setQuoteProductCode("TOP"); version.setCompositionFingerprint("saved");
+    when(sources.findByVersionId(31L)).thenReturn(List.of(node(1, "M", null)));
+    assertThat(query.inspect(context).unavailableReason()).contains("明细为空");
+    var root = saved(0, "TOP", null, "/TOP/", null, null, "E_DRAWING");
+    var child = saved(1, "RAW", "TOP", "/TOP/RAW/", "采购件", 1L, "E_DRAWING");
+    child.setOaFormItemId(999L);
+    when(details.selectList(any())).thenReturn(List.of(root, child));
+    assertThat(query.inspect(context).unavailableReason()).contains("归属");
+    verifyNoInteractions(u9);
+  }
+
+  @Test void unapprovedTreeCannotOverrideCurrentSourceAndCurrentMissingStillNeedsEntry() {
+    version.setVersionStatus("DRAFT"); version.setCompositionFingerprint("composed-draft");
+    when(sources.findByVersionId(31L)).thenReturn(List.of(node(1, "A", null)));
+    when(materials.selectByLatestBatchAndCodes(any(), any(), any())).thenReturn(List.of(material("A")));
+    when(u9.query(any())).thenReturn(SubBomResult.failure(Status.NOT_FOUND, "A", "没有下级"));
+    assertThat(query.inspect(context).hasMissing()).isTrue();
+    verifyNoInteractions(details);
+  }
+
+  private com.sanhua.marketingcost.entity.QuoteBomSupplementDetail saved(int level, String code,
+      String parent, String path, String shape, Long source, String kind) {
+    var row = new com.sanhua.marketingcost.entity.QuoteBomSupplementDetail();
+    row.setId((long) level + 100); row.setSupplementVersionId(31L); row.setOaFormItemId(11L);
+    row.setQuoteProductCode("TOP"); row.setLevel(level); row.setMaterialCode(code); row.setParentCode(parent);
+    row.setPath(path); row.setShapeAttr(shape); row.setSourceElectronicNodeId(source); row.setNodeSourceType(kind);
+    row.setQtyPerParent(BigDecimal.ONE); row.setParentBaseQty(BigDecimal.ONE); row.setUnit("只");
+    return row;
   }
 
   private ElectronicDrawingSourceNode node(long id, String code, String parent) {

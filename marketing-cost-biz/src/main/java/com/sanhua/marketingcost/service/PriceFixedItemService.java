@@ -13,8 +13,12 @@ public interface PriceFixedItemService {
    * @param sourceType    V46 新增：按来源类型筛选（PURCHASE/MAKE/SETTLE/SCRAP），null=全部
    * @param pricingMonth  V46 新增：按结算期间筛选（YYYY-MM），null=全部
    */
+  default Page<PriceFixedItem> page(String materialCode, String supplierCode, String sourceType,
+      String pricingMonth, int page, int pageSize) {
+    return page(materialCode, supplierCode, sourceType, pricingMonth, page, pageSize, null);
+  }
   Page<PriceFixedItem> page(String materialCode, String supplierCode, String sourceType,
-      String pricingMonth, int page, int pageSize);
+      String pricingMonth, int page, int pageSize, String model);
 
   PriceFixedItem create(PriceFixedItemUpdateRequest request);
 

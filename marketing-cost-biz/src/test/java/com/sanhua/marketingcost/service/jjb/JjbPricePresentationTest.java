@@ -39,6 +39,38 @@ class JjbPricePresentationTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"SETTLE_LINKED,0.119,0.119", "SETTLE_FIXED,0,0", "SETTLE_LINKED,0.119000000000,0.119"})
+  void showsOnlySavedSettlementCopperWithoutChangingNetWeightOrAmounts(String kind, String weight, String expected) throws Exception {
+    var row = JjbReadModel.Row.builder().code("M").kind("PART").netWeight("5")
+        .quantity("2").unitPrice("0.023200").amount("0.046400")
+        .sources(List.of(new JjbReadModel.Source("lp_price_prepare_item", 7L, "已保存"))).build();
+    var prepared = preparation(kind,"只","M",1);
+    var codec = new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(json);
+    var captured = (com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(codec.unwrap(prepared.getInputSnapshotJson()));
+    var evidence = json.createObjectNode().put("sourceKind",kind);
+    evidence.putObject("source").putObject("rule").put("copperWeightG",weight).put("zincWeightG","9.876");
+    ((com.fasterxml.jackson.databind.node.ObjectNode)captured.path("selection").path("fact").path("evidence")).put("json",json.writeValueAsString(evidence));
+    prepared.setInputSnapshotJson(codec.wrap(json.writeValueAsString(captured)));
+    var result = new JjbPricePresentation(json).apply(List.of(row),null,List.of(prepared)).getFirst();
+    assertThat(result.settlementCopperWeightG()).isEqualTo(expected);
+    assertThat(result.netWeight()).isEqualTo("5");
+    assertThat(result.quantity()).isEqualTo("2");
+    assertThat(result.unitPrice()).isEqualTo(row.unitPrice());
+    assertThat(result.amount()).isEqualTo(row.amount());
+    // Matching the saved preparation reference is required even when the material code matches.
+    prepared.setId(8L);
+    assertThat(new JjbPricePresentation(json).apply(List.of(row),null,List.of(prepared)).getFirst().settlementCopperWeightG()).isNull();
+  }
+
+  @Test void missingWeightsAndOtherPriceSourcesDoNotInventSettlementCopper() throws Exception {
+    var row=JjbReadModel.Row.builder().code("M").kind("PART")
+        .sources(List.of(new JjbReadModel.Source("lp_price_prepare_item",7L,"已保存"))).build();
+    for(var kind:List.of("SETTLE_LINKED","SETTLE_FIXED","LINKED","PURCHASE_FIXED"))
+      assertThat(new JjbPricePresentation(json).apply(List.of(row),null,List.of(preparation(kind,"只","M",1)))
+          .getFirst().settlementCopperWeightG()).isNull();
+  }
+
   private PricePrepareItem preparation(String kind, String unit, String code, int multiplier) throws Exception {
     var prepared = new PricePrepareItem();prepared.setId(7L);prepared.setMaterialCode(code);
     prepared.setResultRefType("MONTHLY_PRICE");prepared.setMonthlyPriceId(9L);

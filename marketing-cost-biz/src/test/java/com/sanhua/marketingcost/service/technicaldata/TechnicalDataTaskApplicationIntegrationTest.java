@@ -86,6 +86,49 @@ class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegra
   }
   @AfterEach void clearContext() { SecurityContextHolder.clearContext(); }
 
+  @Autowired private TechnicalDataSalaryApplicationService salaries;
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"S95BH-160HZ-01,", ",板换规格160HZ", "S95BH-160HZ-01,板换规格160HZ"})
+  void productWithoutMaterialNumberCanBeDispatchedUsingModelOrSpecification(String model, String specification) {
+    var ids = products(1);
+    long item = ids.getFirst();
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL,sunl_model=?,spec=? WHERE id=?", model, specification, item);
+    var published = service.publish(request(ids, 101L), ADMIN);
+    assertThat(published.items()).hasSize(1);
+    var product = published.items().getFirst().task().products().getFirst();
+    assertThat(product.materialNo()).isNull();
+    var body = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.node.ObjectNode.class);
+    org.mockito.Mockito.verify(oa).submit(body.capture());
+    String remark = body.getValue().path("remark").asText();
+    if (model != null) assertThat(remark).contains("型号：" + model);
+    if (specification != null) assertThat(remark).contains("规格：" + specification);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?", Integer.class, item)).isZero();
+  }
+
+  @Test void unapprovedSalaryCanBeAssignedAndOpenedByItsTechnician() {
+    var ids = products(1);
+    long item = ids.getFirst();
+    String code = jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?", String.class, item);
+    jdbc.update("INSERT INTO cms_workshop_labor_raw(import_batch_id,row_no,period,parent_code,source_row_id,business_unit_type) VALUES(1,1,'2026-08',?,?,'COMMERCIAL')", code, code);
+    jdbc.update("INSERT INTO cms_sync_publish_signal(batch_no,cost_year,business_unit_type,status) VALUES(?,2026,'COMMERCIAL','SUCCESS')", UUID.randomUUID().toString());
+    var checked = sources.recheck(item,"2026-09");
+    assertThat(checked.modules()).filteredOn(m -> "SALARY".equals(m.moduleType()))
+        .allSatisfy(m -> {
+          assertThat(m.required()).isTrue();
+          assertThat(m.availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+          assertThat(m.reasonCode()).isEqualTo("SALARY_SOURCE_UNCONFIRMED");
+        });
+    var assigned = service.publish(request(ids,101L),ADMIN).items().getFirst().task();
+    var product = assigned.products().getFirst();
+    assertThat(product.modules()).filteredOn(m -> "SALARY".equals(m.moduleType()))
+        .allSatisfy(m -> assertThat(m.assigneeUserId()).isEqualTo(101L));
+    var tech = new TechnicalDataActor(101L,"技术员",Set.of("technical:data:task:edit"));
+    assertThat(salaries.get(product.id(),null,tech).editable()).isTrue();
+    assertThat(salaries.get(product.id(),null,tech).items()).isEmpty();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?",Integer.class,item)).isZero();
+  }
+
   @Test void adminStartsUnassignedProductWithoutOaAndCannotEnterAssignedProducts() {
     var ids = products(1);
     var tech = new TechnicalDataActor(101L, "技术员", Set.of("technical:data:task:edit"));

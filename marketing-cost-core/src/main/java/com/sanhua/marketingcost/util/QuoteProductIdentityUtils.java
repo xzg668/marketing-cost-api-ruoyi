@@ -15,13 +15,16 @@ public final class QuoteProductIdentityUtils {
 
   private QuoteProductIdentityUtils() {}
 
-  /** 优先使用正式料号；新品依次使用三花型号、客户图号生成内部核算键。 */
+  /** 保留既有料号、型号、客户图号身份；仅有规格的新品使用独立规格键。 */
   public static String resolveCostingCode(OaFormItem item) {
     if (item == null) {
       return null;
     }
-    return resolveCostingCode(
+    String existing = resolveCostingCode(
         item.getMaterialNo(), item.getSunlModel(), item.getCustomerDrawing());
+    if (existing != null) return existing;
+    String specification = trimToNull(item.getSpec());
+    return specification == null ? null : synthetic("SPEC", specification);
   }
 
   public static String resolveCostingCode(

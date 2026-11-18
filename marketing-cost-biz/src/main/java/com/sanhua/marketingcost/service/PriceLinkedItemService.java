@@ -27,9 +27,11 @@ public interface PriceLinkedItemService {
       boolean includeHistory,
       int page,
       int pageSize) {
-    List<PriceLinkedItemDto> rows = list(pricingMonth, materialCode, includeHistory);
-    return new PageResult<>(rows, (long) rows.size());
+    return page(pricingMonth, materialCode, includeHistory, page, pageSize, null);
   }
+
+  PageResult<PriceLinkedItemDto> page(String pricingMonth, String materialCode,
+      boolean includeHistory, int page, int pageSize, String model);
 
   PriceLinkedItemDto create(PriceLinkedItemUpdateRequest request);
 

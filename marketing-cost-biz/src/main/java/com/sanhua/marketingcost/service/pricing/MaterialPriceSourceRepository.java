@@ -50,7 +50,10 @@ public class MaterialPriceSourceRepository {
       """;
 
   public Page list(Map<String,Object> params) {
-    String filter = WHERE + " AND (:attributeFilter='' OR (:attributeFilter='EMPTY' AND (" + ATTRIBUTE + ") IS NULL) OR (" + ATTRIBUTE + ")=:attributeFilter)";
+    params = new HashMap<>(params);
+    params.putIfAbsent("model", "");
+    String filter = WHERE + " AND (:model='' OR " + PriceModelSearch.condition(":model", "s.material_model", "s.material_spec") + ")"
+        + " AND (:attributeFilter='' OR (:attributeFilter='EMPTY' AND (" + ATTRIBUTE + ") IS NULL) OR (" + ATTRIBUTE + ")=:attributeFilter)";
     long total = Objects.requireNonNull(jdbc.queryForObject("SELECT COUNT(*) " + FROM + filter,params,Long.class));
     var rows = jdbc.query("SELECT s.*," + ATTRIBUTE + " material_attribute,COALESCE(a.row_version,0) row_version,"
         + "(s.auto_attribute IS NOT NULL) automatic "
