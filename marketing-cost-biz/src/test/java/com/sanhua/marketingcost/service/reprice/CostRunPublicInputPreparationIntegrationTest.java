@@ -28,14 +28,18 @@ class CostRunPublicInputPreparationIntegrationTest {
   static int year;
 
   @org.junit.jupiter.params.ParameterizedTest
-  @org.junit.jupiter.params.provider.CsvSource({"标准品,0,1", "非标品,0.05,1.05", "标准品,0.12,1.12"})
+  @org.junit.jupiter.params.provider.CsvSource({
+      "标准品,0,,标准品,1", "非标品,0.05,,非标品,1.05", "标准品,0.12,20,标准品,1.12",
+      "非标品,0.12,9.999999,非标品,1.12", "非标品,0.12,10,标准品,1",
+      "非标品,0.12,10.01,标准品,1", "定制品,0.05,100,定制品,1.05", "OEM,0.06,10,OEM,1.06"})
   void finishedToBarePropertyMatchesInSingleAndPreparedBatch(
-      String attribute, String uplift, String coefficient) {
+      String attribute, String uplift, String usage, String effectiveAttribute, String coefficient) {
     var f=fixture();String bare=f.product()+"-BARE";
     var jdbc=CostRunFeeSourcesIntegrationTest.jdbc;
     jdbc.update("UPDATE lp_material_master_raw SET bare_code=? WHERE material_code=? AND organization_code='COMMERCIAL'",bare,f.product());
     insert("lp_product_property",Map.of("property_year",year,"business_unit_type","COMMERCIAL",
         "product_code",bare,"product_attr",attribute));
+    jdbc.update("UPDATE lp_product_property SET estimated_annual_usage_wan=? WHERE product_code=?",usage,bare);
     jdbc.update("DELETE FROM lp_product_property_rule WHERE property_year=? AND product_attr=? AND business_unit_type='COMMERCIAL'",year,attribute);
     insert("lp_product_property_rule",Map.of("property_year",year,"product_attr",attribute,
         "business_unit_type","COMMERCIAL","uplift_rate",uplift));
@@ -44,13 +48,16 @@ class CostRunPublicInputPreparationIntegrationTest {
     var requests=requests(f,2);var single=calculate(requests.getFirst().context());
     var adjusted=single.stream().filter(x->"ADJUSTED_MANUFACTURE_COST".equals(x.getCostCode())).findFirst().orElseThrow();
     assertThat(adjusted.getRate()).isEqualByComparingTo(coefficient);
-    assertThat(adjusted.getRemark()).contains("属性="+attribute,"属性匹配料号="+bare);
+    assertThat(adjusted.getRemark()).contains("；属性="+effectiveAttribute+"；","属性匹配料号="+bare);
+    if (!attribute.equals(effectiveAttribute)) {
+      assertThat(adjusted.getRemark()).contains("原属性=非标品", "预计年用量（万只）="+usage);
+    }
     preparation.prepare(requests);
     for(var request:requests) {
       var batch=calculate(request.context());
       var row=batch.stream().filter(x->"ADJUSTED_MANUFACTURE_COST".equals(x.getCostCode())).findFirst().orElseThrow();
       assertThat(row.getRate()).isEqualByComparingTo(coefficient);
-      assertThat(row.getRemark()).contains("属性="+attribute,"属性匹配料号="+bare);
+      assertThat(row.getRemark()).isEqualTo(adjusted.getRemark());
     }
   }
 

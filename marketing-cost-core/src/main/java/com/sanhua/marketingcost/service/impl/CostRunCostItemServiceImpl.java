@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunFeeQuery;
 import com.sanhua.marketingcost.service.costing.CostRunPreparedInputs;
+import com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients;
 import com.sanhua.marketingcost.service.costing.ResolvedOrdinaryCost;
 import com.sanhua.marketingcost.service.costing.CmsCostCompositions;
 import com.sanhua.marketingcost.service.costing.CmsCompositionReader;
@@ -2664,7 +2665,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           : raw == null ? null : raw.getBareCode();
     }
 
-    String propertyCode = com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients.lookupCode(code, bareCode);
+    String propertyCode = ProductPropertyCoefficients.lookupCode(code, bareCode);
     ProductProperty property = prepared == null ? cacheLookup.findProductProperty(propertyCode, propertyYear, businessUnitType)
         : prepared.fees().one(new CostRunFeeQuery.Property(propertyYear, propertyCode, businessUnitType), ProductProperty.class);
     if (property == null && rawAttr != null) {
@@ -2676,7 +2677,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return new ProductCoefficientLookup(coefficient,
           "产品属性来源=U9料品档案；属性=" + rawAttr + "；规则年度=" + propertyYear, null);
     }
-    if (prepared != null && property != null) {
+    if (prepared != null && property != null && !ProductPropertyCoefficients.qualifiesAsStandardByUsage(property)) {
       var coefficient = propertyCoefficient(property.getProductAttr(), property.getPropertyYear(), property.getBusinessUnitType(), prepared);
       if (coefficient != null) {
         property.setUpliftRate(coefficient.subtract(BigDecimal.ONE)); property.setCoefficient(coefficient);
@@ -2708,11 +2709,17 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (!StringUtils.hasText(attribute) || year == null || !StringUtils.hasText(unit)) return null;
     var rule = prepared.fees().one(new CostRunFeeQuery.PropertyRule(year, attribute, unit),
         com.sanhua.marketingcost.entity.ProductPropertyRule.class);
-    return com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients.from(rule, attribute, year);
+    return ProductPropertyCoefficients.from(rule, attribute, year);
   }
 
   private ProductCoefficientLookup coefficientFromProperty(
       String productCode, Integer propertyYear, String businessUnitType, ProductProperty property) {
+    if (ProductPropertyCoefficients.qualifiesAsStandardByUsage(property)) {
+      return new ProductCoefficientLookup(BigDecimal.ONE,
+          "产品属性来源=lp_product_property；属性=标准品；规则年度=" + propertyYear
+              + "；原属性=非标品；预计年用量（万只）="
+              + property.getEstimatedAnnualUsageWan().stripTrailingZeros().toPlainString(), null);
+    }
     if (property == null || property.getCoefficient() == null) {
       String remark =
           "产品属性系数未命中，回落=1：productCode="

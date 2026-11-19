@@ -59,14 +59,18 @@ public final class MonthlyInquiryPriceSource {
   }
 
   public Candidates read(Context context, Set<MonthlyPriceRequest> requests) {
-    return read(context,requests,null);
+    return read(context,requests,null, false);
   }
 
   public Candidates readSpecial(Context context, Set<MonthlyPriceRequest> requests, boolean currentMonthOnly) {
-    return read(context,requests,currentMonthOnly);
+    return read(context,requests,currentMonthOnly, false);
   }
 
-  private Candidates read(Context context, Set<MonthlyPriceRequest> requests, Boolean currentMonthOnly) {
+  Candidates readModelFallback(Context context, Set<MonthlyPriceRequest> requests) {
+    return read(context, requests, null, true);
+  }
+
+  private Candidates read(Context context, Set<MonthlyPriceRequest> requests, Boolean currentMonthOnly, boolean modelFallback) {
     var values = new LinkedHashMap<MonthlyPriceRequest, Candidate>();
     var problems = new LinkedHashMap<MonthlyPriceRequest, Problem>();
     var organizations = new TreeMap<String, List<MonthlyPriceRequest>>();
@@ -91,8 +95,10 @@ public final class MonthlyInquiryPriceSource {
         scoped.stream().filter(request -> request.family().specificationOnly())
             .map(request -> InquiryNames.normalize(request.family().specification()))
             .filter(spec -> !spec.isBlank()).forEach(specifications::add);
+        var aliases = modelFallback ? modelAliases(group.getKey(), chunk) : Map.<String, Set<String>>of();
+        aliases.values().forEach(specifications::addAll);
         var keys = new TreeSet<String>();
-        chunk.forEach(code -> keys.add(InquiryNames.normalize(code)));
+        if (!modelFallback) chunk.forEach(code -> keys.add(InquiryNames.normalize(code)));
         var found =
             currentMonthOnly==null ? repository.matching(
                 context.businessUnitType(), context.month().toString(), keys, specifications)
@@ -138,7 +144,20 @@ public final class MonthlyInquiryPriceSource {
                         row -> material.equals(InquiryNames.normalize(row.rule().materialCode())))
                     .toList();
             String match = "MATERIAL_CODE";
-            if (request.family().specificationOnly()) {
+            if (modelFallback) {
+              var terms = aliases.getOrDefault(request.materialCode(), Set.of());
+              candidates = found.stream()
+                  .filter(row -> InquiryNames.normalize(row.rule().materialCode()).isBlank())
+                  .filter(row -> terms.contains(InquiryNames.normalize(row.rule().specification())))
+                  .filter(row -> compatibleUnit(request.family().unit(), row.rule().unit()))
+                  .toList();
+              if (!candidates.isEmpty()) {
+                var matched = candidates.stream().map(row -> InquiryNames.normalize(row.rule().specification()))
+                    .collect(java.util.stream.Collectors.toSet());
+                requireUnambiguousModel(group.getKey(), matched);
+                match = "MODEL_FALLBACK";
+              }
+            } else if (request.family().specificationOnly()) {
               match = "SPECIFICATION";
               candidates =
                   found.stream()
@@ -246,7 +265,8 @@ public final class MonthlyInquiryPriceSource {
                         actualRatios,
                         chosen.rule(),
                         match,
-                        request.family().specificationOnly() ? Set.of(request.family().specification()) : Set.of()));
+                        modelFallback ? aliases.getOrDefault(request.materialCode(), Set.of())
+                            : request.family().specificationOnly() ? Set.of(request.family().specification()) : Set.of()));
             var fact =
                 PriceFact.normal(
                     selected.price(),
@@ -275,6 +295,48 @@ public final class MonthlyInquiryPriceSource {
       }
     }
     return new Candidates(values, problems);
+  }
+
+  private Map<String, Set<String>> modelAliases(String priceOrg, Set<String> codes) {
+    var args = new ArrayList<Object>();
+    args.add(MaterialOrganization.fromPriceOrgCode(priceOrg).getCode());
+    args.addAll(codes);
+    var result = new HashMap<String, Set<String>>();
+    jdbc.query("SELECT material_code,material_model,drawing_no FROM lp_material_master_raw"
+        + " WHERE organization_code=? AND active_flag=1 AND material_code IN ("
+        + String.join(",", Collections.nCopies(codes.size(), "?")) + ")", row -> {
+          var terms = result.computeIfAbsent(row.getString("material_code"), ignored -> new TreeSet<>());
+          for (String column : List.of("material_model", "drawing_no")) {
+            String term = InquiryNames.normalize(row.getString(column));
+            if (!term.isBlank()) terms.add(term);
+          }
+        }, args.toArray());
+    return result;
+  }
+
+  private void requireUnambiguousModel(String priceOrg, Set<String> terms) {
+    if (terms.size() != 1) throw new IllegalArgumentException("型号和图号分别匹配到不同询价，请确认采用依据");
+    String identifier = terms.iterator().next();
+    var specifications = jdbc.queryForList(
+        "SELECT DISTINCT UPPER(TRIM(COALESCE(material_spec,''))) FROM lp_material_master_raw"
+            + " WHERE organization_code=? AND active_flag=1 AND"
+            + " (UPPER(TRIM(material_model))=? OR UPPER(TRIM(drawing_no))=?) LIMIT 2",
+        String.class, MaterialOrganization.fromPriceOrgCode(priceOrg).getCode(), identifier, identifier);
+    if (specifications.size() > 1) throw new IllegalArgumentException("型号或图号对应多个物料规格，请确认型号价适用范围");
+  }
+
+  private static boolean compatibleUnit(String target, String source) {
+    if (source == null || source.isBlank()) return true;
+    return inquiryUnit(target).equals(inquiryUnit(source));
+  }
+  private static String inquiryUnit(String unit) {
+    return switch (unit.strip().toUpperCase(Locale.ROOT)) {
+      case "只", "件", "个", "PC", "PCS", "EA" -> "PCS";
+      case "公斤", "千克", "KG" -> "KG";
+      case "克", "G" -> "G";
+      case "米", "M" -> "M";
+      default -> unit.strip().toUpperCase(Locale.ROOT);
+    };
   }
 
   private record SupplierSource(

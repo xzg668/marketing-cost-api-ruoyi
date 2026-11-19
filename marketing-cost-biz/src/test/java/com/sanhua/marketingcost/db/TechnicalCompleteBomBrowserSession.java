@@ -31,7 +31,16 @@ class TechnicalCompleteBomBrowserSession extends TechnicalCompleteBomCostingInte
     var cases=new ArrayList<Map<String,Object>>();
     var uploadFile=Path.of(state+".xlsx");Files.write(uploadFile,upload("4"));
     cases.add(scenario("UPLOAD","8"));
-    fixture();cases.add(scenario("REFERENCE","12"));
+    fixture();
+    if (Boolean.getBoolean("technical.bom.browser.replacement")) {
+      String newMaterial=material+"-REPLACE", model=newMaterial+"-MODEL";
+      modelOnlyPurchase(newMaterial,model);
+      var replacement=new LinkedHashMap<>(scenario("REFERENCE","21"));
+      replacement.put("replaceFrom",material);
+      replacement.put("material",newMaterial);
+      replacement.put("replacementModel",model);
+      cases.add(replacement);
+    } else cases.add(scenario("REFERENCE","12"));
     String username="bom_"+UUID.randomUUID().toString().substring(0,8),password=UUID.randomUUID().toString();
     jdbc.update("INSERT INTO sys_user(user_name,nick_name,password,business_unit_type,status,del_flag,create_by,create_time,update_by,update_time) VALUES(?,'BOM补录验收',?,'COMMERCIAL','0','0','TEST',NOW(),'TEST',NOW())",username,new BCryptPasswordEncoder().encode(password));
     long user=jdbc.queryForObject("SELECT user_id FROM sys_user WHERE user_name=?",Long.class,username);

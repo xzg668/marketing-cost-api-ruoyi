@@ -20,9 +20,16 @@ public record JjbReadModel(Identity identity, Header header, List<Row> rows,
   public record Header(String productName, String productModel, String customerName,
       String customerCode, String customerDrawing, String descriptionBasis,
       String financeCuPrice, String customerCuPrice, String copperUnit,
-      String productProperty, String coefficient, Map<String, String> quotation) {
+      String productProperty, String coefficient, Map<String, String> quotation, String bareCode) {
     public Header {
       quotation = quotation == null ? Map.of() : Map.copyOf(quotation);
+    }
+    public Header(String productName, String productModel, String customerName,
+        String customerCode, String customerDrawing, String descriptionBasis,
+        String financeCuPrice, String customerCuPrice, String copperUnit,
+        String productProperty, String coefficient, Map<String, String> quotation) {
+      this(productName, productModel, customerName, customerCode, customerDrawing, descriptionBasis,
+          financeCuPrice, customerCuPrice, copperUnit, productProperty, coefficient, quotation, null);
     }
     public Header(String productName, String productModel, String customerName,
         String customerCode, String customerDrawing, String descriptionBasis,

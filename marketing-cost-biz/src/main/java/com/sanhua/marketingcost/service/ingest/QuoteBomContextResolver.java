@@ -118,40 +118,46 @@ public class QuoteBomContextResolver {
   }
 
   public QuoteDataOrganization resolveOrganization(OaForm form, OaFormItem item) {
+    return resolveOrganization(form, item, item == null ? null : item.getMaterialNo());
+  }
+
+  /** Saved-cost readers can resolve the organization for the version's own material code. */
+  public QuoteDataOrganization resolveOrganization(OaForm form, OaFormItem item, String materialCode) {
     try {
-      var organization = organizationForProduct(form, item, item == null ? null : item.getProductName());
+      var organization = organizationForProduct(form, item, item == null ? null : item.getProductName(), materialCode);
       // 专用板换流程/明确板换产品已可确定组织。新产品没有料号时仍沿用现有流程规则。
       if (item == null || normalizeOptional(item.getProductName()) != null
-          || "220".equals(organization.priceOrgCode()) || normalizeOptional(item.getMaterialNo()) == null) {
+          || "220".equals(organization.priceOrgCode()) || normalizeOptional(materialCode) == null) {
         return organization;
       }
-      String materialCode = item.getMaterialNo().trim();
-      var names = materialMaster.selectActiveNamesForQuoteOrganization(materialCode).stream()
+      String code = materialCode.trim();
+      var names = materialMaster.selectActiveNamesForQuoteOrganization(code).stream()
           .map(this::normalizeOptional).filter(java.util.Objects::nonNull).distinct().sorted().toList();
       if (names.isEmpty()) {
-        throw new QuoteIngestException("产品 " + materialCode
+        throw new QuoteIngestException("产品 " + code
             + " 的 OA 名称为空，当前料品档案也无有效名称，无法确认 BOM 组织，请补全产品名称后重查");
       }
       if (names.size() > 1) {
-        throw new QuoteIngestException("产品 " + materialCode
+        throw new QuoteIngestException("产品 " + code
             + " 的 OA 名称为空，当前料品档案名称不一致（" + String.join("、", names)
             + "），无法确认 BOM 组织，请核实产品名称后重查");
       }
       // 仅补充本次判定依据，不回写 OA 原值，也不改变报价业务单元。
-      return organizationForProduct(form, item, names.getFirst());
+      return organizationForProduct(form, item, names.getFirst(), materialCode);
     } catch (IllegalArgumentException ex) {
       throw new QuoteIngestException("报价 BOM 组织解析失败: " + ex.getMessage());
     }
   }
 
-  private QuoteDataOrganization organizationForProduct(OaForm form, OaFormItem item, String productName) {
+  private QuoteDataOrganization organizationForProduct(
+      OaForm form, OaFormItem item, String productName, String materialCode) {
     return MaterialOrganization.quoteDataForQuoteProduct(
           form == null ? null : form.getProcessCode(),
           form == null ? null : form.getOaNo(),
           item == null ? null : item.getBusinessUnitType(),
           productName,
           item == null ? null : item.getSunlModel(),
-          item == null ? null : item.getMaterialNo());
+          materialCode);
   }
 
   /** 原始 BOM 读取完成后调用，禁止 210 与 220 的源数据串用。 */

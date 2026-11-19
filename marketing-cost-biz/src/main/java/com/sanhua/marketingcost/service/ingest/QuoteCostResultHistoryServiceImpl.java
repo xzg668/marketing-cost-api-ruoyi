@@ -74,16 +74,18 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
 
     List<QuoteCostResultHistoryItemResponse> rows = new ArrayList<>();
     quoteVersions.stream()
+        .map(row -> toQuoteHistory(row, sameId(row, original)))
         .sorted(
-            Comparator.comparing((QuoteCostRunVersion row) -> !sameId(row, original))
-                .thenComparing(
-                    QuoteCostRunVersion::getTrialFinishedAt,
+            Comparator.comparing(
+                    QuoteCostResultHistoryItemResponse::getCompletedAt,
                     Comparator.nullsLast(Comparator.reverseOrder()))
                 .thenComparing(
-                    QuoteCostRunVersion::getId,
+                    QuoteCostResultHistoryItemResponse::getVersionId,
                     Comparator.nullsLast(Comparator.reverseOrder())))
-        .map(row -> toQuoteHistory(row, sameId(row, original)))
         .forEach(rows::add);
+    if (!rows.isEmpty()) {
+      rows.getFirst().setDefaultResult(true);
+    }
 
     confirmedMonthlyResults(scope).stream()
         .sorted(
@@ -240,7 +242,6 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
     row.setCuMaterialAdjustment(version.getCuMaterialAdjustment());
     row.setFinalQuoteAmount(version.getFinalQuoteAmount());
     row.setCompletedAt(firstTime(version.getConfirmedAt(), version.getTrialFinishedAt(), version.getUpdatedAt()));
-    row.setDefaultResult(original);
     row.setFullCostSheetAvailable(version.getTotalCost() != null);
     return row;
   }

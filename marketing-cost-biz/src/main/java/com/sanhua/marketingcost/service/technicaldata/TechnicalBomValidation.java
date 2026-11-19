@@ -17,7 +17,11 @@ public class TechnicalBomValidation {
   }
   public Result validate(QuoteBomReadContext context, TechnicalBomRows.Product target, TechnicalBomRows.Product input,
       List<TechnicalBomRows.Row> rows, Map<String, TechnicalBomContent.ReferenceLine> reference) {
-    var issues = new ArrayList<>(TechnicalBomRows.validate(input, rows, !reference.isEmpty()));
+    return validate(context, target, input, rows, reference, !reference.isEmpty());
+  }
+  public Result validate(QuoteBomReadContext context, TechnicalBomRows.Product target, TechnicalBomRows.Product input,
+      List<TechnicalBomRows.Row> rows, Map<String, TechnicalBomContent.ReferenceLine> reference, boolean referenceMode) {
+    var issues = new ArrayList<>(TechnicalBomRows.validate(input, rows, referenceMode));
     if (input != null && target != null) {
       identity(issues, "产品料号", target.code(), input.code());
       identity(issues, "产品型号", target.model(), input.model());

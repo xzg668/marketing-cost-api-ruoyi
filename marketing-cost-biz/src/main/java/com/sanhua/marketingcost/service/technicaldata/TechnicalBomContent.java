@@ -4,12 +4,23 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 /** Immutable complete technical BOM; separate from electronic-drawing node/manufacturing content. */
 public record TechnicalBomContent(int schemaVersion, String entryMode, Scope scope,
     TechnicalBomRows.Product product, List<Node> nodes, Reference reference, Upload upload,
-    String absenceEvidence, LocalDateTime checkedAt) {
-  public TechnicalBomContent { nodes = List.copyOf(nodes); }
+    String absenceEvidence, LocalDateTime checkedAt,
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, String> replacements) {
+  public TechnicalBomContent {
+    nodes = List.copyOf(nodes);
+    replacements = replacements == null ? Map.of() : Map.copyOf(replacements);
+  }
+  public TechnicalBomContent(int schemaVersion, String entryMode, Scope scope,
+      TechnicalBomRows.Product product, List<Node> nodes, Reference reference, Upload upload,
+      String absenceEvidence, LocalDateTime checkedAt) {
+    this(schemaVersion, entryMode, scope, product, nodes, reference, upload, absenceEvidence, checkedAt, Map.of());
+  }
   /** Observation time is audit evidence, not a changed costing input. */
   public InputBasis inputBasis() {
     return new InputBasis(schemaVersion, entryMode, scope, product, nodes, reference, upload);

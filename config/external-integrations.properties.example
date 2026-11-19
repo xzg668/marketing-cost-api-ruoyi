@@ -1,0 +1,109 @@
+# 外部对接配置模板。首次部署时复制为 config/external-integrations.properties，按目标环境填写。
+# 同一环境只更新报价版本时，直接沿用该环境原配置，无需改任何参数。
+# 239 是测试环境，使用 MOCK / I01_TEST。正式上线按生产实际登记的地址和凭据填写。
+# 239 测试地址、上线主机和端口、逐项参数解释见 deploy/OA接口配置与Token修改.md。
+
+# ===== 上线核对：地址、凭据、回调 =====
+# 首次上线按实际启用的接口逐组核对。以后哪组地址或凭据变化，就核对对应项。
+# OA 和图库各自登记打进来的报价 API 地址。报价入口变化时，与双方一起核对回调。
+
+# OA 推单和流程通知共用的接收 Token。换 Token 时与 OA 同步。
+integration.oa.clients.oa.secret=
+
+# OA 待办及免登打开的报价网页基地址。报价网页入口变更时核对。
+integration.oa.outbound.frontend-base-url=
+
+# 报价调用 OA。依次是鉴权地址、调用方编码、企业 ID、App Key、App Secret，按同一套 OA 应用核对。
+integration.oa-auth.base-url=
+integration.oa-auth.call-sys-code=
+integration.oa-auth.corp-id=
+integration.oa-auth.app-key=
+integration.oa-auth.app-secret=
+
+# OA 流程。提交地址留空时沿用鉴权地址，驳回地址留空时沿用提交地址。
+integration.oa-workflow.base-url=
+integration.oa-workflow.reject-base-url=
+
+# OA 人员目录。依次是清单、详情地址，只有对应查询地址更换时才改。
+integration.oa-person-directory.query-base-url=
+integration.oa-person-directory.detail-base-url=
+
+# OA 免登。依次是服务地址、Client ID、Client Secret、报价 API 完整回调 URL，按 OA 登记核对。
+integration.oa-oauth.base-url=
+integration.oa-oauth.client-id=
+integration.oa-oauth.client-secret=
+integration.oa-oauth.redirect-uri=
+
+# 电子图库。依次是核验服务基地址、接口路径。图库另行登记返回报价的 PDF_CONFIRM_URL。
+quote.drawing-verification.base-url=
+quote.drawing-verification.verify-path=/api/drawings/verify
+
+# ===== 沿用该环境原值：由报价系统维护 =====
+# 对接人员日常沿用下方参数。已有部署迁移时，从该环境当前生效的配置照录。
+# 首次建立生产环境时，由报价系统维护者确认接收开关、环境和表单映射等系统初始设置。
+
+# OA 接收规则。保持该环境已确认的模式、环境、来源和业务单元。首次启用或切换 OA 环境时由报价系统维护者核对。
+integration.oa.mode=DISABLED
+integration.oa.environment=
+integration.oa.max-body-bytes=2097152
+integration.oa.clients.oa.source-system=
+integration.oa.clients.oa.environment=
+integration.oa.clients.oa.mode=DISABLED
+integration.oa.clients.oa.business-units=
+
+# OA 应用鉴权。连接超时、响应超时、重试次数沿用原值。
+integration.oa-auth.connect-timeout-ms=5000
+integration.oa-auth.read-timeout-ms=30000
+integration.oa-auth.max-attempts=5
+
+# OA 流程。超时、调试开关、表单字段映射沿用原值。OA 改表单或换环境时由维护者核对映射。
+integration.oa-workflow.read-timeout-ms=30000
+integration.oa-workflow.debug-enabled=false
+# integration.oa-workflow.final-cost-sub-form-ids[FI-SC-005]=
+# integration.oa-workflow.final-cost-sub-form-ids[FI-SC-006]=
+# integration.oa-workflow.final-cost-sub-form-ids[FI-SC-020]=
+# integration.oa-workflow.final-cost-sub-form-ids[FI-SR-005_NEW]=
+# integration.oa-workflow.final-cost-sub-form-ids[FI-SR-005_MASS]=
+# integration.oa-workflow.technical-people-data-keys[FI-SC-005]=jsy
+# integration.oa-workflow.technical-people-data-keys[FI-SC-006]=
+# integration.oa-workflow.technical-people-data-keys[FI-SR-005]=FI-SR-005
+
+# OA 人员。沿用启用状态、人员来源、时间表、部门范围和请求限制。
+integration.oa-person-directory.enabled=false
+integration.oa-person-directory.run-at-startup=true
+integration.oa-person-directory.source-system=
+integration.oa-person-directory.environment=
+integration.oa-person-directory.cron=0 15 2 * * *
+integration.oa-person-directory.zone=Asia/Shanghai
+integration.oa-person-directory.page-size=1000
+integration.oa-person-directory.connect-timeout-ms=5000
+integration.oa-person-directory.read-timeout-ms=30000
+integration.oa-person-directory.max-attempts=5
+integration.oa-person-directory.detail-concurrency=4
+# integration.oa-person-directory.target-departments=
+
+# OA 免登。超时和登录会话时长沿用原值。
+integration.oa-oauth.connect-timeout-ms=5000
+integration.oa-oauth.read-timeout-ms=15000
+integration.oa-oauth.session-seconds=7200
+
+# 电子图库。核验开关、取图方式、队列、超时和重试沿用原值。
+quote.drawing-verification.enabled=false
+quote.drawing-verification.use-material-master=true
+quote.drawing-verification.connect-timeout=5s
+quote.drawing-verification.request-timeout=5m
+quote.drawing-verification.consume-poll-interval-ms=5000
+quote.electronic-drawing.retry-max-attempts=3
+quote.electronic-drawing.retry-initial-backoff-ms=500
+
+# 后台发布。EasyData 落库后的 SRM 固定价发布规则沿用原值。
+srm.fixed-price.enabled=true
+srm.fixed-price.cron=0 */10 1-4 * * *
+srm.fixed-price.minimum-valid-rows=70000
+srm.fixed-price.maximum-change-ratio=0.10
+srm.fixed-price.quiet-period-minutes=5
+
+# 后台发布。EasyData 落库后的 CMS 发布规则沿用原值。
+cms.sync-publish.enabled=true
+cms.sync-publish.poll-interval-ms=60000
+cms.sync-publish.running-timeout-minutes=360

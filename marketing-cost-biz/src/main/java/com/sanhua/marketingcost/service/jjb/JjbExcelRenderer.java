@@ -82,7 +82,7 @@ public class JjbExcelRenderer {
         {"OA单号", null, null, "报价员", null, "申请部门", null, "申请处室", null, "不锈钢-316L\n（元/吨）", null, "电解铜\n（元/吨）", null, "电解铝\n（元/吨）", null},
         {"客户名称", null, null, "客户编号", null, "是否通过海外\n仓库发终端客户", null, "销售价格\n是否联动", null, "不锈钢-304\n（元/吨）", null, "电解锌\n（元/吨）", null, "/", null},
         {"父件名称", null, null, "父件型号", null, "业务类型", null, "事业部", null, "美国柜装黄铜", null, "H65黄铜边料", null, "/", null},
-        {"一级编码", null, null, "父件规格", null, "客户图号", null, "客户Cu\n（元/公斤）", null, "白银", null, "黄金", null, "/", null}
+        {"一级编码", null, null, "父件规格", null, "裸品码", null, "客户Cu\n（元/公斤）", null, "白银", null, "黄金", null, "/", null}
       };
       var h = m.header();
       for (int r = 1; r <= 4; r++) {
@@ -104,7 +104,7 @@ public class JjbExcelRenderer {
       set(3, 6, h.quotation().get("businessType"));
       set(3, 8, h.quotation().get("division"));
       set(4, 4, h.quotation().get("spec"));
-      set(4, 6, h.customerDrawing());
+      set(4, 6, h.bareCode());
       numeric(sheet.getRow(1), 10, h.quotation().get("sus316lPrice"), MONEY);
       numeric(sheet.getRow(1), 12, h.quotation().get("copperPrice"), MONEY);
       numeric(sheet.getRow(1), 14, h.quotation().get("aluminumPrice"), MONEY);

@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.dto.jjb.JjbReadModel;
 import com.sanhua.marketingcost.mapper.*;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.service.costing.MonthlyProductCost;
+import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.jjb.*;
 import java.math.BigDecimal;
 import java.util.*;
@@ -26,19 +27,60 @@ class JjbReadIntegrationTest {
   @BeforeAll static void setup() throws Exception {
     database();
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/jjb-scope-schema.sql")).execute(jdbc.getDataSource());
+    jdbc.execute("ALTER TABLE lp_material_master_raw ADD material_name VARCHAR(180), ADD bare_code VARCHAR(255)");
     jdbc.update("INSERT INTO oa_form(id,oa_no,business_unit_type) VALUES(1,'MPP05-LINKED','COMMERCIAL')");
     jdbc.update("INSERT INTO oa_form_item(id,oa_form_id,material_no,business_unit_type,deleted) VALUES(1,1,'TOP','COMMERCIAL',0)");
     var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
-    for(var type:List.of(QuoteCostRunVersionMapper.class,OaFormMapper.class,OaFormItemMapper.class,CostRunTraceSnapshotMapper.class,PricePrepareItemMapper.class)) config.addMapper(type);
+    for(var type:List.of(QuoteCostRunVersionMapper.class,OaFormMapper.class,OaFormItemMapper.class,CostRunTraceSnapshotMapper.class,PricePrepareItemMapper.class,MaterialMasterRawMapper.class)) config.addMapper(type);
     var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(jdbc.getDataSource());factory.setConfiguration(config);
     var sql=new SqlSessionTemplate(factory.getObject());
-    reader=new JjbReadService(new JjbVersionAccess(sql.getMapper(QuoteCostRunVersionMapper.class),sql.getMapper(OaFormMapper.class),sql.getMapper(OaFormItemMapper.class)),costing,new JjbProjection(new ObjectMapper()),sql.getMapper(CostRunTraceSnapshotMapper.class),sql.getMapper(PricePrepareItemMapper.class),new com.sanhua.marketingcost.service.jjb.JjbMeasurementUnits(org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)));
+    var materials=sql.getMapper(MaterialMasterRawMapper.class);
+    reader=new JjbReadService(new JjbVersionAccess(sql.getMapper(QuoteCostRunVersionMapper.class),sql.getMapper(OaFormMapper.class),sql.getMapper(OaFormItemMapper.class)),
+        costing,new JjbProjection(new ObjectMapper()),sql.getMapper(CostRunTraceSnapshotMapper.class),sql.getMapper(PricePrepareItemMapper.class),
+        new JjbMeasurementUnits(org.mockito.Mockito.mock(MaterialMasterRawMapper.class)), materials,
+        new QuoteBomContextResolver(materials, null));
   }
   @AfterAll static void close(){stop();}
   @BeforeEach void login(){auth("COMMERCIAL");}
   @AfterEach void logout(){SecurityContextHolder.clearContext();}
   static void auth(String unit){var auth=new UsernamePasswordAuthenticationToken("jjb-read-test","unused",List.of(new SimpleGrantedAuthority("ingest:quote:list")));auth.setDetails(Map.of("businessUnitType",unit));SecurityContextHolder.getContext().setAuthentication(auth);}
   static JjbReadModel.Row row(JjbReadModel model,String code){return model.rows().stream().filter(r->code.equals(r.code())).findFirst().orElseThrow();}
+
+  @Test void savedResultAndExcelResolveBareCodeForTheSavedProductWithoutRecalculation() throws Exception {
+    var f=fixture("2","92000",true);
+    var saved=saveCompleted(f);
+    long versionId=saved.version().getId();
+    var version=jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",versionId);
+    try {
+      jdbc.update("UPDATE oa_form_item SET material_no='CURRENT',product_name='球阀',customer_drawing='CUSTOMER-DRAW' WHERE id=1");
+      jdbc.update("""
+          INSERT INTO lp_material_master_raw(material_code,organization_code,active_flag,material_name,bare_code)
+          VALUES ('TOP','COMMERCIAL',1,'球阀','000101'),('TOP','PLATE',1,'球阀','WRONG-ORG'),
+                 ('CURRENT','COMMERCIAL',1,'球阀','WRONG-PRODUCT')
+          """);
+      var model=reader.read(saved.version().getOaNo(),1L,versionId).sheet();
+      assertThat(model.identity().productCode()).isEqualTo("TOP");
+      assertThat(model.header().bareCode()).isEqualTo("000101");
+      assertThat(model.header().customerDrawing()).isEqualTo("CUSTOMER-DRAW");
+      var bytes=new java.io.ByteArrayOutputStream();
+      new com.sanhua.marketingcost.service.JjbExportService(reader,new JjbExcelRenderer()).exportVersion(
+          saved.version().getOaNo(),1L,versionId,bytes);
+      try(var book=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
+        var header=book.getSheetAt(0).getRow(4);
+        assertThat(header.getCell(6).getStringCellValue()).isEqualTo("裸品码");
+        assertThat(header.getCell(7).getStringCellValue()).isEqualTo("000101");
+      }
+      jdbc.update("UPDATE lp_material_master_raw SET active_flag=0 WHERE material_code='TOP' AND organization_code='COMMERCIAL'");
+      var missing=reader.read(saved.version().getOaNo(),1L,versionId).sheet();
+      assertThat(missing.header().bareCode()).isNull();
+      assertThat(missing.totals()).isEqualTo(model.totals());
+      assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",versionId)).isEqualTo(version);
+    } finally {
+      jdbc.update("DELETE FROM lp_material_master_raw WHERE material_code IN ('TOP','CURRENT')");
+      jdbc.update("UPDATE oa_form_item SET material_no='TOP',product_name=NULL,customer_drawing=NULL WHERE id=1");
+    }
+  }
+
   @Test void savedMaterialsFollowBomBranchesInApiAndExcelWithoutChangingStoredFacts() throws Exception {
     var original=fixture("2","92000",true);
     var first=original.ordinary().materials().getFirst();
@@ -107,7 +149,7 @@ class JjbReadIntegrationTest {
   @Test void actualPersistedGoldenHasExactDPEQFAiAndThreeSavedTotals() throws Exception {
     var f=fixture("2","92000",true);saveCompleted(f);prepared.set(0);
     var view=reader.read(f.version().getOaNo(),1L,f.version().getId());var m=view.sheet();
-    assertThat(prepared.get()).isLessThanOrEqualTo(9);
+    assertThat(prepared.get()).as("saved details and their product-master lookup").isLessThanOrEqualTo(10);
     assertThat(m.identity().versionId()).isEqualTo(f.version().getId());assertThat(m.identity().monthly()).isTrue();
     var hh=m.rows().stream().filter(r->r.kind().equals("HOUSEHOLD")).findFirst().orElseThrow();
     assertThat(hh.unitPrice()).isEqualTo("20.985300");assertThat(hh.quantity()).isEqualTo("2");assertThat(hh.amount()).isEqualTo("51.641245");

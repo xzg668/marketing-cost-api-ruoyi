@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.ProductPropertyRuleMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.ProductPropertyService;
+import com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -34,7 +35,6 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.NumberToTextConverter;
-import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -49,6 +49,7 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
       Set.of("非标品", "标准品", "定制品", "OEM");
   private static final int BATCH_SIZE = 500;
   private static final int MESSAGE_LIMIT = 200;
+  private static final BigDecimal ANNUAL_USAGE_UPPER_BOUND = new BigDecimal("1000000000");
 
   private final ProductPropertyMapper productPropertyMapper;
   private final ProductPropertyRuleMapper ruleMapper;
@@ -91,7 +92,6 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  @CacheEvict(value = "productProperty", allEntries = true)
   @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public ProductPropertyImportResult importExcel(
       InputStream input,
@@ -111,13 +111,15 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
     }
 
     List<ImportRow> rows;
+    boolean updateAnnualUsage;
     try (Workbook workbook = WorkbookFactory.create(input)) {
       SheetSelection selection = selectSheet(workbook);
       if (selection.error() != null) {
         result.addError(selection.error());
         return result;
       }
-      rows = parseRows(selection.sheet(), selection.header(), result);
+      updateAnnualUsage = selection.header().fields().containsKey("estimatedAnnualUsageWan");
+      rows = parseRows(selection.sheet(), selection.header(), propertyYear, result);
     } catch (Exception ex) {
       result.addError("Excel 解析失败：" + safeMessage(ex));
       return result;
@@ -187,7 +189,8 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
         .map(row -> toEntity(row, propertyYear, bu, batchNo))
         .toList();
     for (int start = 0; start < entities.size(); start += BATCH_SIZE) {
-      productPropertyMapper.upsertBatch(entities.subList(start, Math.min(start + BATCH_SIZE, entities.size())));
+      productPropertyMapper.upsertBatch(
+          entities.subList(start, Math.min(start + BATCH_SIZE, entities.size())), updateAnnualUsage);
     }
 
     if (MODE_FULL.equals(mode)) {
@@ -217,7 +220,6 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  @CacheEvict(value = "productProperty", allEntries = true)
   @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"NET_LOSS"},wholeUnit=true)
   public List<ProductPropertyRule> saveRules(ProductPropertyRuleSaveRequest request) {
     if (request == null || request.getPropertyYear() == null
@@ -262,9 +264,10 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
   private void decorateWithRules(List<ProductProperty> records, String bu) {
     Map<Integer, Map<String, BigDecimal>> rulesByYear = new HashMap<>();
     for (ProductProperty row : records) {
-      Map<String, BigDecimal> rules = rulesByYear.computeIfAbsent(
-          row.getPropertyYear(), year -> ruleMap(year, bu));
-      BigDecimal rate = rules.get(row.getProductAttr());
+      BigDecimal rate = ProductPropertyCoefficients.qualifiesAsStandardByUsage(row)
+          ? BigDecimal.ZERO
+          : rulesByYear.computeIfAbsent(row.getPropertyYear(), year -> ruleMap(year, bu))
+              .get(row.getProductAttr());
       row.setUpliftRate(rate);
       row.setCoefficient(rate == null ? null : BigDecimal.ONE.add(rate));
     }
@@ -333,9 +336,10 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
   }
 
   private List<ImportRow> parseRows(
-      Sheet sheet, HeaderMatch header, ProductPropertyImportResult result) {
+      Sheet sheet, HeaderMatch header, Integer propertyYear, ProductPropertyImportResult result) {
     DataFormatter formatter = new DataFormatter();
     List<ImportRow> rows = new ArrayList<>();
+    boolean hasYear = header.fields().containsKey("propertyYear");
     for (int index = header.rowIndex() + 1; index <= sheet.getLastRowNum(); index++) {
       Row row = sheet.getRow(index);
       if (row == null) {
@@ -347,12 +351,34 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
       String model = value(row, header.fields(), "productModel", formatter);
       String attr = value(row, header.fields(), "productAttr", formatter);
       String division = value(row, header.fields(), "businessDivision", formatter);
-      if (!StringUtils.hasText(code) && !StringUtils.hasText(name) && !StringUtils.hasText(attr)) {
+      String year = value(row, header.fields(), "propertyYear", formatter);
+      String usage = value(row, header.fields(), "estimatedAnnualUsageWan", formatter);
+      if (code == null && name == null && attr == null && year == null && usage == null) {
         continue;
       }
-      rows.add(new ImportRow(index + 1, code, name, spec, model, attr, division));
+      int rowNo = index + 1;
+      if (hasYear && !propertyYear.toString().equals(year)) {
+        addError(result, "第 " + rowNo + " 行年度" + (year == null ? "为空" : "为 " + year)
+            + "，须与所选导入年度 " + propertyYear + " 一致");
+      }
+      rows.add(new ImportRow(rowNo, code, name, spec, model, attr, division,
+          parseAnnualUsage(usage, rowNo, result)));
     }
     return rows;
+  }
+
+  private BigDecimal parseAnnualUsage(String value, int rowNo, ProductPropertyImportResult result) {
+    if (value == null) return null;
+    try {
+      BigDecimal usage = new BigDecimal(value).stripTrailingZeros();
+      if (usage.signum() >= 0 && usage.scale() <= 6 && usage.compareTo(ANNUAL_USAGE_UPPER_BOUND) < 0) {
+        return usage;
+      }
+    } catch (NumberFormatException ignored) {
+      // Invalid cell text is reported with its workbook row below.
+    }
+    addError(result, "第 " + rowNo + " 行预计年用量（万只）须为非负数，小于 10 亿，最多 6 位小数");
+    return null;
   }
 
   private void validateDuplicatesAndRequired(
@@ -402,6 +428,7 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
     entity.setProductSpec(row.productSpec());
     entity.setProductModel(row.productModel());
     entity.setProductAttr(row.productAttr());
+    entity.setEstimatedAnnualUsageWan(row.estimatedAnnualUsageWan());
     entity.setBusinessDivision(row.businessDivision());
     entity.setSourceType("BUSINESS_EXCEL");
     entity.setSourceBatchNo(batchNo);
@@ -416,6 +443,8 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
       case "型号", "产品型号" -> "productModel";
       case "产品属性", "判定规则" -> "productAttr";
       case "生产事业部", "事业部" -> "businessDivision";
+      case "年度", "产品属性年度" -> "propertyYear";
+      case "预计年用量万只" -> "estimatedAnnualUsageWan";
       default -> null;
     };
   }
@@ -423,7 +452,13 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
   private String value(
       Row row, Map<String, Integer> fields, String field, DataFormatter formatter) {
     Integer index = fields.get(field);
-    return index == null ? null : trim(cellText(row.getCell(index), formatter));
+    if (index == null) return null;
+    Cell cell = row.getCell(index);
+    if ("estimatedAnnualUsageWan".equals(field) && cell != null && cell.getCellType() == CellType.FORMULA
+        && cell.getCachedFormulaResultType() == CellType.ERROR) {
+      return "#公式错误";
+    }
+    return trim(cellText(cell, formatter));
   }
 
   private String cellText(Cell cell, DataFormatter formatter) {
@@ -516,9 +551,11 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
       String productSpec,
       String productModel,
       String productAttr,
-      String businessDivision) {
+      String businessDivision,
+      BigDecimal estimatedAnnualUsageWan) {
     ImportRow withBusinessDivision(String value) {
-      return new ImportRow(rowNo, productCode, productName, productSpec, productModel, productAttr, value);
+      return new ImportRow(rowNo, productCode, productName, productSpec, productModel, productAttr, value,
+          estimatedAnnualUsageWan);
     }
   }
 }

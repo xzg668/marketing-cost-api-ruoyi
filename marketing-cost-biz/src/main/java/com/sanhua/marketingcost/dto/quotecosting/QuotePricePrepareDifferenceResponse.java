@@ -11,6 +11,7 @@ public class QuotePricePrepareDifferenceResponse {
   private String settlementKey;
   private String materialCode;
   private String materialName;
+  private String materialModel;
   private String itemType;
   private BigDecimal quantity;
   private BigDecimal financeUnitPrice;

@@ -5,11 +5,12 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Reference edits contain quantities only; upload edits are reparsed from the retained original. */
+/** Reference edits identify replacement materials and quantities; upload edits are reparsed from the retained original. */
 public class TechnicalBomSaveRequest {
   private Integer expectedVersion;
   private String entryMode, referenceCode, referenceFingerprint, fileSha256;
   private Map<String, BigDecimal> quantities;
+  private Map<String, String> replacements;
   private final Map<String,Object> unknownFields = new LinkedHashMap<>();
   public Integer getExpectedVersion() { return expectedVersion; }
   public void setExpectedVersion(Integer value) { expectedVersion = value; }
@@ -23,6 +24,8 @@ public class TechnicalBomSaveRequest {
   public void setFileSha256(String value) { fileSha256 = value; }
   public Map<String, BigDecimal> getQuantities() { return quantities; }
   public void setQuantities(Map<String, BigDecimal> value) { quantities = value; }
+  public Map<String, String> getReplacements() { return replacements; }
+  public void setReplacements(Map<String, String> value) { replacements = value; }
   @JsonAnySetter public void unknown(String key, Object value) { unknownFields.put(key, value); }
   public Map<String,Object> getUnknownFields() { return Map.copyOf(unknownFields); }
 }

@@ -46,6 +46,11 @@ public class JjbProjection {
 
   public JjbReadModel project(Stored stored, OaForm form, OaFormItem item,
       List<CostRunTraceSnapshot> traces, List<PricePrepareItem> preparations) {
+    return project(stored, form, item, traces, preparations, null);
+  }
+
+  JjbReadModel project(Stored stored, OaForm form, OaFormItem item,
+      List<CostRunTraceSnapshot> traces, List<PricePrepareItem> preparations, String bareCode) {
     var v = stored.version(); var snapshot = stored.snapshot();
     var calc = snapshot == null ? null : snapshot.calculation();
     var warnings = new ArrayList<String>(); var rows = new ArrayList<Row>();
@@ -225,7 +230,8 @@ public class JjbProjection {
     for (int i=0;i<metals.length;i++) if (metals[i] != null) quotation.put(metalKeys[i],money(metals[i]));
     if (form.getCopperPrice() != null) quotation.put("customerCuPrice",money(form.getCopperPrice().movePointLeft(3)));
     var header = new Header(item.getProductName(),item.getSunlModel(),form.getCustomer(),item.getCustomerCode(),item.getCustomerDrawing(),
-        "表头取报价需求单；核算金额、费率及财务Cu取所选保存版本",money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation);
+        "报价信息取报价需求单；裸品码取同组织U9料品档案；核算金额、费率及财务Cu取所选保存版本",
+        money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation,bareCode);
     rows = new JjbPricePresentation(json).apply(rows, calc, preparations);
     rows = new JjbBomOrder(snapshot == null || snapshot.pricingBom() == null
         ? List.of() : snapshot.pricingBom().nodes()).apply(rows);

@@ -69,7 +69,7 @@ class QuoteCostResultHistoryServiceImplTest {
   }
 
   @Test
-  void keepsOriginalQuoteResultDefaultAndShowsConfirmedMonthlyResultSeparately() {
+  void defaultsToTheOnlySavedQuoteAndShowsConfirmedMonthlyResultSeparately() {
     QuoteCostRunVersion quote = quoteVersion();
     quote.setCuMaterialAdjustment(new BigDecimal("-0.92920427"));
     quote.setFinalQuoteAmount(new BigDecimal("150.13413673"));
@@ -94,6 +94,26 @@ class QuoteCostResultHistoryServiceImplTest {
     assertThat(response.getResults().get(1).getCuMaterialAdjustment()).isNull();
     assertThat(response.getResults().get(1).getFinalQuoteAmount()).isNull();
     assertThat(response.getResults().get(1).isDefaultResult()).isFalse();
+  }
+
+  @Test
+  void defaultsToLatestSavedQuoteWhenOriginalAndRecalculationsAreAvailable() {
+    QuoteCostRunVersion original = quoteVersion();
+    QuoteCostRunVersion second = quoteVersion();
+    second.setId(8L);
+    second.setTrialFinishedAt(original.getTrialFinishedAt().plusDays(1));
+    QuoteCostRunVersion latest = quoteVersion();
+    latest.setId(9L);
+    latest.setTrialFinishedAt(second.getTrialFinishedAt().plusHours(1));
+    when(versionMapper.selectList(any())).thenReturn(List.of(original, second, latest));
+
+    var rows = service.listHistory(form().getOaNo(), 9L).getResults();
+
+    assertThat(rows).filteredOn(row -> row.isDefaultResult())
+        .extracting("versionId").containsExactly(9L);
+    assertThat(rows).extracting("versionId").containsExactly(9L, 8L, 7L);
+    assertThat(rows).extracting("resultTypeLabel")
+        .containsExactly("报价重新核算结果", "报价重新核算结果", "原报价结果");
   }
 
   @Test

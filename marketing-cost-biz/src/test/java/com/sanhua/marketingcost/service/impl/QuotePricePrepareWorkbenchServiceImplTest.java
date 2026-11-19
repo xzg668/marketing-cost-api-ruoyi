@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -18,6 +19,7 @@ import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateReques
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummary;
 import com.sanhua.marketingcost.entity.OaForm;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
@@ -25,6 +27,7 @@ import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
@@ -59,6 +62,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   private PricePrepareReadinessService pricePrepareReadinessService;
   private QuotePricePrepareWorkbenchServiceImpl service;
   private PricePrepareInputRevisionService inputRevisions;
+  private MaterialMasterRawMapper materialMaster;
 
   @BeforeEach
   void setUp() {
@@ -76,6 +80,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     pricePrepareQueryService = mock(PricePrepareQueryService.class);
     pricePrepareReadinessService = mock(PricePrepareReadinessService.class);
     inputRevisions = mock(PricePrepareInputRevisionService.class);
+    materialMaster = mock(MaterialMasterRawMapper.class);
     service =
         new QuotePricePrepareWorkbenchServiceImpl(
             oaFormMapper,
@@ -91,7 +96,8 @@ class QuotePricePrepareWorkbenchServiceImplTest {
                 com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService
                     .class),
             inputRevisions, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth(),
-            mock(com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials.class));
+            mock(com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials.class),
+            materialMaster);
   }
 
   @Test
@@ -479,6 +485,12 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             new PricePrepareBatchPageResponse(3, List.of(checkOnlyBatch, financeBatch, oaBatch)));
     PricePrepareItem oaItem = item("PPR-OA-WORKBENCH", "102.039", "102.039");
     PricePrepareItem financeItem = item("PPR-FIN-WORKBENCH", "90", "90");
+    oaItem.setPriceOrgCode("210");
+    financeItem.setPriceOrgCode("210");
+    var model = new MaterialMasterRaw();
+    model.setMaterialCode("MAT-CU");
+    model.setMaterialModel("000123");
+    when(materialMaster.selectList(any())).thenReturn(List.of(model));
     when(pricePrepareQueryService.pageItems(any()))
         .thenAnswer(
             invocation -> {
@@ -501,6 +513,9 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             response.getFinanceScenario().getBatch().getPrepareNo())
         .isEqualTo("PPR-FIN-WORKBENCH");
     org.assertj.core.api.Assertions.assertThat(response.getDifferences()).hasSize(1);
+    org.assertj.core.api.Assertions.assertThat(response.getDifferences().getFirst().getMaterialModel())
+        .isEqualTo("000123");
+    verify(materialMaster, times(1)).selectList(any());
     org.assertj.core.api.Assertions.assertThat(
             response.getDifferences().getFirst().getUnitPriceDifference())
         .isEqualByComparingTo("12.039");

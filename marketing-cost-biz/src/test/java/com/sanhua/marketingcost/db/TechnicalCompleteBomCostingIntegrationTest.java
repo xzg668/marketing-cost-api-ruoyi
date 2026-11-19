@@ -16,6 +16,8 @@ import java.time.*;
 import java.util.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -40,6 +42,7 @@ class TechnicalCompleteBomCostingIntegrationTest extends OriginalPricingIntegrat
   @Autowired TechnicalDataPackageApplicationService packages;
   @Autowired TechnicalBomApplicationService boms;
   @Autowired TechnicalBomWorkbook workbook;
+  @Autowired com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRepository inquiries;
   @Autowired TechnicalDataAdminDirectSave submit;
   @Autowired TechnicalDataBomPriceCheck priceCheck;
   @Autowired ProductCostingPipeline pipeline;
@@ -107,6 +110,98 @@ class TechnicalCompleteBomCostingIntegrationTest extends OriginalPricingIntegrat
     var again=pipeline.execute(new ProductCostingRequest(code,item,month,"complete-bom-upload-repeat",false));
     assertThat(again.getCostVersionId()).isEqualTo(result.getCostVersionId());
   }
+  @ParameterizedTest
+  @ValueSource(ints = {55, 250})
+  void multiRowWorkbookPreservesEveryOccurrenceAndReportsCostingStageTimings(int rows) throws Exception {
+    boolean distinctMaterials = rows == 55;
+    var codes = new ArrayList<String>();
+    codes.add(material);
+    if (distinctMaterials) {
+      var sources = new OrdinaryCostingTestSources(jdbc, hierarchy);
+      var date = YearMonth.parse(month).atDay(1).atTime(12, 0);
+      for (int index = 2; index <= rows; index++) {
+        String child = material + "-" + index;
+        jdbc.update("""
+            INSERT INTO lp_material_master_raw
+              (material_code, material_name, unit, organization_code, import_batch_id, active_flag,
+               main_category_code, shape_attr)
+            VALUES (?, ?, '件', 'COMMERCIAL', ?, 1, '15', '采购件')
+            """, child, child, code);
+        sources.comparisonFixedPrice(child, "2", date);
+        codes.add(child);
+      }
+    }
+    byte[] bytes;
+    try (var book = new XSSFWorkbook(new ByteArrayInputStream(upload("1")));
+         var out = new ByteArrayOutputStream()) {
+      var sheet = book.getSheet(TechnicalBomWorkbook.ENTRY);
+      var first = sheet.getRow(1);
+      for (int index = 2; index <= rows; index++) {
+        var row = sheet.createRow(index);
+        for (int column = 0; column < first.getLastCellNum(); column++) {
+          row.createCell(column).setCellValue(first.getCell(column).getStringCellValue());
+        }
+        row.getCell(4).setCellValue(Integer.toString(index));
+        if (distinctMaterials) {
+          row.getCell(5).setCellValue(codes.get(index - 1));
+          row.getCell(6).setCellValue(codes.get(index - 1));
+        }
+      }
+      book.write(out);
+      bytes = out.toByteArray();
+    }
+
+    assertThatThrownBy(() -> boms.preview(product, "旧格式.xls", bytes, ADMIN))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining(".xlsx");
+    long started = System.nanoTime();
+    var preview = boms.preview(product, "多行BOM.xlsx", bytes, ADMIN);
+    long previewed = System.nanoTime();
+    assertThat(preview.issues()).isEmpty();
+    assertThat(preview.rows()).hasSize(rows);
+    var request = new TechnicalBomSaveRequest();
+    request.setEntryMode("UPLOAD");
+    request.setFileSha256(preview.upload().sha256());
+    request.setExpectedVersion(version());
+    boms.save(product, request, ADMIN);
+    long saved = System.nanoTime();
+    var checked = priceCheck.check(product, ADMIN);
+    assertThat(checked.issues()).isEmpty();
+    assertThat(checked.missing()).isZero();
+    long checkedAt = System.nanoTime();
+    var submitted = submit.save(task, new TechnicalDataAdminDirectSave.Request(version()), ADMIN);
+    assertThat(submitted.validation().issues()).isEmpty();
+    assertThat(submitted.effectiveVersionId()).isNotNull();
+    long submittedAt = System.nanoTime();
+
+    var cost = pipeline.execute(new ProductCostingRequest(code, item, month, "complete-bom-multi-row", true));
+    long costed = System.nanoTime();
+    assertThat(cost.getPipelineStatus()).as(cost.getMessage()).isEqualTo("SUCCESS");
+    var lines = jdbc.queryForList(
+        "SELECT part_code, amount FROM lp_cost_run_part_item WHERE cost_run_version_id=?", cost.getCostVersionId());
+    var uploadedLines = lines.stream().filter(line -> codes.contains(line.get("part_code"))).toList();
+    var expectedLineAmount = BigDecimal.valueOf(2L * rows / codes.size());
+    assertThat(uploadedLines).extracting(line -> line.get("part_code"))
+        .containsExactlyInAnyOrderElementsOf(codes);
+    assertThat(uploadedLines).allSatisfy(line ->
+        assertThat((BigDecimal) line.get("amount")).isEqualByComparingTo(expectedLineAmount));
+    assertThat(trees.getEffectiveBom(code, item).nodes().stream()
+        .filter(node -> codes.contains(node.materialCode()))).hasSize(rows);
+
+    long repeatStarted = System.nanoTime();
+    var repeated = pipeline.execute(new ProductCostingRequest(code, item, month, "complete-bom-multi-row-repeat", false));
+    long repeatedAt = System.nanoTime();
+    assertThat(repeated.getCostVersionId()).isEqualTo(cost.getCostVersionId());
+    System.out.printf("BOM regression rows=%d materials=%d bytes=%d previewMs=%d saveMs=%d priceCheckMs=%d submitMs=%d firstCostMs=%d repeatCostMs=%d%n",
+        rows, codes.size(), bytes.length, elapsedMillis(started, previewed), elapsedMillis(previewed, saved),
+        elapsedMillis(saved, checkedAt), elapsedMillis(checkedAt, submittedAt), elapsedMillis(submittedAt, costed),
+        elapsedMillis(repeatStarted, repeatedAt));
+  }
+
+  private static long elapsedMillis(long start, long end) {
+    return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(end - start);
+  }
+
   @Test void referencedQuantityChangesOnlyThisQuoteAndPreservesSourceBom() {
     var preview=boms.reference(product,sample,ADMIN);assertThat(preview.issues()).isEmpty();
     var request=new TechnicalBomSaveRequest();request.setEntryMode("REFERENCE");request.setExpectedVersion(version());
@@ -122,6 +217,91 @@ class TechnicalCompleteBomCostingIntegrationTest extends OriginalPricingIntegrat
     assertThat(jdbc.queryForObject("SELECT SUM(amount) FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",BigDecimal.class,result.getCostVersionId(),material)).isEqualByComparingTo("12");
     assertThat(jdbc.queryForObject("SELECT qty_per_parent FROM lp_bom_raw_hierarchy WHERE top_product_code=? AND material_code=?",BigDecimal.class,sample,material)).isEqualByComparingTo("2.5");
     assertThat(pipeline.execute(new ProductCostingRequest(code,item,month,"complete-reference-repeat",false)).getCostVersionId()).isEqualTo(result.getCostVersionId());
+  }
+
+  void modelOnlyPurchase(String replacement, String model) throws Exception {
+    jdbc.update("""
+        INSERT INTO lp_material_master_raw
+          (material_code,material_name,material_model,material_spec,unit,organization_code,
+           import_batch_id,active_flag,main_category_code,shape_attr)
+        VALUES (?,'替换采购件',?,'同一规格','件','COMMERCIAL',?,1,'15','采购件')
+        """,replacement,model,code);
+    var parser=new com.sanhua.marketingcost.service.pricing.inquiry.InquiryWorkbookParser();
+    byte[] quote;
+    try (var book=new XSSFWorkbook();var out=new ByteArrayOutputStream()) {
+      var sheet=book.createSheet("供应商询价");
+      var header=sheet.createRow(0);
+      var labels=List.of("料号","规格型号","供方名称","价格类型","批量价总价（元）","不含税价格");
+      for (int i=0;i<labels.size();i++) header.createCell(i).setCellValue(labels.get(i));
+      var line=sheet.createRow(1);
+      var values=List.of("",model,"测试供方","固定价","3.50","3.50");
+      for (int i=0;i<values.size();i++) line.createCell(i).setCellValue(values.get(i));
+      book.write(out);
+      quote=out.toByteArray();
+    }
+    inquiries.insertBatch("COMMERCIAL",month,"TEST",code,"型号报价.xlsx",quote,
+        com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec.sha256(code),
+        parser.parse(quote,"型号报价.xlsx",List.of()).rows());
+  }
+
+  @Test void replacedPurchaseUsesModelOnlyInquiry() throws Exception {
+    createFixture(true);
+    String replacement=material+"-NEW", model=replacement+"-MODEL";
+    modelOnlyPurchase(replacement,model);
+    var reference=boms.reference(product,sample,ADMIN);
+    String replaceAt=reference.rows().stream().filter(row -> material.equals(row.materialCode())).findFirst().orElseThrow().hierarchy();
+    var request=new TechnicalBomSaveRequest();
+    request.setEntryMode("REFERENCE"); request.setExpectedVersion(version());
+    request.setReferenceCode(sample); request.setReferenceFingerprint(reference.reference().fingerprint());
+    request.setReplacements(Map.of(replaceAt,replacement));
+    var quantities=new LinkedHashMap<String,BigDecimal>();
+    reference.rows().forEach(row -> quantities.put(row.hierarchy(),row.quantity()));
+    quantities.put(replaceAt,new BigDecimal("4"));
+    request.setQuantities(quantities);
+    var preview=boms.checkReference(product,request,ADMIN);
+    assertThat(preview.issues()).isEmpty();
+    assertThat(preview.rows().stream().filter(row -> row.hierarchy().equals(replaceAt))).singleElement()
+        .satisfies(row -> { assertThat(row.materialCode()).isEqualTo(replacement); assertThat(row.model()).isEqualTo(model); });
+    boms.save(product,request,ADMIN);
+    var checked=priceCheck.check(product,ADMIN);
+    assertThat(checked.issues()).isEmpty();
+    assertThat(checked.missing()).isZero();
+    assertThat(submit.save(task,new TechnicalDataAdminDirectSave.Request(version()),ADMIN).validation().issues()).isEmpty();
+    var result=pipeline.execute(new ProductCostingRequest(code,item,month,"reference-model-inquiry",true));
+    assertThat(result.getPipelineStatus()).as(result.getMessage()).isEqualTo("SUCCESS");
+    assertThat(jdbc.queryForObject("SELECT SUM(amount) FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",
+        BigDecimal.class,result.getCostVersionId(),replacement)).isEqualByComparingTo("14");
+    assertThat(jdbc.queryForObject("SELECT qty_per_parent FROM lp_bom_raw_hierarchy WHERE top_product_code=? AND material_code=?",
+        BigDecimal.class,sample,material)).isEqualByComparingTo("2.5");
+    assertThat(jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?",String.class,item)).isNull();
+  }
+
+  @Test void replacementBranchUsesItsOwnChildrenAndKeepsEditedQuantities() {
+    String branch=code+"-BRANCH", child=code+"-NEW-CHILD";
+    var date=YearMonth.parse(month).atDay(1).atTime(12,0);
+    new OrdinaryCostingTestSources(jdbc,hierarchy).ordinarySources(branch,child,form,date);
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET child_type='STANDARD' WHERE top_product_code=?",branch);
+    var reference=boms.reference(product,sample,ADMIN);
+    String at=reference.rows().stream().filter(row -> material.equals(row.materialCode())).findFirst().orElseThrow().hierarchy();
+    var request=new TechnicalBomSaveRequest();
+    request.setEntryMode("REFERENCE"); request.setExpectedVersion(version());
+    request.setReferenceCode(sample); request.setReferenceFingerprint(reference.reference().fingerprint());
+    request.setReplacements(Map.of(at,branch));
+    var quantities=new LinkedHashMap<String,BigDecimal>();
+    reference.rows().forEach(row -> quantities.put(row.hierarchy(),row.quantity()));
+    quantities.put(at,new BigDecimal("2"));
+    request.setQuantities(quantities);
+    var preview=boms.checkReference(product,request,ADMIN);
+    assertThat(preview.issues()).isEmpty();
+    var childRow=preview.rows().stream().filter(row -> child.equals(row.materialCode())).findFirst().orElseThrow();
+    assertThat(childRow.hierarchy()).startsWith(at+".");
+    assertThat(childRow.quantity()).isEqualByComparingTo("2.5");
+    preview.rows().forEach(row -> quantities.putIfAbsent(row.hierarchy(),row.quantity()));
+    quantities.put(childRow.hierarchy(),new BigDecimal("3"));
+    var saved=boms.save(product,request,ADMIN);
+    assertThat(saved.bom().nodes().stream().filter(row -> child.equals(row.resolvedMaterialCode()))).singleElement()
+        .satisfies(row -> { assertThat(row.quantityPerTop()).isEqualByComparingTo("6"); assertThat(row.reference()).isNotNull(); });
+    assertThat(boms.read(product,null,ADMIN).bom().replacements()).containsEntry(at,branch);
   }
 
   @Test void manufacturingUsesUploadedNetWeightAndRawQuantityInsteadOfExistingU9ChildQuantity() throws Exception {

@@ -129,7 +129,12 @@ public class CostRunWorkerApplication {
   static SpringApplication buildApplication() {
     return new SpringApplicationBuilder(CostRunWorkerApplication.class)
         .web(WebApplicationType.NONE)
-        .properties(Map.of("spring.application.name", "sales-cost-worker"))
+        .properties(Map.of(
+            "spring.application.name", "sales-cost-worker",
+            "spring.config.additional-location", String.join(",",
+                "optional:file:./config/external-integrations.properties",
+                "optional:file:../config/external-integrations.properties",
+                "optional:file:./marketing-cost-api/config/external-integrations.properties")))
         .build();
   }
 }

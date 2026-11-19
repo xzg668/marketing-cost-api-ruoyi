@@ -31,7 +31,6 @@ public class CacheConfig {
         "bomRawMaterialCostElements",
         // T19：试算高频查询补缓存
         "financeBasePrice",
-        "productProperty",
         "materialMaster");
     // T19：TTL 10min → 5min，缩短脏数据窗口（业务可能在 5 分钟内手动改 rate 表）
     manager.setCaffeine(Caffeine.newBuilder()

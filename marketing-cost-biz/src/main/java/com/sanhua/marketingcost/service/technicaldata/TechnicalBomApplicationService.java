@@ -63,6 +63,17 @@ public class TechnicalBomApplicationService {
     return references.search(contexts.read(scope.task(),scope.product()).context(),keyword);
   }
   @Transactional(readOnly=true)
+  public List<TechnicalBomReferenceQuery.Candidate> searchReplacement(Long productId, String keyword, TechnicalDataActor actor) {
+    var scope=scope(productId,actor,null); requireEditable(scope,actor);
+    var target=contexts.read(scope.task(),scope.product()); requireAbsent(target.context());
+    return references.searchReplacement(target.context(),keyword);
+  }
+  @Transactional(readOnly=true)
+  public List<TechnicalBomReferenceQuery.Candidate> searchReplacementForQuote(
+      Long itemId, String accountingMonth, String keyword, TechnicalDataActor actor) {
+    return references.searchReplacement(contexts.readQuote(itemId,accountingMonth,actor).context(),keyword);
+  }
+  @Transactional(readOnly=true)
   public Preview reference(Long productId,String code,TechnicalDataActor actor) {
     var scope=scope(productId,actor,null); requireEditable(scope,actor);
     var target=contexts.read(scope.task(),scope.product()); requireAbsent(target.context());
@@ -83,11 +94,19 @@ public class TechnicalBomApplicationService {
   }
   @Transactional(readOnly=true)
   public Preview checkReferenceForQuote(Long itemId, String accountingMonth, TechnicalBomSaveRequest request, TechnicalDataActor actor) {
-    var target = contexts.readQuote(itemId, accountingMonth, actor);
+    return checkReference(contexts.readQuote(itemId, accountingMonth, actor), request);
+  }
+  @Transactional(readOnly=true)
+  public Preview checkReference(Long productId, TechnicalBomSaveRequest request, TechnicalDataActor actor) {
+    var scope=scope(productId,actor,null); requireEditable(scope,actor);
+    var target=contexts.read(scope.task(),scope.product()); requireAbsent(target.context());
+    return checkReference(target, request);
+  }
+  private Preview checkReference(TechnicalBomContextQuery.Target target, TechnicalBomSaveRequest request) {
     if (request == null || !"REFERENCE".equals(request.getEntryMode()) || !request.getUnknownFields().isEmpty())
       throw invalid("参考BOM检查请求不完整或含不支持的字段");
-    var input = referenceInput(target, request);
-    var checked = validation.validate(target.context(), target.product(), target.product(), input.rows(), input.lines());
+    var input = referenceInput(target, request, true);
+    var checked = validation.validate(target.context(), target.product(), target.product(), input.rows(), input.lines(), true);
     return new Preview(target.product(), input.rows(), input.reference(), null, checked.issues());
   }
   @Transactional(readOnly=true)
@@ -166,31 +185,79 @@ public class TechnicalBomApplicationService {
     TechnicalBomRows.Product product; List<TechnicalBomRows.Row> rows; TechnicalBomContent.Reference reference=null;
     TechnicalBomContent.Upload upload=null; Map<String,TechnicalBomContent.ReferenceLine> lines=Map.of();
     if("REFERENCE".equals(request.getEntryMode())) {
-      var input=referenceInput(target,request);
+      var input=referenceInput(target,request,false);
       rows=input.rows(); product=target.product(); reference=input.reference(); lines=input.lines();
     } else {
-      if(request.getReferenceCode()!=null||request.getReferenceFingerprint()!=null||request.getQuantities()!=null) throw invalid("上传BOM请修改原表后重新上传，不接受客户端改写解析行");
+      if(request.getReferenceCode()!=null||request.getReferenceFingerprint()!=null||request.getQuantities()!=null||request.getReplacements()!=null) throw invalid("上传BOM请修改原表后重新上传，不接受客户端改写解析行");
       var stored=files.read(productId,request.getFileSha256()); var parsed=workbooks.parse(stored.fileName(),stored.bytes());
       requireValid(parsed.issues()); product=parsed.product(); rows=parsed.rows();
       upload=new TechnicalBomContent.Upload(stored.fileName(),stored.sha256(),stored.bytes().length,TechnicalBomWorkbook.ENTRY);
     }
-    var checked=validation.validate(target.context(),target.product(),product,rows,lines); requireValid(checked.issues());
+    var checked=validation.validate(target.context(),target.product(),product,rows,lines,reference!=null); requireValid(checked.issues());
     var c=target.context();
     return new TechnicalBomContent(1,request.getEntryMode(),new TechnicalBomContent.Scope(c.oaFormItemId(),c.oaNo(),c.accountingMonth(),c.businessUnitType(),
-        c.priceOrgCode(),c.materialOrganizationCode(),c.productCode()),product,checked.nodes(),reference,upload,missing.evidence(),LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
+        c.priceOrgCode(),c.materialOrganizationCode(),c.productCode()),product,checked.nodes(),reference,upload,missing.evidence(),LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE),request.getReplacements());
   }
   private record ReferenceInput(List<TechnicalBomRows.Row> rows, TechnicalBomContent.Reference reference,
       Map<String,TechnicalBomContent.ReferenceLine> lines) {}
-  private ReferenceInput referenceInput(TechnicalBomContextQuery.Target target, TechnicalBomSaveRequest request) {
-    if(request.getFileSha256()!=null) throw invalid("参考BOM不能带上传文件");
+  private ReferenceInput referenceInput(TechnicalBomContextQuery.Target target, TechnicalBomSaveRequest request, boolean preview) {
+    if (request.getFileSha256()!=null) throw invalid("参考BOM不能带上传文件");
     var source=references.read(target.context(),request.getReferenceCode());
-    if(!Objects.equals(source.evidence().fingerprint(),request.getReferenceFingerprint())) throw conflict("参考BOM已变化，请重新选择并核对用量");
+    if (!Objects.equals(source.evidence().fingerprint(),request.getReferenceFingerprint()))
+      throw conflict("参考BOM已变化，请重新选择并核对用量");
+    var rows=new LinkedHashMap<String,TechnicalBomRows.Row>();
+    source.rows().forEach(row -> rows.put(row.hierarchy(), row));
+    var lines=new LinkedHashMap<>(source.sourceLines());
+    var replacements=request.getReplacements();
+    if (replacements!=null) {
+      if (replacements.size()>TechnicalBomRows.MAX_ROWS || replacements.keySet().stream().anyMatch(Objects::isNull))
+        throw invalid("参考BOM替换节点无效");
+      for (String key : replacements.keySet().stream().sorted().toList()) {
+        var original=rows.get(key);
+        if (original==null) throw invalid("参考BOM替换节点不存在："+key);
+        if (Objects.equals(original.materialCode(), replacements.get(key))) continue;
+        var replacement=references.replacement(target.context(), original, replacements.get(key));
+        String prefix=key+".";
+        rows.keySet().removeIf(path -> path.startsWith(prefix));
+        lines.keySet().removeIf(path -> path.equals(key)||path.startsWith(prefix));
+        rows.put(key,replacement.row());
+        for (var child : replacement.children()) {
+          String path=prefix+child.hierarchy();
+          rows.put(path,withQuantity(child,path,child.lineNo(),child.quantity()));
+          lines.put(path,replacement.lines().get(child.hierarchy()));
+        }
+        if (rows.size()>TechnicalBomRows.MAX_ROWS) throw invalid("替换后BOM子件不能超过5000行");
+      }
+    }
     var quantities=request.getQuantities();
-    var keys=source.rows().stream().map(TechnicalBomRows.Row::hierarchy).collect(java.util.stream.Collectors.toSet());
-    if(quantities==null||!quantities.keySet().equals(keys)) throw invalid("参考BOM节点不完整，请重新选择成品；仅允许修改实际节点用量");
-    var rows=source.rows().stream().map(row->new TechnicalBomRows.Row(row.lineNo(),row.hierarchy(),row.materialCode(),row.name(),row.model(),row.specification(),
-        quantities.get(row.hierarchy()),row.unit(),row.attribute(),row.material(),row.netWeight(),row.netWeightUnit())).toList();
-    return new ReferenceInput(rows,source.evidence(),source.sourceLines());
+    if (quantities==null || !rows.keySet().containsAll(quantities.keySet())
+        || !preview && !quantities.keySet().equals(rows.keySet()))
+      throw invalid("参考BOM节点不完整，请重新核对替换物料和用量");
+    var ordered=new java.util.ArrayList<TechnicalBomRows.Row>();
+    // A parent always sorts before its descendants; keep original row order for untouched drafts.
+    var keys=replacements==null||replacements.isEmpty()?rows.keySet().stream():rows.keySet().stream().sorted(TechnicalBomApplicationService::compareTreePaths);
+    keys.forEach(key -> {
+      var row=rows.get(key);
+      ordered.add(withQuantity(row,key,replacements==null||replacements.isEmpty()?row.lineNo():ordered.size()+2,
+          quantities.getOrDefault(key,row.quantity())));
+    });
+    return new ReferenceInput(List.copyOf(ordered),source.evidence(),lines);
+  }
+
+  private static int compareTreePaths(String left, String right) {
+    var a=left.split("\\.");
+    var b=right.split("\\.");
+    for (int index=0; index<Math.min(a.length,b.length); index++) {
+      int compared=Integer.compare(a[index].length(),b[index].length());
+      if (compared==0) compared=a[index].compareTo(b[index]);
+      if (compared!=0) return compared;
+    }
+    return Integer.compare(a.length,b.length);
+  }
+
+  private static TechnicalBomRows.Row withQuantity(TechnicalBomRows.Row row, String hierarchy, int line, BigDecimal quantity) {
+    return new TechnicalBomRows.Row(line,hierarchy,row.materialCode(),row.name(),row.model(),row.specification(),
+        quantity,row.unit(),row.attribute(),row.material(),row.netWeight(),row.netWeightUnit());
   }
   public List<String> validateCurrent(QuoteTechProduct product,QuoteTechDataVersion version) {
     var bom=content.technicalBom(version); if(bom==null) return List.of("尚未保存完整BOM");
@@ -199,7 +266,7 @@ public class TechnicalBomApplicationService {
       var missing=requireAbsent(target.context());
       var request=new TechnicalBomSaveRequest(); request.setEntryMode(bom.entryMode());
       if(bom.reference()!=null) { request.setReferenceCode(bom.reference().productCode()); request.setReferenceFingerprint(bom.reference().fingerprint());
-        var quantities=new LinkedHashMap<String,BigDecimal>(); bom.nodes().forEach(row->quantities.put(row.input().hierarchy(),row.input().quantity())); request.setQuantities(quantities); }
+        var quantities=new LinkedHashMap<String,BigDecimal>(); bom.nodes().forEach(row->quantities.put(row.input().hierarchy(),row.input().quantity())); request.setQuantities(quantities); request.setReplacements(bom.replacements()); }
       if(bom.upload()!=null) request.setFileSha256(bom.upload().sha256());
       var current=prepare(product.getId(),target,missing,request);
       if(!content.sameSourceEvidence(bom.scope(),current.scope())||!content.sameSourceEvidence(bom.nodes(),current.nodes())

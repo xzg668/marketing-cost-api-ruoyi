@@ -57,11 +57,31 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
     if(!special.isEmpty())return resolveSpecial(context,requests,dependencies,special,false);
     var orders=orders(context,requests);
     var local=resolveOrganization(context,requests,dependencies,orders);
-    return withOtherOrganization(context,requests,local,alternatives->{
+    var coded=withOtherOrganization(context,requests,local,alternatives->{
       var alternativeOrders=new LinkedHashMap<MonthlyPriceRequest,List<MaterialPricePriorityService.Entry>>();
       for(var request:requests)alternativeOrders.put(otherOrganization(context,request),orders.get(request));
       return resolveOrganization(context,alternatives,dependencies,alternativeOrders);
     });
+    var blockedTaxGroups=requests.stream()
+        .filter(request -> coded.values().containsKey(request)
+            || coded.problems().containsKey(request) && coded.problems().get(request).reason()!=Failure.MISSING)
+        .map(MonthlyPriceSources::taxGroup).collect(java.util.stream.Collectors.toSet());
+    var pending=requests.stream()
+        .filter(request -> !request.family().specificationOnly() && request.family().taxBasis()==TaxBasis.EXCLUDED)
+        .filter(request -> !blockedTaxGroups.contains(taxGroup(request)))
+        .filter(request -> orders.get(request).size()>1)
+        .filter(request -> MaterialShapePriceScope.allows(request.conditions().materialShapeScope(),"INQUIRY"))
+        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    if (pending.isEmpty()) return coded;
+    var fallback=MaterialShapePriceScope.read("INQUIRY",pending,batch -> inquiries.readModelFallback(context,batch));
+    requireComplete(pending,fallback);
+    var values=new LinkedHashMap<>(coded.values());
+    var problems=new LinkedHashMap<>(coded.problems());
+    fallback.values().forEach((request,candidate) -> { values.put(request,candidate); problems.remove(request); });
+    fallback.problems().forEach((request,problem) -> {
+      if (problem.reason()!=Failure.MISSING) problems.put(request,problem);
+    });
+    return new Candidates(values,problems);
   }
 
   /** Finish every source in the requested organization before relaxing that one condition. */

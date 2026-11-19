@@ -19,19 +19,23 @@ public interface ProductPropertyMapper extends BaseMapper<ProductProperty> {
       "<script>",
       "INSERT INTO lp_product_property",
       "(business_unit_type, property_year, business_division, product_code, product_name,",
-      " product_spec, product_model, product_attr, remark, source_type, source_batch_no, created_at, updated_at)",
+      " product_spec, product_model, product_attr, estimated_annual_usage_wan, remark,",
+      " source_type, source_batch_no, created_at, updated_at)",
       "VALUES",
       "<foreach collection='rows' item='row' separator=','>",
       "(#{row.businessUnitType}, #{row.propertyYear}, #{row.businessDivision}, #{row.productCode},",
       " #{row.productName}, #{row.productSpec}, #{row.productModel}, #{row.productAttr},",
+      " #{row.estimatedAnnualUsageWan,jdbcType=DECIMAL},",
       " #{row.remark}, #{row.sourceType}, #{row.sourceBatchNo}, NOW(), NOW())",
       "</foreach>",
       "ON DUPLICATE KEY UPDATE",
       " business_division=VALUES(business_division), product_name=VALUES(product_name),",
       " product_spec=VALUES(product_spec), product_model=VALUES(product_model),",
       " product_attr=VALUES(product_attr), remark=VALUES(remark),",
+      " <if test='updateAnnualUsage'>estimated_annual_usage_wan=VALUES(estimated_annual_usage_wan),</if>",
       " source_type=VALUES(source_type), source_batch_no=VALUES(source_batch_no), updated_at=NOW()",
       "</script>"
   })
-  int upsertBatch(@Param("rows") List<ProductProperty> rows);
+  int upsertBatch(@Param("rows") List<ProductProperty> rows,
+      @Param("updateAnnualUsage") boolean updateAnnualUsage);
 }

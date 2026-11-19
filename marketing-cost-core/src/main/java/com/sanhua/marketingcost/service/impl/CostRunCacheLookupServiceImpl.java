@@ -16,6 +16,8 @@ import com.sanhua.marketingcost.mapper.ProductPropertyRuleMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseDimensionMappingMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
+import com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients;
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import org.springframework.cache.annotation.Cacheable;
@@ -161,12 +163,9 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
   }
 
   @Override
-  @Cacheable(
-      value = "productProperty",
-      key =
-          "'trial:year:' + (#businessUnitType ?: 'NULL') + ':' + (#propertyYear ?: 'NULL') + ':' + (#productCode ?: 'NULL')")
   public ProductProperty findProductProperty(
       String productCode, Integer propertyYear, String businessUnitType) {
+    // Imports run in the API process, while queued costing must read the committed property in the worker.
     if (!StringUtils.hasText(productCode)) {
       return null;
     }
@@ -183,9 +182,11 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
     if (property == null) {
       return null;
     }
-    var coefficient = findProductPropertyCoefficient(property.getProductAttr(), property.getPropertyYear(), property.getBusinessUnitType());
+    var coefficient = ProductPropertyCoefficients.qualifiesAsStandardByUsage(property)
+        ? BigDecimal.ONE
+        : findProductPropertyCoefficient(property.getProductAttr(), property.getPropertyYear(), property.getBusinessUnitType());
     if (coefficient != null) {
-      property.setUpliftRate(coefficient.subtract(java.math.BigDecimal.ONE));
+      property.setUpliftRate(coefficient.subtract(BigDecimal.ONE));
       property.setCoefficient(coefficient);
     }
     return property;
@@ -199,7 +200,7 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
             .eq(ProductPropertyRule::getBusinessUnitType, businessUnitType)
             .eq(ProductPropertyRule::getPropertyYear, propertyYear)
             .eq(ProductPropertyRule::getProductAttr, productAttr));
-    return com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients.from(rule, productAttr, propertyYear);
+    return ProductPropertyCoefficients.from(rule, productAttr, propertyYear);
   }
 
   private String trimToNull(String value) {

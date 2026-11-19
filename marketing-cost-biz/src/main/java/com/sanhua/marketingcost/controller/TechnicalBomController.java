@@ -33,6 +33,16 @@ public class TechnicalBomController {
   public CommonResult<TechnicalBomApplicationService.Preview> reference(@PathVariable Long productId,@RequestParam String code) {
     return execute(()->service.reference(productId,code,actors.current()));
   }
+  @GetMapping("/replacement-options") @PreAuthorize(EDIT)
+  public CommonResult<List<TechnicalBomReferenceQuery.Candidate>> replacementOptions(
+      @PathVariable Long productId,@RequestParam String keyword) {
+    return execute(()->service.searchReplacement(productId,keyword,actors.current()));
+  }
+  @PostMapping("/check-reference") @PreAuthorize(EDIT)
+  public CommonResult<TechnicalBomApplicationService.Preview> checkReference(
+      @PathVariable Long productId,@RequestBody TechnicalBomSaveRequest request) {
+    return execute(()->service.checkReference(productId,request,actors.current()));
+  }
   @GetMapping("/template") @PreAuthorize(READ)
   public ResponseEntity<?> template(@PathVariable Long productId,@RequestParam String exampleCode) {
     return download(()->service.template(productId,exampleCode,actors.current()));

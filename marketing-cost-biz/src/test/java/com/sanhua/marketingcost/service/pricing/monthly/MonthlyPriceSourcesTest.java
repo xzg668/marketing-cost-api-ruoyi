@@ -127,9 +127,25 @@ class MonthlyPriceSourcesTest {
     when(ods.tiers(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
     when(invoices.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
     when(inquiries.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
+    when(inquiries.readModelFallback(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
     when(supplemental.read(any(),anySet())).thenAnswer(call->missing(call.getArgument(1)));
   }
   Candidates read(Set<MonthlyPriceRequest> requests){return sources.resolve(context,requests,ignored->{throw new AssertionError("No formula dependency expected");});}
+  @Test void modelInquiryOnlyFillsMaterialCodesAfterAllEligibleCodedSources() {
+    var coded=request("coded-price");
+    var model=request("model-price");
+    when(fixed.read(any(),anySet())).thenAnswer(call -> {
+      Set<MonthlyPriceRequest> batch=call.getArgument(1);
+      var available=new LinkedHashMap<>(missing(batch).problems());
+      available.remove(coded);
+      return new Candidates(batch.contains(coded)?found(coded,"PURCHASE_FIXED").values():Map.of(),available);
+    });
+    when(inquiries.readModelFallback(any(),eq(Set.of(model)))).thenReturn(found(model,"MODEL_FALLBACK"));
+    var result=read(Set.of(coded,model));
+    assertThat(result.values().get(coded).selection().fact().evidence().json()).contains("PURCHASE_FIXED");
+    assertThat(result.values().get(model).selection().fact().evidence().json()).contains("MODEL_FALLBACK");
+    verify(inquiries).readModelFallback(any(),eq(Set.of(model)));
+  }
   @Test void missingPlatePricesUseCommercialLinkedPricesAndKeepTheRealSourceEvidence() {
     var requests=new LinkedHashSet<MonthlyPriceRequest>();
     for(String code:List.of("301070077","301070076"))requests.add(inOrganization(request(code),"220"));

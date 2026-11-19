@@ -57,6 +57,12 @@ public class TechnicalBomPreviewController {
     return execute(() -> service.referenceForQuote(itemId, accountingMonth, code, actors.current()));
   }
 
+  @GetMapping("/replacement-options")
+  public CommonResult<List<TechnicalBomReferenceQuery.Candidate>> replacementOptions(
+      @PathVariable Long itemId,@RequestParam String accountingMonth,@RequestParam String keyword) {
+    return execute(()->service.searchReplacementForQuote(itemId,accountingMonth,keyword,actors.current()));
+  }
+
   @PostMapping("/check-reference")
   public CommonResult<TechnicalBomApplicationService.Preview> checkReference(@PathVariable Long itemId,
       @RequestParam String accountingMonth, @RequestBody TechnicalBomSaveRequest request) {

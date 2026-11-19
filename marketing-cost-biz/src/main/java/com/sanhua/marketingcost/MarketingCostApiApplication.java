@@ -13,12 +13,14 @@ public class MarketingCostApiApplication {
 
   public static void main(String[] args) {
     SpringApplication application = new SpringApplication(MarketingCostApiApplication.class);
-    // 支持仓库根目录、biz 模块和工作区目录启动；真实凭证保存在 Git 排除的本地配置。
-    // 服务器显式提供 SPRING_CONFIG_ADDITIONAL_LOCATION 时仍以服务器配置为准。
+    // 统一配置覆盖本地旧配置。容器通过 SPRING_CONFIG_ADDITIONAL_LOCATION 指定唯一配置文件。
     application.setDefaultProperties(Map.of("spring.config.additional-location", String.join(",",
         "optional:file:./config/oa-runtime.properties",
         "optional:file:../config/oa-runtime.properties",
-        "optional:file:./marketing-cost-api/config/oa-runtime.properties")));
+        "optional:file:./marketing-cost-api/config/oa-runtime.properties",
+        "optional:file:./config/external-integrations.properties",
+        "optional:file:../config/external-integrations.properties",
+        "optional:file:./marketing-cost-api/config/external-integrations.properties")));
     application.run(args);
   }
 }

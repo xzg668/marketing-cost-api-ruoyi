@@ -2,3 +2,4 @@
 .DS_Store
 *.log
 docs
+config/external-integrations.properties

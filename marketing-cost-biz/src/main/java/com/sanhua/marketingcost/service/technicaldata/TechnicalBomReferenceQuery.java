@@ -45,6 +45,15 @@ public class TechnicalBomReferenceQuery {
         .map(row -> new Candidate(row.getMaterialCode(), row.getMaterialName(), row.getMaterialModel(), row.getMaterialSpec()))
         .distinct().toList();
   }
+  List<Candidate> searchReplacement(QuoteBomReadContext context, String keyword) {
+    String query=text(keyword);
+    if (query==null || query.length()>100) throw new IllegalArgumentException("请输入新料号或型号");
+    var exact=materials.selectByLatestBatchAndCodes(List.of(query), null, context.materialOrganizationCode());
+    if (exact.isEmpty()) exact=materials.selectDrawingProductCandidates(null, query, null, context.materialOrganizationCode());
+    if (exact.isEmpty()) return query.length()<2 ? List.of() : search(context, query);
+    return exact.stream().map(row -> new Candidate(row.getMaterialCode(),row.getMaterialName(),
+        row.getMaterialModel(),row.getMaterialSpec())).distinct().limit(50).toList();
+  }
   public Result read(QuoteBomReadContext context, String code) {
     code = text(code);
     if (code == null) throw new IllegalArgumentException("请选择明确的成品料号");
@@ -112,18 +121,8 @@ public class TechnicalBomReferenceQuery {
         original = source.getQtyPerParent(); base = source.getParentBaseQty();
       }
       BigDecimal relative = relative(original, base);
-      String attribute = switch (Objects.toString(line.shapeAttr(), "")) {
-        case "委外件", "委外", "委外加工", "OUTSOURCE" -> "委外加工件";
-        case "制造", "自制件", "MANUFACTURE" -> "制造件";
-        case "采购", "外购件", "PURCHASE" -> "采购件";
-        case "虚拟", "VIRTUAL" -> "虚拟件";
-        default -> line.shapeAttr();
-      };
-      BigDecimal net = null;
-      if (text(master.getGlobalSeg3TheoreticalNetWeight()) != null) {
-        try { net = new BigDecimal(master.getGlobalSeg3TheoreticalNetWeight().trim()); }
-        catch (NumberFormatException ignored) { /* Keep absent; costing validates required weight separately. */ }
-      }
+      String attribute = attribute(line.shapeAttr());
+      BigDecimal net = netWeight(master);
       output.add(new TechnicalBomRows.Row(output.size() + 2, key, line.materialCode(), line.materialName(), line.materialModel(), line.materialSpec(),
           relative, line.unit(), attribute, master.getGlobalSeg4Material(), net, net == null ? "" : "g"));
       evidence.put(key, new TechnicalBomContent.ReferenceLine(line.sourceRawHierarchyId(), line.sourceU9BomId(), line.path(), line.bomVersion(), original, base, relative,
@@ -131,6 +130,39 @@ public class TechnicalBomReferenceQuery {
       append(line, key, children, output, evidence, context, depth + 1);
     }
   }
+  record Replacement(TechnicalBomRows.Row row, List<TechnicalBomRows.Row> children,
+      Map<String, TechnicalBomContent.ReferenceLine> lines) {}
+
+  Replacement replacement(QuoteBomReadContext context, TechnicalBomRows.Row previous, String code) {
+    if (text(code) == null) throw new IllegalArgumentException("请选择明确的替换料号");
+    var master = uniqueMaterial(code.trim(), context.materialOrganizationCode());
+    String shape = attribute(master.getShapeAttr());
+    if (!List.of("采购件", "制造件", "委外加工件").contains(Objects.toString(shape, "")))
+      throw new IllegalArgumentException("替换料号没有明确的采购、制造或委外属性：" + master.getMaterialCode());
+    BigDecimal net = netWeight(master);
+    var row = new TechnicalBomRows.Row(previous.lineNo(), previous.hierarchy(), master.getMaterialCode(),
+        master.getMaterialName(), master.getMaterialModel(), master.getMaterialSpec(), previous.quantity(),
+        master.getUnit(), shape, master.getGlobalSeg4Material(), net, net == null ? "" : "g");
+    if ("采购件".equals(shape)) return new Replacement(row, List.of(), Map.of());
+    var branch = read(context, master.getMaterialCode());
+    return new Replacement(row, branch.rows(), branch.sourceLines());
+  }
+  private static String attribute(String shape) {
+    return switch (Objects.toString(shape, "")) {
+      case "委外件", "委外", "委外加工", "OUTSOURCE" -> "委外加工件";
+      case "制造", "自制件", "MANUFACTURE" -> "制造件";
+      case "采购", "外购件", "PURCHASE" -> "采购件";
+      case "虚拟", "VIRTUAL" -> "虚拟件";
+      default -> shape;
+    };
+  }
+  private static BigDecimal netWeight(MaterialMasterRaw master) {
+    String value = text(master.getGlobalSeg3TheoreticalNetWeight());
+    if (value == null) return null;
+    try { return new BigDecimal(value); }
+    catch (NumberFormatException ignored) { return null; }
+  }
+
   static BigDecimal relative(BigDecimal child, BigDecimal base) {
     if (child == null || child.signum() < 0 || base != null && base.signum() <= 0) throw new IllegalArgumentException("参考BOM用量不能为负数，母件底数须大于零");
     // With an ODS line use its original quantity/base. Without one, DWD quantity already means per direct parent.

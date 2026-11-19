@@ -2,8 +2,11 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,7 +40,6 @@ class ProductPropertyServiceImplTest {
     service = new ProductPropertyServiceImpl(propertyMapper, ruleMapper, materialMapper);
     when(ruleMapper.selectList(any())).thenReturn(rules());
     when(propertyMapper.selectList(any())).thenReturn(List.of());
-    when(propertyMapper.upsertBatch(anyList())).thenReturn(1);
   }
 
   @Test
@@ -55,7 +57,7 @@ class ProductPropertyServiceImplTest {
     assertThat(result.getExcelDivision()).isEqualTo(1);
     assertThat(result.getWarnings()).singleElement().asString().contains("已按 Excel 导入");
     ArgumentCaptor<List<ProductProperty>> captor = ArgumentCaptor.forClass(List.class);
-    verify(propertyMapper).upsertBatch(captor.capture());
+    verify(propertyMapper).upsertBatch(captor.capture(), eq(false));
     assertThat(captor.getValue()).singleElement().satisfies(row -> {
       assertThat(row.getProductCode()).isEqualTo("1007900000147");
       assertThat(row.getBusinessDivision()).isEqualTo("Excel事业部");
@@ -75,7 +77,7 @@ class ProductPropertyServiceImplTest {
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getResolvedDivision()).isEqualTo(1);
     ArgumentCaptor<List<ProductProperty>> captor = ArgumentCaptor.forClass(List.class);
-    verify(propertyMapper).upsertBatch(captor.capture());
+    verify(propertyMapper).upsertBatch(captor.capture(), eq(false));
     assertThat(captor.getValue().getFirst().getBusinessDivision()).isEqualTo("电子产品事业部");
   }
 
@@ -92,6 +94,50 @@ class ProductPropertyServiceImplTest {
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getErrors()).anyMatch(message -> message.contains("多个生产事业部"));
+  }
+
+  @Test
+  void importsEstimatedAnnualUsageOnMatchingWorkbookYear() throws Exception {
+    var result = service.importExcel(new ByteArrayInputStream(workbookWithAnnualUsage(2026, "10.000000")),
+        "产品属性数据.xlsx", 2026, "COMMERCIAL", "INCREMENTAL");
+
+    assertThat(result.isSuccess()).isTrue();
+    ArgumentCaptor<List<ProductProperty>> captor = ArgumentCaptor.forClass(List.class);
+    verify(propertyMapper).upsertBatch(captor.capture(), eq(true));
+    assertThat(captor.getValue()).singleElement().satisfies(row -> {
+      assertThat(row.getPropertyYear()).isEqualTo(2026);
+      assertThat(row.getEstimatedAnnualUsageWan()).isEqualByComparingTo("10");
+      assertThat(row.getProductAttr()).isEqualTo("非标品");
+    });
+  }
+
+  @Test
+  void rejectsDifferentWorkbookYearAndOverpreciseVolumeBeforeAnyWrite() throws Exception {
+    var result = service.importExcel(new ByteArrayInputStream(workbookWithAnnualUsage(2027, "9.9999999")),
+        "产品属性数据.xlsx", 2026, "COMMERCIAL", "INCREMENTAL");
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.getErrors()).anyMatch(error -> error.contains("2027") && error.contains("2026"));
+    assertThat(result.getErrors()).anyMatch(error -> error.contains("预计年用量（万只）"));
+    verify(propertyMapper, never()).upsertBatch(anyList(), anyBoolean());
+  }
+
+  private byte[] workbookWithAnnualUsage(int year, String annualUsage) throws Exception {
+    try (var workbook = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
+      var sheet = workbook.createSheet("产品属性");
+      var header = sheet.createRow(0);
+      var columns = List.of("料号", "品名", "规格", "型号", "产品属性", "生产事业部", "年度", "预计年用量（万只）");
+      for (int index = 0; index < columns.size(); index++) header.createCell(index).setCellValue(columns.get(index));
+      var row = sheet.createRow(1);
+      row.createCell(0).setCellValue("000101");
+      row.createCell(1).setCellValue("球阀");
+      row.createCell(4).setCellValue("非标品");
+      row.createCell(5).setCellValue("Excel事业部");
+      row.createCell(6).setCellValue(year);
+      row.createCell(7).setCellValue(annualUsage);
+      workbook.write(output);
+      return output.toByteArray();
+    }
   }
 
   private byte[] workbookWithFormulaDivision() throws Exception {

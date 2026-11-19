@@ -19,13 +19,16 @@ import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateReques
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareScenarioResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
@@ -73,6 +76,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   private final PricePrepareQueryService pricePrepareQueryService;
   private final PricePrepareReadinessService pricePrepareReadinessService;
   private final com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials reviewMaterials;
+  private final MaterialMasterRawMapper materialMaster;
 
   public QuotePricePrepareWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -88,8 +92,10 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
           technicalCorrections,
       PricePrepareInputRevisionService inputRevisions,
       QuotePricingPeriod pricingPeriods,
-      com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials reviewMaterials) {
+      com.sanhua.marketingcost.service.pricing.SupplierPriceReviewMaterials reviewMaterials,
+      MaterialMasterRawMapper materialMaster) {
     this.reviewMaterials = reviewMaterials;
+    this.materialMaster = materialMaster;
     this.pricingPeriods = pricingPeriods;
     this.inputRevisions = inputRevisions;
     this.technicalCorrections = technicalCorrections;
@@ -603,8 +609,10 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       pairs.computeIfAbsent(comparisonKey(item), ignored -> new ItemPair()).finance = item;
     }
 
+    var references = pairs.values().stream().map(ItemPair::reference).toList();
+    var models = loadDifferenceModels(references);
     List<QuotePricePrepareDifferenceResponse> differences =
-        pairs.values().stream().map(this::difference).toList();
+        pairs.values().stream().map(pair -> difference(pair, models)).toList();
     QuotePricePrepareDifferenceSummary summary = new QuotePricePrepareDifferenceSummary();
     summary.setTotalCount(differences.size());
     summary.setDifferentCount(
@@ -626,8 +634,34 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     response.setDifferenceSummary(summary);
   }
 
-  private QuotePricePrepareDifferenceResponse difference(ItemPair pair) {
-    PricePrepareItem reference = pair.oa == null ? pair.finance : pair.oa;
+  private Map<String, Map<String, String>> loadDifferenceModels(List<PricePrepareItem> references) {
+    Map<String, Map<String, String>> models = new LinkedHashMap<>();
+    for (var organization : MaterialOrganization.values()) {
+      var codes = references.stream()
+          .filter(item -> organization.getPriceOrgCode().equals(item.getPriceOrgCode()))
+          .map(PricePrepareItem::getMaterialCode)
+          .filter(code -> StringUtils.hasText(code) && !code.startsWith("DRAWING:") && !code.startsWith("DRAWING#"))
+          .distinct().toList();
+      if (codes.isEmpty()) continue;
+      var records = materialMaster.selectList(Wrappers.lambdaQuery(MaterialMasterRaw.class)
+          .select(MaterialMasterRaw::getMaterialCode, MaterialMasterRaw::getMaterialModel)
+          .eq(MaterialMasterRaw::getOrganizationCode, organization.getCode())
+          .eq(MaterialMasterRaw::getActiveFlag, 1)
+          .in(MaterialMasterRaw::getMaterialCode, codes));
+      Map<String, String> byCode = new LinkedHashMap<>();
+      for (var record : records) {
+        if (StringUtils.hasText(record.getMaterialModel())) {
+          byCode.put(record.getMaterialCode(), record.getMaterialModel().trim());
+        }
+      }
+      models.put(organization.getPriceOrgCode(), byCode);
+    }
+    return models;
+  }
+
+  private QuotePricePrepareDifferenceResponse difference(
+      ItemPair pair, Map<String, Map<String, String>> models) {
+    PricePrepareItem reference = pair.reference();
     BigDecimal financeUnitPrice = value(pair.finance, PricePrepareItem::getUnitPrice);
     BigDecimal oaUnitPrice = value(pair.oa, PricePrepareItem::getUnitPrice);
     BigDecimal financeAmount = value(pair.finance, PricePrepareItem::getAmount);
@@ -636,11 +670,13 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     BigDecimal amountDifference = zeroIfNull(oaAmount).subtract(zeroIfNull(financeAmount));
 
     QuotePricePrepareDifferenceResponse response = new QuotePricePrepareDifferenceResponse();
-    response.setSettlementKey(reference == null ? null : reference.getSettlementKey());
-    response.setMaterialCode(reference == null ? null : reference.getMaterialCode());
-    response.setMaterialName(reference == null ? null : reference.getMaterialName());
-    response.setItemType(reference == null ? null : reference.getItemType());
-    response.setQuantity(reference == null ? null : reference.getQuantity());
+    response.setSettlementKey(reference.getSettlementKey());
+    response.setMaterialCode(reference.getMaterialCode());
+    response.setMaterialName(reference.getMaterialName());
+    var organizationModels = models.get(reference.getPriceOrgCode());
+    if (organizationModels != null) response.setMaterialModel(organizationModels.get(reference.getMaterialCode()));
+    response.setItemType(reference.getItemType());
+    response.setQuantity(reference.getQuantity());
     response.setFinanceUnitPrice(financeUnitPrice);
     response.setOaUnitPrice(oaUnitPrice);
     response.setUnitPriceDifference(unitDifference);
@@ -697,6 +733,10 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   private static final class ItemPair {
     private PricePrepareItem oa;
     private PricePrepareItem finance;
+
+    private PricePrepareItem reference() {
+      return oa == null ? finance : oa;
+    }
   }
 
   private Scope resolveScope(String oaNo, Long oaFormItemId, String periodMonth) {

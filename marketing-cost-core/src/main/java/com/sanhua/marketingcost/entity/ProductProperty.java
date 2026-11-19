@@ -20,6 +20,7 @@ public class ProductProperty {
   private String productSpec;
   private String productModel;
   private String productAttr;
+  private BigDecimal estimatedAnnualUsageWan;
   private String remark;
   private String sourceType;
   private String sourceBatchNo;
@@ -50,6 +51,8 @@ public class ProductProperty {
   public void setProductModel(String value) { this.productModel = value; }
   public String getProductAttr() { return productAttr; }
   public void setProductAttr(String value) { this.productAttr = value; }
+  public BigDecimal getEstimatedAnnualUsageWan() { return estimatedAnnualUsageWan; }
+  public void setEstimatedAnnualUsageWan(BigDecimal value) { this.estimatedAnnualUsageWan = value; }
   public String getRemark() { return remark; }
   public void setRemark(String value) { this.remark = value; }
   public String getSourceType() { return sourceType; }
