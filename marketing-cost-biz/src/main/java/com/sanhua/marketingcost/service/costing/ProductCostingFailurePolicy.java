@@ -14,6 +14,9 @@ import org.springframework.util.StringUtils;
 @Component
 public class ProductCostingFailurePolicy {
   public Failure classify(String stage, RuntimeException exception) {
+    if (exception instanceof OemProductConfigStore.MissingRate missing) {
+      return new Failure("WAIT_PRICE", "COST_RUN", "OEM_RATE_MISSING", missing.getMessage(), 1, false);
+    }
     if(exception instanceof com.sanhua.marketingcost.service.materialshape.QuotationMaterialShapeGap gap)
       return new Failure("WAIT_PRICE","PRICE_PREPARE","MATERIAL_SHAPE_INPUT_MISSING",gap.getMessage(),1,false);
     if (exception instanceof EffectiveTechnicalDataException technical) {

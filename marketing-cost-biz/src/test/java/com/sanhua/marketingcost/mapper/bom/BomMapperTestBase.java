@@ -310,6 +310,8 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V350__monthly_reprice_costing_scope.sql", "V350");
       runScriptViaMysqlCli("/db/V361__monthly_reprice_reuse_contract.sql", "V361");
       runScriptViaMysqlCli("/db/V363__monthly_reprice_partial_publication.sql", "V363");
+      runScriptViaMysqlCli("/db/V389__oem_product_config.sql", "V389");
+      runScriptViaMysqlCli("/db/V391__quote_item_oem_rate.sql", "V391");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

@@ -36,6 +36,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private static final org.slf4j.Logger log =
       org.slf4j.LoggerFactory.getLogger(ProductCostingPipelineImpl.class);
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.CostRunCostItemService costItems;
 
   @org.springframework.beans.factory.annotation.Autowired
   public void setOaWorkflowAccess(
@@ -176,6 +178,9 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private ProductCostingResult executeStages(ProductCostingContext scope, boolean preparationOnly) {
     String stage = STEP_BOM;
     try {
+      if (costItems != null) {
+        costItems.requireQuoteOemRate(scope.form(), scope.item(), scope.productCode(), scope.periodMonth());
+      }
       // 财务确认刚生成的完整价格仍有效时，沿用它所属的计价行；重新启动工作台
       // 会清空该指针并重复生成 BOM/两侧价格。资料变化时仍走完整准备链。
       QuotePricePrepareWorkbenchResponse prices =

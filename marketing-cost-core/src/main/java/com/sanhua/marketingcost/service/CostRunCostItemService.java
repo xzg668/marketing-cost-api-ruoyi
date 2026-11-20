@@ -8,6 +8,9 @@ import java.util.Set;
 import java.util.function.IntConsumer;
 
 public interface CostRunCostItemService {
+  void requireQuoteOemRate(com.sanhua.marketingcost.entity.OaForm form,
+      com.sanhua.marketingcost.entity.OaFormItem item, String productCode, String periodMonth);
+
   /** Resolve actual sources without running the full ordinary cost calculation or persisting output. */
   com.sanhua.marketingcost.service.costing.ResolvedOrdinaryCost resolve(
       CostRunContext context, List<CostRunPartItemDto> currentPartItems);

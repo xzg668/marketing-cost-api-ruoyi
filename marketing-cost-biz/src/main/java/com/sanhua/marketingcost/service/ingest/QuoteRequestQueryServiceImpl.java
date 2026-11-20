@@ -57,6 +57,8 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private final QuotePricingPeriod pricingPeriods;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.costing.OemProductConfigStore oemProducts;
 
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
 
@@ -293,6 +295,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private QuoteRequestDetailResponse buildDetail(OaForm form) {
     String activeMonth = pricingPeriods.currentMonth(form.getBusinessUnitType());
     List<OaFormItem> items = listItems(form.getId());
+    var oemItems = oemProducts == null ? java.util.Set.<Long>of() : oemProducts.quoteItems(form.getId());
     List<QuoteBomStatus> statuses = listBomStatus(form.getOaNo());
     Map<Long, QuoteBomStatus> statusByItemId = toStatusMap(statuses);
     Map<Long, QuoteCostRunVersion> latestCostRunByItemId =
@@ -308,15 +311,10 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setBomAggregateStatus(bomAggregateStatus);
     response.setCalculable(isCalculable(form, items.size(), bomAggregateStatus));
     for (OaFormItem item : items) {
-      response
-          .getItems()
-          .add(
-              toItemResponse(
-                  item,
-                  statusByItemId.get(item.getId()),
-                  latestCostRunByItemId.get(item.getId()),
-                  workspaceByItemId.get(item.getId()),
-                  preparationByItemId.get(item.getId()), activeMonth));
+      var row = toItemResponse(item, statusByItemId.get(item.getId()), latestCostRunByItemId.get(item.getId()),
+          workspaceByItemId.get(item.getId()), preparationByItemId.get(item.getId()), activeMonth);
+      row.setOem(oemItems.contains(item.getId()));
+      response.getItems().add(row);
     }
     // 待人工确认时尚未生成 BOM 准备记录；从当前取图任务补上真实月份，产品行才能展示修正入口。
     var drawingTasks = drawingVerificationTaskMapper.findActiveForQuote(

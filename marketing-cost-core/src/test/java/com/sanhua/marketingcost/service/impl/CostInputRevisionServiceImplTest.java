@@ -12,13 +12,44 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
+import com.sanhua.marketingcost.service.costing.OemProductConfigStore;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class CostInputRevisionServiceImplTest {
+
+  @Test void onlyConfiguredProductUsesAnOemInputRevision() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service = new CostInputRevisionServiceImpl(jdbc, (form, item, month) ->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved", java.util.Set.of(), java.util.Set.of(), true));
+    var oemProducts = mock(OemProductConfigStore.class);
+    ReflectionTestUtils.setField(service, "oemProducts", oemProducts);
+    var quote = form();
+    var configured = item(11L, "1145900000989");
+    var other = item(12L, "1145900000989");
+    when(oemProducts.quoteOption(11L, "COMMERCIAL", "1145900000989")).thenReturn(OemProductConfigStore.QuoteOption.ORDINARY);
+    when(oemProducts.quoteOption(12L, "COMMERCIAL", "1145900000989")).thenReturn(OemProductConfigStore.QuoteOption.ORDINARY);
+    String original = service.currentRevision(quote, configured, "2026-11");
+    String otherOriginal = service.currentRevision(quote, other, "2026-11");
+
+    when(oemProducts.quoteOption(11L, "COMMERCIAL", "1145900000989"))
+        .thenReturn(new OemProductConfigStore.QuoteOption(true, 1L, null));
+    String updated = service.currentRevision(quote, configured, "2026-11");
+    assertThat(updated).isNotEqualTo(original);
+    assertThat(service.currentRevisions(quote, List.of(configured, other), "2026-11"))
+        .containsEntry(11L, updated).containsEntry(12L, otherOriginal);
+
+    when(oemProducts.quoteOption(11L, "COMMERCIAL", "1145900000989"))
+        .thenReturn(new OemProductConfigStore.QuoteOption(true, 1L, new BigDecimal(".12")));
+    assertThat(service.currentRevision(quote, configured, "2026-11")).isNotEqualTo(updated);
+    when(oemProducts.quoteOption(11L, "COMMERCIAL", "1145900000989")).thenReturn(OemProductConfigStore.QuoteOption.ORDINARY);
+    assertThat(service.currentRevision(quote, configured, "2026-11")).isEqualTo(original);
+  }
 
   @Test void alternativeAndRestoreInvalidateOnlyTheirProductAndMonthWhileRepeatRemainsStable() {
     var jdbc=mock(JdbcTemplate.class);

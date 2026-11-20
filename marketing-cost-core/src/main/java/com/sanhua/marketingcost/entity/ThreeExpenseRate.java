@@ -33,7 +33,7 @@ public class ThreeExpenseRate {
   private String productCategory;
   private String productLine;
   private BigDecimal threeExpenseTotalRate;
-  /** OEM费用率当前只导入展示，不参与三项费用计算。 */
+  /** 已配置为OEM的报价产品使用此费率计提营业费用。 */
   private BigDecimal oemExpenseRate;
   private String sourceType;
   private String importBatchNo;

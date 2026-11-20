@@ -12,6 +12,7 @@ public class QuoteRequestItemResponse {
   private String externalLineId;
   private String productName;
   private String materialNo;
+  private boolean oem;
   private String sunlModel;
   private String customerCode;
   private String customerDrawing;

@@ -665,6 +665,19 @@ class CostRunCostItemServiceImplTest {
   @Test
   @DisplayName("Q10 三项费用：按报价单核算维度和维度映射命中费率")
   void threeExpenseRateUsesQuoteAccountingContext() {
+    verifyThreeExpenseRates(false, new BigDecimal("0.120000"), null);
+  }
+
+  @Test
+  void oemQuoteUsesDedicatedRateThenFallbackAndZeroesOtherRates() {
+    verifyThreeExpenseRates(true, new BigDecimal("0.120000"), null);
+    verifyThreeExpenseRates(true, new BigDecimal("0.120000"), new BigDecimal(".09"));
+    verifyThreeExpenseRates(true, null, BigDecimal.ZERO);
+    assertThatThrownBy(() -> verifyThreeExpenseRates(true, null, null))
+        .hasMessageContaining("缺少OEM费率");
+  }
+
+  private void verifyThreeExpenseRates(boolean oem, BigDecimal oemRate, BigDecimal override) {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
@@ -704,6 +717,7 @@ class CostRunCostItemServiceImplTest {
     rate.setManagementExpenseRate(new BigDecimal("0.080000"));
     rate.setFinanceExpenseRate(new BigDecimal("0.020000"));
     rate.setSalesExpenseRate(new BigDecimal("0.200000"));
+    rate.setOemExpenseRate(oemRate);
     when(threeExpenseRateMapper.selectList(any(Wrapper.class))).thenReturn(List.of(rate));
 
     CostRunCostItemServiceImpl svc =
@@ -711,6 +725,10 @@ class CostRunCostItemServiceImplTest {
             formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup,
             threeExpenseRateMapper);
+    var oemProducts = mock(com.sanhua.marketingcost.service.costing.OemProductConfigStore.class);
+    when(oemProducts.quoteOption(1L, "COMMERCIAL", "P-Q10"))
+        .thenReturn(new com.sanhua.marketingcost.service.costing.OemProductConfigStore.QuoteOption(oem, 10L, override));
+    org.springframework.test.util.ReflectionTestUtils.setField(svc, "oemProducts", oemProducts);
     List<CostRunCostItemDto> items =
         svc.listByMaterialCodes(
             "OA-Q10",
@@ -721,11 +739,15 @@ class CostRunCostItemServiceImplTest {
             true,
             ignored -> {});
 
-    assertThat(findItem(items, "MGMT_EXP").getRate()).isEqualByComparingTo("0.080000");
-    assertThat(findItem(items, "SALES_EXP").getRate()).isEqualByComparingTo("0.200000");
-    assertThat(findItem(items, "FIN_EXP").getRate()).isEqualByComparingTo("0.020000");
+    assertThat(findItem(items, "MGMT_EXP").getRate()).isEqualByComparingTo(oem ? "0" : "0.080000");
+    var sales = findItem(items, "SALES_EXP");
+    assertThat(sales.getRate()).isEqualByComparingTo(oem ? (override == null ? oemRate : override) : new BigDecimal("0.200000"));
+    assertThat(sales.getRemark()).isEqualTo(oem ? "（OEM）" : null);
+    assertThat(findItem(items, "FIN_EXP").getRate()).isEqualByComparingTo(oem ? "0" : "0.020000");
+    if (oem) assertThat(findItem(items, "MANUFACTURE").getRate()).isEqualByComparingTo("0");
     assertThat(findItem(items, "MGMT_EXP").getRemark()).isNull();
-    verify(threeExpenseRateMapper).selectList(any(Wrapper.class));
+    assertThat(findItem(items, "FIN_EXP").getRemark()).isNull();
+    verify(threeExpenseRateMapper, org.mockito.Mockito.times(override == null ? 1 : 0)).selectList(any(Wrapper.class));
   }
 
   @Test

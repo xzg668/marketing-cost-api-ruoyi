@@ -9,6 +9,7 @@ import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunFeeQuery;
 import com.sanhua.marketingcost.service.costing.CostRunPreparedInputs;
 import com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients;
+import com.sanhua.marketingcost.service.costing.OemProductConfigStore;
 import com.sanhua.marketingcost.service.costing.ResolvedOrdinaryCost;
 import com.sanhua.marketingcost.service.costing.CmsCostCompositions;
 import com.sanhua.marketingcost.service.costing.CmsCompositionReader;
@@ -167,6 +168,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   @Autowired private CmsCompositionReader cmsCompositionReader;
   @Autowired(required=false) private com.sanhua.marketingcost.service.QuotationMaterialShapeInputs quoteShapeInputs;
   @Autowired(required=false) private com.sanhua.marketingcost.service.costing.CmsShapeCostAdjustment cmsShapeAdjustment;
+  @Autowired(required=false) private OemProductConfigStore oemProducts;
 
   @Autowired
   public CostRunCostItemServiceImpl(
@@ -376,6 +378,24 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         resolveCostSourceContext(context.getOaNo().trim(), context.getProductCode().trim(), context, currentPartItems), ordinary);
   }
 
+  @Override
+  public void requireQuoteOemRate(OaForm form, OaFormItem item, String productCode, String periodMonth) {
+    if (oemProducts == null) return;
+    var context = new CostRunContext();
+    context.setPricingMonth(periodMonth);
+    var sources = resolveCostSourceContext(form, List.of(item), productCode, context, null);
+    var option = oemProducts.quoteOption(item.getId(), sources.businessUnitType, productCode);
+    if (option.enabled() && option.rate() == null) {
+      requireOemSalesRate(findThreeExpenseRate(sources).rate(), productCode);
+    }
+  }
+
+  private BigDecimal requireOemSalesRate(ThreeExpenseRate threeExpenseRate, String productCode) {
+    BigDecimal rate = threeExpenseRate == null ? null : threeExpenseRate.getOemExpenseRate();
+    if (rate == null) throw new OemProductConfigStore.MissingRate(productCode);
+    return rate;
+  }
+
   record InputDimensions(int year, String unit, String organization, String model,
       String sourceDivision, String accountingMonth, CostRunFeeQuery.ThreeExpense threeExpense) {}
 
@@ -506,8 +526,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     RateLookup lossLookup = findLossRate(productCodeValue, costSourceContext, technicalData);
     BigDecimal lossRate = lossLookup.rate();
     String lossRemark = lossLookup.remark();
-    RateLookup manufactureLookup =
-        findManufactureRate(productCodeValue, materialCodes, costSourceContext);
+    var oemOption = costSourceContext.oemOption;
+    boolean oem = oemOption.enabled();
+    RateLookup manufactureLookup = oem ? new RateLookup(BigDecimal.ZERO, null)
+        : findManufactureRate(productCodeValue, materialCodes, costSourceContext);
     BigDecimal manufactureRate = manufactureLookup.rate();
     String manufactureRemark = manufactureLookup.remark();
     if (manufactureRate != null && manufactureRate.compareTo(BigDecimal.ONE) >= 0) {
@@ -517,12 +539,24 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         lookupProductCoefficient(productCodeValue, costSourceContext);
     BigDecimal coefficient = coefficientLookup.coefficient();
     String adjustedManufactureRemark = joinRemarks(manufactureRemark, coefficientLookup.remark());
-    ThreeExpenseLookup threeExpLookup = findThreeExpenseRate(costSourceContext);
+    ThreeExpenseLookup threeExpLookup = oem && oemOption.rate() != null
+        ? new ThreeExpenseLookup(null, null) : findThreeExpenseRate(costSourceContext);
     ThreeExpenseRate threeExpenseRate = threeExpLookup.rate();
     String threeExpRemark = threeExpLookup.remark();
-    BigDecimal mgmtRate = threeExpenseRate == null ? null : threeExpenseRate.getManagementExpenseRate();
+    BigDecimal mgmtRate = oem ? BigDecimal.ZERO : threeExpenseRate == null ? null : threeExpenseRate.getManagementExpenseRate();
+    BigDecimal financeRate = oem ? BigDecimal.ZERO : threeExpenseRate == null ? null : threeExpenseRate.getFinanceExpenseRate();
     BigDecimal salesRate = threeExpenseRate == null ? null : threeExpenseRate.getSalesExpenseRate();
-    BigDecimal financeRate = threeExpenseRate == null ? null : threeExpenseRate.getFinanceExpenseRate();
+    String salesSource = null;
+    Long salesSourceId = null;
+    if (oem && oemOption.rate() != null) {
+      salesRate = oemOption.rate();
+      salesSource = "lp_oem_product_config";
+      salesSourceId = oemOption.configId();
+    } else if (oem) {
+      salesRate = requireOemSalesRate(threeExpenseRate, productCodeValue);
+      salesSource = "lp_three_expense_rate";
+      salesSourceId = threeExpenseRate.getId();
+    }
     // Derived amounts are computed only after all actual input values have been resolved.
     List<CostRunCostItemDto> items = new ArrayList<>();
     items.add(buildItem(MATERIAL, "材料费", null, null, materialTotal));
@@ -548,11 +582,11 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         adjustedManufactureRemark,
         coefficientLookup.technicalVersionId() == null ? null : "lp_quote_tech_data_version",
         coefficientLookup.technicalVersionId()));
-    // T10：MGMT/SALES/FIN 三项共享 threeExpRemark
     items.add(buildItem(
         MGMT_EXP, "管理费用", null, mgmtRate, null, threeExpRemark));
     items.add(buildItem(
-        SALES_EXP, "销售费用", null, salesRate, null, threeExpRemark));
+        SALES_EXP, "销售费用", null, salesRate, null,
+        oem ? OemProductConfigStore.RATE_NOTE : threeExpRemark, salesSource, salesSourceId));
     items.add(buildItem(
         FIN_EXP, "财务费用", null, financeRate, null, threeExpRemark));
     items.addAll(otherExpenseItems);
@@ -906,6 +940,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       CostRunContext context,
       List<CostRunPartItemDto> currentPartItems) {
     var resolved=resolveBaseCostSourceContext(oaNo,productCode,context,currentPartItems);
+    if (oemProducts != null && context != null) {
+      resolved.oemOption = oemProducts.quoteOption(context.getOaFormItemId(), resolved.businessUnitType, productCode);
+    }
     if(context!=null && quoteShapeInputs!=null) {
       resolved.shapeChanges=quoteShapeInputs.cmsExclusions(context);
       context.setCmsShapeExclusions(resolved.shapeChanges);
@@ -1693,7 +1730,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       ThreeExpenseRate officeMatched =
           matchThreeExpenseOfficeCandidate(match, candidates, match.sourceOffice);
       if (officeMatched != null) {
-        // OEM费用率本期只导入和展示，不参与 MGMT_EXP / SALES_EXP / FIN_EXP 计算。
         return officeMatched;
       }
     }
@@ -2760,6 +2796,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   }
 
   private static class CostSourceContext {
+    private OemProductConfigStore.QuoteOption oemOption = OemProductConfigStore.QuoteOption.ORDINARY;
     private java.util.Map<String,BigDecimal> shapeChanges=java.util.Map.of();
     private com.sanhua.marketingcost.service.costing.CostRunPreparedInputs prepared;
     private final Integer costYear;

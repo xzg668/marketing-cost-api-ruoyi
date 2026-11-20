@@ -69,6 +69,23 @@ public class JjbExcelRendererTest {
     }
   }
 
+  @Test void oemSalesRateKeepsNumericExcelCellAndDisplaysTheSavedNote() throws Exception {
+    var base = model(0, 0, 0);
+    var rows = base.rows().stream().map(row -> "SALES_EXP".equals(row.code())
+        ? row.toBuilder().rate("0.120000").remark("（OEM）").build() : row).toList();
+    var value = new JjbReadModel(base.identity(), base.header(), rows, base.monthlyPrices(), base.totals(), base.warnings());
+    var bytes = new ByteArrayOutputStream();
+    new JjbExcelRenderer().write(value, bytes);
+    try (var book = new XSSFWorkbook(new ByteArrayInputStream(bytes.toByteArray()))) {
+      var sales = java.util.stream.StreamSupport.stream(book.getSheetAt(0).spliterator(), false)
+          .filter(row -> row.getCell(2) != null && row.getCell(2).toString().equals("SALES_EXP"))
+          .findFirst().orElseThrow().getCell(15);
+      assertThat(sales.getCellType()).isEqualTo(CellType.NUMERIC);
+      assertThat(sales.getNumericCellValue()).isEqualTo(0.12);
+      assertThat(new DataFormatter(Locale.CHINA).formatCellValue(sales)).endsWith("%（OEM）");
+    }
+  }
+
   public static JjbReadModel model(int ordinary, int household, int fees) {
     List<JjbReadModel.Row> rows = new ArrayList<>();
     for (int i = 0; i < ordinary; i++)

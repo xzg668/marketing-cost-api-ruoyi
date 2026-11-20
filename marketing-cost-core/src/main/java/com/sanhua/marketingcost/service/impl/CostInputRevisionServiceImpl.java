@@ -119,6 +119,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
   private final QuotationMonthlyPriceInputs monthlyInputs;
   @Autowired(required=false)
   private com.sanhua.marketingcost.service.QuotationMaterialShapeInputs materialShapes;
+  @Autowired(required=false)
+  private com.sanhua.marketingcost.service.costing.OemProductConfigStore oemProducts;
 
   @Autowired
   public CostInputRevisionServiceImpl(
@@ -227,6 +229,17 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "materialDifferencePolicy",
         com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);
+    String productCode = com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(item);
+    if (oemProducts != null) {
+      String unit = item.getBusinessUnitType() == null || item.getBusinessUnitType().isBlank()
+          ? form.getBusinessUnitType() : item.getBusinessUnitType();
+      var oem = oemProducts.quoteOption(item.getId(), unit, productCode);
+      if (oem.enabled()) {
+        append(canonical, "quoteItemOem", true);
+        append(canonical, "oemOverrideRate", oem.rate());
+        if (oem.rate() != null) append(canonical, "oemOverrideId", oem.configId());
+      }
+    }
     if (!jdbcTemplate.queryForList(PROCESS_FEE_SHAPE_SCOPE_SQL, item.getId(), pricingMonth).isEmpty()) {
       append(canonical, "processingFeeShapePolicy", "ACTUAL_OUTSOURCE_ONLY_V1");
     }
@@ -236,7 +249,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     var partCostRules = jdbcTemplate.queryForList(
         "SELECT id,revision,product_code,part_code,part_model,shape,manufacture_rate FROM lp_product_part_cost_rule"
             + " WHERE business_unit_type=? AND product_code=? ORDER BY id",
-        item.getBusinessUnitType(), com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(item));
+        item.getBusinessUnitType(), productCode);
     // Products without configuration keep their existing saved-cost revision and reuse behavior.
     if (!partCostRules.isEmpty()) append(canonical, "productPartCostRules", partCostRules);
     String shapeRevision=materialShapes==null ? null : materialShapes.revision(item,pricingMonth);
