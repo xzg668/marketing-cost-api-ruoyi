@@ -9,11 +9,12 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
+import org.apache.ibatis.exceptions.TooManyResultsException;
 import com.sanhua.marketingcost.dto.CostRunFeeQuery;
 import com.sanhua.marketingcost.service.costing.CostRunFeeSources;
 import org.springframework.stereotype.Service;
 
-/** 核算与补录共用的公共取率：组织内有效料品 → 裸品 → 年度、业务单元配置。 */
+/** 核算与补录共用的公共取率：同年度、同业务单元先查裸品，再查报价料号。 */
 @Service
 public class NetLossRateQuery {
   public record Source(String status, String reasonCode, String message, Long materialId,
@@ -24,14 +25,14 @@ public class NetLossRateQuery {
   public record ApplicableRate(String status, String sourceType, BigDecimal rate, String message) {}
 
   public static boolean validPublicRate(BigDecimal rate) {
-    return rate != null && rate.signum() > 0 && rate.compareTo(BigDecimal.ONE) < 0;
+    return rate != null && rate.signum() >= 0 && rate.compareTo(BigDecimal.ONE) < 0;
   }
 
   public static ApplicableRate select(Source publicSource, BigDecimal approvedSupplementalRate) {
     if (publicSource == null) throw new IllegalArgumentException("缺少公共净损失率查询结果");
     if ("AVAILABLE".equals(publicSource.status())) {
       if (!validPublicRate(publicSource.rate())) return new ApplicableRate("ERROR", "PUBLIC", null,
-          "公共净损失率必须大于 0% 且小于 100%，请核实配置");
+          "公共净损失率必须大于等于 0% 且小于 100%，请核实配置");
       return new ApplicableRate("AVAILABLE", "PUBLIC", publicSource.rate(), "采用公共净损失率");
     }
     if (!"MISSING".equals(publicSource.status())) {
@@ -64,7 +65,7 @@ public class NetLossRateQuery {
     if (matches.size() != 1) return missing(matches.isEmpty() ? "NET_LOSS_PRODUCT_MISSING" : "NET_LOSS_PRODUCT_AMBIGUOUS",
         matches.isEmpty() ? "未找到对应的有效成品料品档案" : "对应多个成品，请在补录中选择参考成品或直接填写",
         code, organization, year, businessUnit);
-    return resolve(matches.getFirst(), organization, year, businessUnit);
+    return resolve(matches.getFirst(), code, organization, year, businessUnit);
   }
 
   public record Lookup(String code, String model, String organization, int year, String businessUnit) {}
@@ -110,12 +111,19 @@ public class NetLossRateQuery {
       }
     }
     var selectedRates = new HashMap<Integer, QualityLossRate>();
-    var ratesByScope = sources.readQualityLoss(rateQueries);
-    for (int i = 0; i < ratePositions.size(); i++) {
-      var rows = ratesByScope.get(i);
-      if (rows.size() > 1) throw new org.apache.ibatis.exceptions.TooManyResultsException("同一年度、裸品和业务单元存在多条净损失率");
-      if (!rows.isEmpty()) selectedRates.put(ratePositions.get(i), rows.getFirst());
+    readRates(sources, ratePositions, rateQueries, selectedRates);
+    ratePositions.clear();
+    rateQueries.clear();
+    for (int i = 0; i < stable.size(); i++) {
+      var q = stable.get(i);
+      var found = matches.get(i);
+      if (found.size() == 1 && !selectedRates.containsKey(i)
+          && canUseQuoteCode(q.code(), bareCode(found.getFirst()))) {
+        ratePositions.add(i);
+        rateQueries.add(new CostRunFeeQuery.QualityLoss(q.year(), q.code().trim(), q.businessUnit()));
+      }
     }
+    readRates(sources, ratePositions, rateQueries, selectedRates);
     var result = new ArrayList<Source>();
     for (int i = 0; i < stable.size(); i++) {
       var q = stable.get(i); var found = matches.get(i);
@@ -126,6 +134,19 @@ public class NetLossRateQuery {
               q.code(), q.organization(), q.year(), q.businessUnit()));
     }
     return List.copyOf(result);
+  }
+
+  private static void readRates(CostRunFeeSources sources, List<Integer> positions,
+      List<CostRunFeeQuery.QualityLoss> queries, HashMap<Integer, QualityLossRate> selectedRates) {
+    if (queries.isEmpty()) return;
+    var ratesByScope = sources.readQualityLoss(queries);
+    for (int i = 0; i < positions.size(); i++) {
+      var rows = ratesByScope.get(i);
+      if (rows.size() > 1) {
+        throw new TooManyResultsException("同一年度、料号和业务单元存在多条净损失率");
+      }
+      if (!rows.isEmpty()) selectedRates.put(positions.get(i), rows.getFirst());
+    }
   }
 
   public List<Source> search(String searchBy, String keyword, String organization, int year, String businessUnit) {
@@ -139,15 +160,24 @@ public class NetLossRateQuery {
       var exact = matches.stream().filter(row -> keyword.trim().equalsIgnoreCase(row.getMaterialModel())).toList();
       if (!exact.isEmpty()) matches = exact;
     }
-    return matches.stream().map(row -> resolve(row, organization, year, businessUnit)).toList();
+    return matches.stream().map(row -> resolve(row, row.getMaterialCode(), organization, year, businessUnit)).toList();
   }
 
-  private Source resolve(MaterialMasterRaw material, String organization, int year, String businessUnit) {
+  private Source resolve(MaterialMasterRaw material, String quoteCode, String organization, int year, String businessUnit) {
     String bare = bareCode(material);
-    var rate = blank(bare) ? null : rates.selectOne(Wrappers.lambdaQuery(QualityLossRate.class)
-        .eq(QualityLossRate::getRateYear, year).eq(QualityLossRate::getBareProductCode, bare.trim())
-        .eq(QualityLossRate::getBusinessUnitType, businessUnit));
+    var rate = blank(bare) ? null : findRate(bare, year, businessUnit);
+    if (rate == null && canUseQuoteCode(quoteCode, bare)) rate = findRate(quoteCode, year, businessUnit);
     return resolve(material, organization, year, businessUnit, rate);
+  }
+
+  private QualityLossRate findRate(String code, int year, String businessUnit) {
+    return rates.selectOne(Wrappers.lambdaQuery(QualityLossRate.class)
+        .eq(QualityLossRate::getRateYear, year).eq(QualityLossRate::getBareProductCode, code.trim())
+        .eq(QualityLossRate::getBusinessUnitType, businessUnit));
+  }
+
+  private static boolean canUseQuoteCode(String quoteCode, String bareCode) {
+    return !blank(quoteCode) && (blank(bareCode) || !quoteCode.trim().equals(bareCode.trim()));
   }
 
   private static String bareCode(MaterialMasterRaw material) {
@@ -157,16 +187,17 @@ public class NetLossRateQuery {
 
   private Source resolve(MaterialMasterRaw material, String organization, int year, String businessUnit,
       QualityLossRate rate) {
-    String bare = bareCode(material);
-    if (blank(bare)) return source(material, null, organization, year, businessUnit, null, "MISSING",
+    String rawBare = bareCode(material);
+    String bare = blank(rawBare) ? null : rawBare.trim();
+    if (rate == null && bare == null) return source(material, null, organization, year, businessUnit, null, "MISSING",
         "NET_LOSS_BARE_MISSING", "该成品未维护裸品料号");
-    if (rate == null) return source(material, bare.trim(), organization, year, businessUnit, null,
+    if (rate == null) return source(material, bare, organization, year, businessUnit, null,
         "MISSING", "NET_LOSS_RATE_MISSING", "该裸品暂无本核算年度、业务单元的净损失率");
     if (!validPublicRate(rate.getLossRate())) {
-      return source(material, bare.trim(), organization, year, businessUnit, rate,
-          "ERROR", "NET_LOSS_RATE_INVALID", "公共净损失率必须大于 0% 且小于 100%，请核实配置");
+      return source(material, bare, organization, year, businessUnit, rate,
+          "ERROR", "NET_LOSS_RATE_INVALID", "公共净损失率必须大于等于 0% 且小于 100%，请核实配置");
     }
-    return source(material, bare.trim(), organization, year, businessUnit, rate,
+    return source(material, bare, organization, year, businessUnit, rate,
         "AVAILABLE", "NET_LOSS_SOURCE_AVAILABLE", "沿用本产品已有净损失率");
   }
 

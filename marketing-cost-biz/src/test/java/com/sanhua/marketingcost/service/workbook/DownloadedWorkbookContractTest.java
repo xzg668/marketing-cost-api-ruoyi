@@ -93,6 +93,23 @@ class DownloadedWorkbookContractTest {
     var plate=new PlateMaterialWorkbookParser().parse(fixture("plate"),"板片.xlsx");assertThat(plate.errors()).isEmpty();assertThat(plate.rows()).hasSize(1);
     var scrap=new ScrapPriceWorkbookParser(new ObjectMapper()).parse(fixture("scrap"),"废料.xlsx");assertThat(scrap.errors()).isEmpty();assertThat(scrap.rows()).hasSize(1);
   }
+  @Test void scrapTemplateAcceptsOriginalAndEditedFormulaReferences() throws Exception {
+    var parser = new ScrapPriceWorkbookParser(new ObjectMapper());
+    var linked = parser.parse(fixture("scrap-linked"), "废料联动.xlsx");
+    assertThat(linked.errors()).isEmpty();
+    assertThat(linked.rows()).hasSize(1);
+    var original = linked.rows().getFirst().rule();
+    assertThat(original.materialCode()).isEqualTo("001234");
+    assertThat(original.sourceFormula()).isEqualTo("$B$1*0.8/1.13");
+    assertThat(original.factorBindings()).containsExactlyEntriesOf(Map.of("Cu", "AVG|1#CU"));
+
+    var edited = parser.parse(fixture("scrap-edited"), "废料联动改引用.xlsx");
+    assertThat(edited.errors()).isEmpty();
+    assertThat(edited.rows()).hasSize(1);
+    assertThat(edited.rows().getFirst().rule().sourceFormula()).isEqualTo("$B$2*0.7/1.13");
+    assertThat(edited.rows().getFirst().rule().factorBindings())
+        .containsExactlyEntriesOf(Map.of("Brass", "AVG|美国柜装黄铜"));
+  }
   @ParameterizedTest @ValueSource(strings={"cmsPlan","cmsWorkshop","cmsSubject","cmsSetting","cmsScrap"})
   void cmsUsesActualRequiredHeadersAndUnits(String kind) throws Exception {
     var parser=new CmsCostExcelParseServiceImpl();var input=new ByteArrayInputStream(fixture(kind));

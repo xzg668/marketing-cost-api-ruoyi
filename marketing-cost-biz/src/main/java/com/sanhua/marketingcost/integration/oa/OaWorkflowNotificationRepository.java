@@ -82,7 +82,8 @@ public class OaWorkflowNotificationRepository {
         SELECT EXISTS(SELECT 1 FROM lp_quote_tech_submission s
           JOIN lp_oa_integration_message m ON m.id=s.outbound_message_id
           JOIN lp_quote_tech_oa_recipient r ON r.id=s.recipient_id
-        WHERE m.technical_batch_id=? AND (r.active_flag<>1 OR r.latest_submission_id<>s.id))
+          JOIN lp_quote_tech_task t ON t.id=s.task_id
+        WHERE m.technical_batch_id=? AND (t.active_flag<>1 OR r.active_flag<>1 OR r.latest_submission_id<>s.id))
         """, Boolean.class, batchId));
   }
 

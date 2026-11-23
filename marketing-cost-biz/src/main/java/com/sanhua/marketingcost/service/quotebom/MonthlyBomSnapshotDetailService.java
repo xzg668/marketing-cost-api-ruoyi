@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata;
+import com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis;
 import com.sanhua.marketingcost.service.impl.BomEffectiveTreePruner;
 import com.sanhua.marketingcost.service.impl.PlateCommercialMakeBomExpansionService;
 import java.sql.SQLException;
@@ -39,6 +40,8 @@ public class MonthlyBomSnapshotDetailService {
   private final BomRawHierarchyMapper hierarchyMapper;
   private final PlateCommercialMakeBomExpansionService expansionService;
   private final U9BomAlternativeMetadata alternativeMetadata;
+  @org.springframework.beans.factory.annotation.Autowired
+  private U9BomQuantityBasis quantityBasis;
 
   public MonthlyBomSnapshotDetailService(JdbcTemplate jdbc, ObjectMapper json,
       BomRawHierarchyMapper hierarchyMapper,
@@ -171,6 +174,7 @@ public class MonthlyBomSnapshotDetailService {
     if (!load(snapshotId).isEmpty()) return;
     var frozenRows = detached(rows);
     alternativeMetadata.complete(frozenRows);
+    if (quantityBasis != null) quantityBasis.capture(frozenRows);
     try {
       jdbc.batchUpdate(
           "INSERT INTO lp_quote_bom_monthly_snapshot_detail "

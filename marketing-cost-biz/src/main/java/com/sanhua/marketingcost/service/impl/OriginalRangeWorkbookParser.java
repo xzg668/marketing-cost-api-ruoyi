@@ -177,6 +177,7 @@ public final class OriginalRangeWorkbookParser {
                   row.sheet(), row.row(), row.identity().materialCode(), error.getMessage()));
         }
       }
+      OriginalRangeBandWorkbook.read(book, compiler, rules, errors);
       if (mainRows.isEmpty() && errors.isEmpty() && notices.isEmpty())
         errors.add(new RowError(main.sheet().getSheetName(), null, null, "未读取到主价格记录"));
     } catch (Exception error) {
@@ -188,7 +189,7 @@ public final class OriginalRangeWorkbookParser {
   private List<MatrixRow> matrices(Workbook book, Sheet main) {
     List<MatrixRow> result = new ArrayList<>();
     for (Sheet sheet : book) {
-      if (sheet == main) continue;
+      if (sheet == main || OriginalRangeBandWorkbook.SHEET.equals(sheet.getSheetName())) continue;
       List<Block> blocks = new ArrayList<>();
       for (Row row : sheet) {
         int material = column(row, "U9代码", "料号", "物料代码");
@@ -443,7 +444,7 @@ public final class OriginalRangeWorkbookParser {
     return List.copyOf(result);
   }
 
-  private static CellSource source(Cell cell) {
+  static CellSource source(Cell cell) {
     if (cell == null) return null;
     CellType valueType =
         cell.getCellType() == CellType.FORMULA

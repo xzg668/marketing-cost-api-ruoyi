@@ -156,9 +156,10 @@ public class OutsourceScrapPreparation {
   }
   public Map<String,Object> evidence(BomCostingRow row) {
     if(row.getQuotationShapeEvidence()!=null) return row.getQuotationShapeEvidence();
-    if(row.getId()==null || !path(row.getPath()).contains("/shape-recovery-") || !shapes.installed()) return null;
+    if(row.getId()==null || !"BYPRODUCT_EXTRA".equals(row.getSettlementRowType()) || !shapes.installed()) return null;
     var rows=jdbc.queryForList("SELECT evidence_json FROM lp_quote_outsource_scrap_basis WHERE costing_row_id=? AND business_unit_type=? AND oa_form_item_id=? AND period_month=?",
         String.class,row.getId(),row.getBusinessUnitType(),row.getOaFormItemId(),row.getPeriodMonth());
+    if(rows.isEmpty() && !path(row.getPath()).contains("/shape-recovery-")) return null;
     if(rows.size()!=1) throw missing(row.getMaterialCode(),row.getMaterialName(),"缺少委外废料重量计算底稿");
     try { return json.readValue(rows.getFirst(),new TypeReference<Map<String,Object>>(){}); }
     catch(java.io.IOException e) { throw new IllegalStateException("委外废料重量计算底稿损坏",e); }

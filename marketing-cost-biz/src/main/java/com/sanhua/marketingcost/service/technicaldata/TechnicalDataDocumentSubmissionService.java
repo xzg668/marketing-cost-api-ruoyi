@@ -333,16 +333,20 @@ public class TechnicalDataDocumentSubmissionService {
       if (
         Set.of("SENT", "APPROVED", "RETURNED", "FAILED").contains(submission.getSubmissionStatus())
       ) continue;
+      boolean active = Integer.valueOf(1).equals(task.getActiveFlag());
       if (accepted) {
         var product = products.lockProduct(submission.getProductId()).orElseThrow();
         var version = versions.verified(submission.getTechnicalVersionId(), product.getId());
         versions.transition(version, "SUBMITTED", batch.actorId());
-        versions.state(product, person, version.getId(), "SUBMITTED");
+        if (active) versions.state(product, person, version.getId(), "SUBMITTED");
         workflow.acceptSubmission(submission.getId(), batch.request().path("requestId").asText());
+        // I01 可以在等待 OA 回执期间移除该产品。保留已发送版本，只发布仍在原单办理的资料。
+        if (!active) continue;
         recipients.state(person.id(), submission.getId(), "PREPARED", "SUBMITTED", null);
         lifecycle.publishSubmitted(task, submissions.selectById(submission.getId()), batch.actorId());
       } else if (rejected) {
         workflow.rejectSubmission(submission.getId());
+        if (!active) continue;
         recipients.state(person.id(), submission.getId(), "PREPARED", "OPEN", person.returnReason());
         recipients.refreshTask(task.getId());
         var product = products.lockProduct(submission.getProductId()).orElseThrow();

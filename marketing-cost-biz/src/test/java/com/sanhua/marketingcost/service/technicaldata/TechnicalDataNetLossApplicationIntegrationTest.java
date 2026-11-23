@@ -83,14 +83,16 @@ class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(second.content().bareMaterialNo()).isEqualTo(key + "-B");
   }
 
-  @Test void missingProductBareOrYearlyRateStayMissingAndPublicZeroIsInvalid() {
+  @Test void missingProductBareOrYearlyRateStayMissingAndPublicZeroCanBeReferenced() {
     assertThat(sources.lookup(key, null, "COMMERCIAL", 2026, "COMMERCIAL").reasonCode()).isEqualTo("NET_LOSS_PRODUCT_MISSING");
     assertThat(sources.lookup(key, key + "-SAME", "COMMERCIAL", 2026, "COMMERCIAL").reasonCode()).isEqualTo("NET_LOSS_PRODUCT_AMBIGUOUS");
-    assertThat(sources.lookup(key, key + "-ZERO", "COMMERCIAL", 2026, "COMMERCIAL").status()).isEqualTo("ERROR");
+    assertThat(sources.lookup(key, key + "-ZERO", "COMMERCIAL", 2026, "COMMERCIAL").status()).isEqualTo("AVAILABLE");
     assertThat(source("NOBARE").source().reasonCode()).isEqualTo("NET_LOSS_BARE_MISSING");
     assertThat(source("NORATE").source().reasonCode()).isEqualTo("NET_LOSS_RATE_MISSING");
     assertThatThrownBy(() -> service.save(productId, reference(source("NORATE"), 0), WANG)).hasMessageContaining("暂无");
-    assertThatThrownBy(() -> service.save(productId, reference(source("ZERO"), 0), WANG)).hasMessageContaining("必须大于 0%");
+    var saved = service.save(productId, reference(source("ZERO"), 0), WANG);
+    assertThat(saved.content().rate()).isZero();
+    assertThat(saved.moduleStatus()).isEqualTo("READY");
   }
 
   @Test void manualDoesNotRequireBareOrWritePublicTableAndEmptyDraftCannotSubmit() {
@@ -176,7 +178,7 @@ class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
     var row = rates.selectById(rateA); row.setLossRate(BigDecimal.ONE); rates.updateById(row);
     master.setActiveFlag(1); materials.updateById(master);
     assertThat(source("A").source().status()).isEqualTo("ERROR");
-    assertThatThrownBy(() -> service.save(productId, reference(source("A"), 0), WANG)).hasMessageContaining("必须大于 0%");
+    assertThatThrownBy(() -> service.save(productId, reference(source("A"), 0), WANG)).hasMessageContaining("小于 100%");
   }
 
   @Test void publicRateArrivingBeforeSubmissionRequiresRecheckAndRetainsPriorDraft() {
@@ -233,6 +235,10 @@ class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(current.applicableRate().rate()).isEqualByComparingTo("0.003");
     assertThat(current.content().rate()).isEqualByComparingTo("0.00475");
     publicRate.setLossRate(BigDecimal.ZERO); rates.updateById(publicRate);
+    var zero = service.get(productId, null, WANG);
+    assertThat(zero.applicableRate().sourceType()).isEqualTo("PUBLIC");
+    assertThat(zero.applicableRate().rate()).isZero();
+    publicRate.setLossRate(new BigDecimal("-0.01")); rates.updateById(publicRate);
     var invalid = service.get(productId, null, WANG);
     assertThat(invalid.applicableRate().status()).isEqualTo("ERROR");
     assertThat(invalid.applicableRate().rate()).isNull();

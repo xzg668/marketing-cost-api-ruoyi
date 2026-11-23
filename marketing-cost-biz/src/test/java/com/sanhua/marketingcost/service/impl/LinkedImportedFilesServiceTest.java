@@ -76,6 +76,7 @@ class LinkedImportedFilesServiceTest {
     login("admin", "COMMERCIAL", "*:*:*");
     var batch = batch(77L, "alice", "2026-10", "COMMERCIAL");
     batch.setPriceOrgCode("220");
+    batch.setStatus("PUBLISHED");
     batch.setLinkedRowCount(123);
     batch.setPublishedAt(LocalDateTime.of(2026, 10, 13, 8, 0));
     when(factorUploadBatchMapper.selectPage(any(com.baomidou.mybatisplus.extension.plugins.pagination.Page.class), any(Wrapper.class)))
@@ -93,6 +94,7 @@ class LinkedImportedFilesServiceTest {
       assertThat(row.rowCount()).isEqualTo(123);
       assertThat(row.uploadedBy()).isEqualTo("alice");
       assertThat(row.publishedAt()).isEqualTo(batch.getPublishedAt());
+      assertThat(row.status()).isEqualTo("PUBLISHED");
     });
     ArgumentCaptor<Wrapper<FactorUploadBatch>> wrapper = ArgumentCaptor.forClass(Wrapper.class);
     org.mockito.Mockito.verify(factorUploadBatchMapper).selectPage(any(), wrapper.capture());
@@ -100,7 +102,7 @@ class LinkedImportedFilesServiceTest {
         .contains("price_month", "business_unit_type", "import_type", "status", "technical_version_id IS NULL", "ORDER BY published_at DESC,id DESC")
         .doesNotContain("uploaded_by", "LIMIT");
     assertThat(((com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<FactorUploadBatch>) wrapper.getValue()).getParamNameValuePairs().values())
-        .contains("LINKED_ORIGINAL", "PUBLISHED", "2026-10", "COMMERCIAL");
+        .contains("LINKED_ORIGINAL", "PUBLISHED", "VOIDED", "2026-10", "COMMERCIAL");
     org.mockito.Mockito.verifyNoInteractions(factorUploadRowErrorMapper);
   }
 

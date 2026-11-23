@@ -114,6 +114,27 @@ class OriginalLinkedWorkbookParserTest {
   }
 
   @Test
+  void bindsCopperAndOtherNamedMarketInputsBelowTheMainPriceRows() throws Exception {
+    try (var book = workbook("($H$6+K2+$H$7*0.01)/1.13")) {
+      var sheet = book.getSheet("ImportData");
+      sheet.getRow(1).getCell(0).setCellValue("220");
+      sheet.getRow(1).createCell(10).setCellValue(8.5);
+      var copper = sheet.createRow(5);
+      copper.createCell(6).setCellValue("Cu");
+      copper.createCell(7).setCellValue(90);
+      var silver = sheet.createRow(6);
+      silver.createCell(6).setCellValue("Ag");
+      silver.createCell(7).setCellValue(13703.3529411765);
+      var result = parse(book);
+      assertThat(result.errors()).isEmpty();
+      var rule = result.rules().getFirst();
+      assertThat(rule.factors().values()).extracting(OriginalLinkedWorkbookParser.FactorInput::canonicalKey)
+          .containsExactlyInAnyOrder("AVG|1#CU", "AVG|1#AG");
+      assertThat(rule.compiled().expression()).contains("8.5");
+    }
+  }
+
+  @Test
   void financialSchemeTableBindsActualFactorsEvenBeforeTheirCatalogIsPublished() throws Exception {
     try (var book = workbook("(因素!AB5+因素!Z6+8.5)/1.13")) {
       var factors = book.getSheet("因素");

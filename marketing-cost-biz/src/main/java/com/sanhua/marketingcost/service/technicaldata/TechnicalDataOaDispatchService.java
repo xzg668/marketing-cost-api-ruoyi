@@ -229,6 +229,7 @@ public class TechnicalDataOaDispatchService {
         .sorted()
         .toList()) {
         var task = tasks.selectByIdForUpdate(taskId);
+        if (!Integer.valueOf(1).equals(task.getActiveFlag())) continue;
         if (accepted) {
           workflow.bindExternalFlow(task, batch.request().path("requestId").asText());
           recipients.activate(taskId, task.getOaAssignmentVersion());

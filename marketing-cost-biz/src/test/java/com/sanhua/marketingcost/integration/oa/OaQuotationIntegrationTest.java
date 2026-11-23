@@ -62,25 +62,32 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   @SpyBean OaMessageRepository repository;
   @Autowired com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalReturnClient returnClient;
 
-  @Test void rejectionNodeIsSavedWithOriginalWorkflowAndCannotBeOverwrittenByReplay() throws Exception {
-    var source = request(1).put("rejectNodeid", "001327000000123456789");
+  @Test void rejectionNodeCanBeAddedAndUpdatedOnTheSameWorkflow() throws Exception {
+    var source = request(1);
     var response = http.perform(post(URL).header("Authorization", TOKEN)
         .contentType("application/json").content(source.toString()))
         .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
         .andReturn();
     var received = json.readTree(response.getResponse().getContentAsByteArray());
     long formId = received.at("/data/quoteId").asLong();
+    assertThat(jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
+        String.class, formId)).isNull();
+    var corrected = source.deepCopy().put("rejectNodeid", "001327000000123456789");
+    var revised = service.receive(PEER, corrected.toString());
+    assertThat(revised).isEqualTo(received);
     String savedNode = jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
         String.class, formId);
     assertThat(savedNode).isEqualTo("001327000000123456789");
     var rejection = returnClient.previewRejection(source.path("requestId").asText(), "001001", savedNode);
     assertThat(rejection.path("RejectToNodeid").asText()).isEqualTo("001327000000123456789");
     assertThat(rejection.has("rejectNodeid")).isFalse();
-    assertThat(service.receive(PEER, source.toString())).isEqualTo(received);
-    assertThatThrownBy(() -> service.receive(PEER, source.deepCopy().put("rejectNodeid", "OTHER").toString()))
-        .hasMessageContaining("不能覆盖");
+    assertThat(service.receive(PEER, corrected.toString())).isEqualTo(revised);
+    service.receive(PEER, corrected.put("rejectNodeid", "OTHER").toString());
+    service.receive(PEER, source.toString());
     assertThat(jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
-        String.class, formId)).isEqualTo("001327000000123456789");
+        String.class, formId)).isEqualTo("OTHER");
+    assertThat(jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
+        String.class, source.path("requestId").asText())).isEqualTo(source.toString());
   }
 
   @AfterEach
@@ -196,6 +203,17 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
     assertThat(jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
         String.class, identity)).isEqualTo(source.toString());
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price", Long.class)).isEqualTo(monthlyBefore);
+
+    var corrected = source.deepCopy();
+    ((ObjectNode) corrected.at("/detailData/0/plpmxb")).put("yjnylwz", "0.1890");
+    assertThat(service.receive(PEER, corrected.toString())).isEqualTo(receipt);
+    long correctedItem = receipt.at("/data/itemMappings/0/quoteItemId").asLong();
+    assertThat(jdbc.queryForObject("SELECT support_qty FROM oa_form_item WHERE id=?", BigDecimal.class, correctedItem))
+        .isEqualByComparingTo("0.1890");
+    var correctedSession = priceSessions.open(new QuotationPriceSessions.Request(identity, "COMMERCIAL", "SR-MATERIAL-1",
+        "2026-10", LocalDateTime.of(2026, 10, 25, 0, 0),
+        new SupplierPriceReviewContext(correctedItem).forOrganization("210"), new QuotationPriceSession.Scope()));
+    assertThat(correctedSession.context().annualUsage().piecesIfKnown()).isEqualByComparingTo("1890");
   }
 
   @Test
@@ -401,24 +419,103 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  void sameDocumentCannotOverwriteSourceOrReplaceProductRows() throws Exception {
+  void correctedAnnualVolumeUpdatesTheSameProductAndCanBeRetried() throws Exception {
+    var original = request(2);
+    ((ObjectNode) original.path("detailData").get(0).path("fields")).put("yjnylwz", "1");
+    var first = service.receive(PEER, original.toString());
+    long formId = first.at("/data/quoteId").asLong();
+    long itemId = first.at("/data/itemMappings/0/quoteItemId").asLong();
+    jdbc.update("""
+        INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,
+          business_unit_type,workspace_status,current_step,lock_version)
+        VALUES (?,?,?,'2026-10','COMMERCIAL','SUCCESS','DONE',1)
+        """, original.path("formNo").asText(), itemId, "I01-TEST-PRODUCT");
+    var corrected = original.deepCopy();
+    ((ObjectNode) corrected.path("detailData").get(0).path("fields")).put("yjnylwz", "2");
+
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+        .contentType("application/json").content(corrected.toString()))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("0")).andReturn();
+    var second = json.readTree(response.getResponse().getContentAsByteArray());
+    assertThat(second.at("/data/quoteId").asLong()).isEqualTo(formId);
+    assertThat(second.at("/data/itemMappings/0/quoteItemId").asLong()).isEqualTo(itemId);
+    assertThat(jdbc.queryForObject("SELECT annual_volume FROM oa_form_item WHERE id=?",
+        BigDecimal.class, itemId)).isEqualByComparingTo("2");
+    assertThat(service.receive(PEER, corrected.toString())).isEqualTo(second);
+    assertThat(jdbc.queryForMap("""
+        SELECT workspace_status,stale_reason_code,lock_version FROM lp_quote_costing_workspace
+        WHERE oa_form_item_id=?
+        """, itemId)).containsEntry("workspace_status", "STALE")
+        .containsEntry("stale_reason_code", "OA_REQUIREMENT_UPDATED").containsEntry("lock_version", 2);
+    assertThat(jdbc.queryForObject("""
+        SELECT m.raw_payload FROM lp_oa_quote_document d JOIN lp_oa_integration_message m ON m.id=d.latest_message_id
+        WHERE d.oa_form_id=?
+        """, String.class, formId)).isEqualTo(corrected.toString());
+    assertThat(jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
+        String.class, original.path("requestId").asText())).isEqualTo(original.toString());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class,
+        original.path("formNo").asText())).isEqualTo(1);
+  }
+
+  @Test
+  void sameDocumentCanOverwriteHeaderAndReplaceProductRowsWhileRetainingPreviousIdentity() throws Exception {
     var r = request(2);
     var first = service.receive(PEER, r.toString());
     long form = first.path("data").path("quoteId").asLong();
     long item = first.path("data").path("itemMappings").get(0).path("quoteItemId").asLong();
-    String originalCustomer = jdbc.queryForObject("SELECT customer FROM oa_form WHERE id=?", String.class, form);
+    jdbc.update("""
+        INSERT INTO lp_quote_tech_task(task_no,oa_form_id,oa_form_item_id,oa_no,accounting_month,
+          business_unit_type,applicable_org_code,task_status,active_lock_key)
+        VALUES(?,?,?,?,'2026-10','COMMERCIAL','210','UNASSIGNED',?)
+        """, "I01-TASK-" + item, form, item, r.path("formNo").asText(), "ITEM:" + item + ":MONTH:2026-10");
     var changed = r.deepCopy();
     ((ObjectNode) changed.path("mainData")).put("khmc", "修改后的客户");
     ((ObjectNode) changed.path("detailData").get(0)).put("rowId", "RECREATED-ROW");
-    http.perform(post(URL).header("Authorization", TOKEN).contentType("application/json").content(changed.toString()))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"))
-        .andExpect(jsonPath("$.data.status").value("REJECTED"));
-    assertThat(jdbc.queryForObject("SELECT customer FROM oa_form WHERE id=?", String.class, form)).isEqualTo(originalCustomer);
-    assertThat(jdbc.queryForList("SELECT id FROM oa_form_item WHERE oa_form_id=? AND deleted=0", Long.class, form)).containsExactly(item);
+    var next = service.receive(PEER, changed.toString());
+    long newItem = next.at("/data/itemMappings/0/quoteItemId").asLong();
+    assertThat(next.at("/data/quoteId").asLong()).isEqualTo(form);
+    assertThat(newItem).isPositive().isNotEqualTo(item);
+    assertThat(jdbc.queryForObject("SELECT customer FROM oa_form WHERE id=?", String.class, form)).isEqualTo("修改后的客户");
+    assertThat(jdbc.queryForList("SELECT id FROM oa_form_item WHERE oa_form_id=? AND deleted=0", Long.class, form)).containsExactly(newItem);
+    assertThat(jdbc.queryForObject("SELECT deleted FROM oa_form_item WHERE id=?", Integer.class, item)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("""
+        SELECT COUNT(*) FROM lp_quote_tech_task WHERE oa_form_item_id=? AND active_flag=0 AND task_status='CANCELLED'
+        """, Integer.class, item)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT external_document_id FROM lp_oa_quote_document WHERE oa_form_id=?", String.class, form)).isEqualTo(r.path("requestId").asText());
     assertThat(jdbc.queryForObject("SELECT source_version FROM lp_oa_quote_document WHERE oa_form_id=?", Long.class, form)).isEqualTo(1L);
     assertThat(service.receive(PEER, r.toString())).isEqualTo(first);
+    assertThat(jdbc.queryForList("SELECT id FROM oa_form_item WHERE oa_form_id=? AND deleted=0", Long.class, form)).containsExactly(item);
+  }
+
+  @Test
+  void correctedOptionalValuesClearAndFailedRevisionDoesNotPartiallyOverwrite() throws Exception {
+    var source = request(2);
+    ((ObjectNode) source.path("mainData")).put("khmc", "修订前的客户");
+    ((ObjectNode) source.at("/detailData/0/fields")).put("yjnylwz", "1");
+    var first = service.receive(PEER, source.toString());
+    long formId = first.at("/data/quoteId").asLong();
+    long itemId = first.at("/data/itemMappings/0/quoteItemId").asLong();
+    var changed = source.deepCopy();
+    ((ObjectNode) changed.path("mainData")).putNull("khmc");
+    ((ObjectNode) changed.at("/detailData/0/fields")).putNull("yjnylwz");
+    doThrow(new DataIntegrityViolationException("injected update failure"))
+        .when(repository).completeQuotation(anyLong(), anyString());
+    assertThatThrownBy(() -> service.receive(PEER, changed.toString()))
+        .isInstanceOf(DataIntegrityViolationException.class);
+    assertThat(service.receive(PEER, source.toString())).isEqualTo(first);
+    assertThat(jdbc.queryForObject("SELECT annual_volume FROM oa_form_item WHERE id=?",
+        BigDecimal.class, itemId)).isEqualByComparingTo("1");
+    assertThat(jdbc.queryForObject("SELECT customer FROM oa_form WHERE id=?", String.class, formId))
+        .isEqualTo("修订前的客户");
+
+    reset(repository);
+    assertThat(service.receive(PEER, changed.toString()).at("/data/quoteId").asLong()).isEqualTo(formId);
+    assertThat(jdbc.queryForObject("SELECT annual_volume FROM oa_form_item WHERE id=?",
+        BigDecimal.class, itemId)).isNull();
+    assertThat(jdbc.queryForObject("SELECT customer FROM oa_form WHERE id=?", String.class, formId)).isNull();
+    assertThat(jdbc.queryForObject("""
+        SELECT COUNT(*) FROM lp_oa_form_item_extra_field WHERE oa_form_item_id=? AND field_code='ANNUAL_VOLUME_UNIT'
+        """, Integer.class, itemId)).isZero();
   }
 
   @Test
@@ -469,6 +566,24 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
       JsonNode first = results.getFirst().get(30, TimeUnit.SECONDS);
       for (var result : results) assertThat(result.get(30, TimeUnit.SECONDS)).isEqualTo(first);
     }
+  }
+
+  @Test
+  void concurrentSameCorrectionWritesOneRevision() throws Exception {
+    var original = request(2);
+    var first = service.receive(PEER, original.toString());
+    var corrected = original.deepCopy();
+    ((ObjectNode) corrected.at("/detailData/0/fields")).put("yjnylwz", "2");
+    String raw = corrected.toString();
+    try (var pool = Executors.newFixedThreadPool(4)) {
+      var results = java.util.stream.IntStream.range(0, 4)
+          .mapToObj(i -> pool.submit(() -> service.receive(PEER, raw))).toList();
+      for (var result : results) assertThat(result.get(30, TimeUnit.SECONDS)).isEqualTo(first);
+    }
+    assertThat(jdbc.queryForObject("""
+        SELECT COUNT(*) FROM lp_oa_integration_message
+        WHERE interface_type='QUOTE_REQUEST' AND JSON_UNQUOTE(JSON_EXTRACT(raw_payload,'$.requestId'))=?
+        """, Integer.class, original.path("requestId").asText())).isEqualTo(2);
   }
 
   @Test

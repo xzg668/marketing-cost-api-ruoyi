@@ -31,6 +31,8 @@ public final class MakePartPriceTraceSource {
     var root = read(price.selection().fact().evidence().json());
     var source = root.path("source");
     String kind = root.path("sourceKind").asText();
+    var projected = read(projection.customerEvidenceJson());
+    var recovered = projected.path("recoveredLinkedCalculation");
     var bindings = new ArrayList<Binding>();
     JsonNode contextNode = null;
     String expression = null, formula = null, location = null, file = null, supplier = null;
@@ -41,11 +43,12 @@ public final class MakePartPriceTraceSource {
         var calculation = read(source.path("calculationJson").asText());
         var saved = read(source.path("selectedPublication").path("calculationJson").asText());
         var rule = saved.path("linkedRule");
-        expression = rule.path("compiled").path("expression").asText();
+        expression = recovered.path("expression").asText(rule.path("compiled").path("expression").asText());
         formula = rule.path("sourceFormulaText").asText(null);
         divideTax = rule.path("taxIncluded").asBoolean();
         contextNode = calculation.path("context");
-        rule.path("factors").fields().forEachRemaining(e -> bindings.add(new Binding(e.getKey(),
+        var factorBindings = recovered.isObject() ? recovered.path("factorBindings") : rule.path("factors");
+        factorBindings.fields().forEachRemaining(e -> bindings.add(new Binding(e.getKey(),
             e.getValue().path("canonicalKey").asText(), FactorPriceUnit.valueOf(e.getValue().path("unit").asText()))));
         supplier = rule.path("identity").path("supplierName").asText(null);
         location = rule.path("sheet").asText() + "!" + rule.path("cell").asText();
@@ -99,7 +102,6 @@ public final class MakePartPriceTraceSource {
     }
     PriceFactorContext base = contextNode == null || !contextNode.isObject() ? null : convert(contextNode, PriceFactorContext.class).financialOnly();
     PriceFactorContext changed = base;
-    var projected = read(projection.customerEvidenceJson());
     BigDecimal trialCu = projected.path("customerCopperPerTon").isNull() ? null
         : decimal(projected.path("customerCopperPerTon"));
     if (base != null && trialCu != null) {
@@ -116,7 +118,10 @@ public final class MakePartPriceTraceSource {
       if (base != null && base.financial().factors().containsKey(binding.key()))
         factorName = base.financial().required(binding.key()).factorName();
       else if (PriceFactorContext.COPPER.equals(CustomerMaterialPrices.canonicalKey(binding.key()))) factorName = "Cu（铜价）";
-      if (base != null) {
+      if (recovered.isObject()) {
+        originalVariables.put(binding.variable(), decimal(recovered.path("inputs").path(binding.variable())));
+        trialVariables.put(binding.variable(), decimal(recovered.path("customerInputs").path(binding.variable())));
+      } else if (base != null) {
         originalVariables.put(binding.variable(), base.requiredPrice(binding.key(), binding.unit(), true));
         trialVariables.put(binding.variable(), changed.requiredPrice(binding.key(), binding.unit(), true));
       } else if (trialCu != null && PriceFactorContext.COPPER.equals(CustomerMaterialPrices.canonicalKey(binding.key()))) {

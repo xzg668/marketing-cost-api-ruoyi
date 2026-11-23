@@ -8,6 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import org.springframework.dao.DataAccessException;
@@ -16,7 +17,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** I01 正式需求仅保存一次；原文、报价数据及回执在同一事务提交，超时重发不重复建单。 */
+/** I01 依原流程关联同一张报价；每次有效修订的原文、报价数据及回执一起提交。 */
 @Service
 public class OaQuotationService {
   private static final int MAX_RECEIVE_ATTEMPTS = 3;
@@ -39,6 +40,7 @@ public class OaQuotationService {
     this.transaction = new TransactionTemplate(transactionManager);
     // 每次重试必须重新开启完整事务，不能在已被 MySQL 回滚的事务中继续写入。
     this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
   }
 
   public JsonNode receive(OaPeer peer, String raw) {
@@ -93,32 +95,28 @@ public class OaQuotationService {
     call.business(root).business(root.path("workflowState"));
     var mapped = mapper.map(root, peer);
     call.field("itemCount", mapped.lines().size());
-    var envelope =
-        new OaMessageCodec.Envelope(
-            3,
-            mapped.requestId(),
-            OffsetDateTime.now().toString(),
-            root,
-            raw,
-            codec.canonicalHash(root));
-    OaMessageRepository.Message message;
-    try {
-      message = messages.receive(peer, OaMessageCodec.InterfaceType.QUOTE_REQUEST, envelope);
-    } catch (OaIntegrationException ex) {
-      if ("REQUEST_CONTENT_CONFLICT".equals(ex.code())) {
-        throw OaIntegrationException.conflict("IDEMPOTENCY_CONFLICT", "该OA单据已接收，重发内容与原需求不同，不能覆盖；请核对requestId和原报文");
-      }
-      throw ex;
-    }
-    if (message.schemaVersion() != 3 || !"QUOTE_REQUEST".equals(message.interfaceType()))
+    String hash = codec.canonicalHash(root);
+    String receivedAt = OffsetDateTime.now().toString();
+    var origin = messages.lockQuotationOrigin(peer,
+        new OaMessageCodec.Envelope(3, mapped.requestId(), receivedAt, root, raw, hash));
+    if (origin.schemaVersion() != 3 || !"QUOTE_REQUEST".equals(origin.interfaceType()))
       throw OaIntegrationException.conflict("IDEMPOTENCY_CONFLICT", "requestId已用于其他接口");
-    call.field("messageId", message.id());
-    if (message.resultJson() != null && "PROCESSED".equals(message.status())) {
-      call.field("stage", "IDEMPOTENT_REPLAY");
-      return codec.read(message.resultJson());
+    var binding = handler.binding(peer, mapped.requestId());
+    var previous = binding == null ? null : messages.findById(binding.latestMessageId());
+    if ((binding != null && previous == null)
+        || (binding == null && "PROCESSED".equals(origin.status()))) {
+      throw OaIntegrationException.conflict("SOURCE_BINDING_MISSING", "已接收需求缺少可匹配的原文和报价单");
     }
-    // receive 的唯一键写入已持有行锁；业务写入和成功回执在同一事务提交，防止重复请求重复建单。
-    var result = handler.handle(message, mapped.quote());
+    if (previous != null && hash.equals(previous.payloadHash())) {
+      call.field("messageId", previous.id());
+      call.field("stage", "IDEMPOTENT_REPLAY");
+      return codec.read(previous.resultJson());
+    }
+    var message = previous == null ? origin : messages.receive(peer, OaMessageCodec.InterfaceType.QUOTE_REQUEST,
+        new OaMessageCodec.Envelope(3, "I01-REV:" + UUID.randomUUID(), receivedAt, root, raw, hash));
+    call.field("messageId", message.id());
+    var result = handler.handle(message, mapped, binding,
+        previous == null ? null : codec.readQuotation(previous.rawPayload()), root);
     Map<String, String> ids =
         result.items().stream()
             .collect(

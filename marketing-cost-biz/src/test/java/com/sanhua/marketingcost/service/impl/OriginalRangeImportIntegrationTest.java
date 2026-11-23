@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.dto.FinanceFactorImportContext;
 import com.sanhua.marketingcost.mapper.*;
 import com.sanhua.marketingcost.service.financefactor.*;
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
 import java.sql.DriverManager;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -452,6 +453,194 @@ class OriginalRangeImportIntegrationTest {
             effectiveSessions, json));
   }
 
+  @Test
+  void downloadedWorkbookCanAddOneBandWithoutRevisingOtherSupplier() throws Exception {
+    byte[] source = withOtherSupplier(workbook(2, false));
+    var initial = command(source);
+    assertThat(service.confirm(confirmed(initial, service.preview(initial))).ruleCount()).isEqualTo(2);
+    var originals = rules.selectList(null);
+    var selected = originals.stream().filter(rule -> "S01".equals(rule.getSupplierCode())).findFirst().orElseThrow();
+    var otherSupplier = originals.stream().filter(rule -> "S02".equals(rule.getSupplierCode())).findFirst().orElseThrow();
+
+    var template = service.supplementTemplate(selected.getId());
+    assertThat(template.bytes()).isEqualTo(source);
+    assertThat(template.name()).isEqualTo("区间原稿.xlsx");
+
+    var overlapping = supplement(withNewBand(template.bytes(), "109999-114999", false), selected.getId());
+    assertThat(service.preview(overlapping).errors()).anySatisfy(error -> assertThat(error.message()).contains("重叠"));
+    var oldPriceChanged = supplement(withNewBand(template.bytes(), "110000-114999", true), selected.getId());
+    assertThat(service.preview(oldPriceChanged).errors()).anySatisfy(error -> assertThat(error.message()).contains("已有档位价格"));
+    assertThat(service.preview(supplement(template.bytes(), selected.getId())).canConfirm()).isFalse();
+    assertThat(rules.selectCount(null)).isEqualTo(2);
+
+    var addition = supplement(withNewBand(template.bytes(), "110000-114999", false), selected.getId());
+    var preview = service.preview(addition);
+    assertThat(preview.errors()).isEmpty();
+    assertThat(preview.rows()).hasSize(1);
+    var calculator = new OriginalRangeRuleCalculator();
+    var previous = service.detail(selected.getId()).saved().rule();
+    var revised = preview.rows().getFirst().rule();
+    assertThat(revised.bands()).hasSize(5);
+    assertThat(calculator.select(previous, new BigDecimal("109999")).priceExcludingTax())
+        .isEqualByComparingTo(calculator.select(revised, new BigDecimal("109999")).priceExcludingTax());
+    assertThat(calculator.select(revised, new BigDecimal("114999")).priceExcludingTax()).isEqualByComparingTo("0");
+
+    var confirm = confirmed(addition, preview);
+    assertThat(service.confirm(confirm).ruleCount()).isEqualTo(1);
+    assertThat(service.confirm(confirm).replay()).isTrue();
+    assertThat(rules.selectList(null).stream().filter(rule -> "S02".equals(rule.getSupplierCode())))
+        .extracting(rule -> rule.getId()).containsExactly(otherSupplier.getId());
+    assertThat(service.detail(selected.getId()).saved().rule().bands()).hasSize(4);
+    assertThat(rules.selectCount(null)).isEqualTo(3);
+    assertThat(bands.selectCount(null)).isEqualTo(13);
+    assertThatThrownBy(() -> service.preview(overlapping)).hasMessageContaining("已有新版本");
+  }
+
+  @Test
+  void existingBlankBandCanBeFilledWithAnExcelFormula() throws Exception {
+    byte[] source;
+    try (var book = new XSSFWorkbook(new java.io.ByteArrayInputStream(workbook(2, false)));
+        var out = new ByteArrayOutputStream()) {
+      book.getSheet("矩阵").getRow(3).getCell(9).setBlank();
+      book.write(out);
+      source = out.toByteArray();
+    }
+    var initial = command(source);
+    service.confirm(confirmed(initial, service.preview(initial)));
+    Long ruleId = rules.selectOne(null).getId();
+    var template = service.supplementTemplate(ruleId);
+    try (var book = new XSSFWorkbook(new java.io.ByteArrayInputStream(template.bytes()));
+        var out = new ByteArrayOutputStream()) {
+      var price = book.getSheet("矩阵").getRow(3).getCell(9);
+      price.setCellFormula("K4/1.13");
+      book.getCreationHelper().createFormulaEvaluator().evaluateFormulaCell(price);
+      book.write(out);
+
+      var addition = supplement(out.toByteArray(), ruleId);
+      var preview = service.preview(addition);
+      assertThat(preview.errors()).isEmpty();
+      assertThat(preview.rows().getFirst().rule().bands()).hasSize(4);
+      assertThat(service.confirm(confirmed(addition, preview)).ruleCount()).isEqualTo(1);
+      var current = rules.selectList(null).stream()
+          .filter(item -> !item.getId().equals(ruleId)).findFirst().orElseThrow();
+      var result = new OriginalRangeRuleCalculator().select(
+          service.detail(current.getId()).saved().rule(), new BigDecimal("109999"));
+      assertThat(result.priceExcludingTax()).isCloseTo(
+          new BigDecimal("5"), within(new BigDecimal("0.000000000001")));
+      assertThat(result.sourceBand().source().formula()).isEqualTo("K4/1.13");
+      assertThat(service.detail(ruleId).saved().rule().bands().getLast().price()).isNull();
+    }
+  }
+
+  @Test
+  void supplementProtectsRuleGroupsWithParallelWorkbooks() throws Exception {
+    var initial = command(workbook(2, false));
+    service.confirm(confirmed(initial, service.preview(initial)));
+    var first = rules.selectOne(null);
+    var secondFile = command(workbook(10, false));
+    service.confirm(confirmed(secondFile, service.preview(secondFile)));
+    var second = rules.selectList(null).stream()
+        .filter(item -> !item.getId().equals(first.getId())).findFirst().orElseThrow();
+    second.setSourceInputSnapshotJson(com.sanhua.marketingcost.service.pricing.OriginalRuleGroups.withRevision(
+        second.getSourceInputSnapshotJson(), first.getVersionNo()));
+    rules.updateById(second);
+
+    assertThatThrownBy(() -> service.supplementTemplate(first.getId()))
+        .hasMessageContaining("多份原稿并行");
+    var addition = supplement(withNewBand(initial.bytes(), "110000-114999", false), first.getId());
+    assertThatThrownBy(() -> service.preview(addition)).hasMessageContaining("多份原稿并行");
+    assertThat(rules.selectCount(null)).isEqualTo(2);
+    assertThat(bands.selectCount(null)).isEqualTo(8);
+  }
+
+  @Test
+  void webAdditionKeepsBothSupplierFieldsAndRepublishesOnlyTheSelectedRule() throws Exception {
+    var original = command(withOtherSupplier(workbook(2, false)));
+    service.confirm(confirmed(original, service.preview(original)));
+    var authentication = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+        "finance-test", null, List.of());
+    authentication.setDetails(java.util.Map.of("businessUnitType", "COMMERCIAL"));
+    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(authentication);
+    try {
+      var options = service.options("2026-10", "M01");
+      assertThat(options).extracting(
+          OriginalRangeImportService.RuleOption::supplierName,
+          OriginalRangeImportService.RuleOption::supplierCode)
+          .containsExactlyInAnyOrder(tuple("测试供应商有限公司", "S01"), tuple("其他供应商", "S02"));
+      var target = options.stream().filter(option -> option.supplierCode().equals("S02")).findFirst().orElseThrow();
+      var low = new BigDecimal("109999");
+      var high = new BigDecimal("120000");
+      var amount = new BigDecimal("12.3456789012");
+      var overlapping = new OriginalRangeImportService.BandAddition(low, high, true, true, amount);
+      assertThatThrownBy(() -> service.addBand(target.id(), overlapping)).hasMessageContaining("重叠");
+      assertThat(rules.selectCount(null)).isEqualTo(2);
+
+      var request = new OriginalRangeImportService.BandAddition(low, high, false, true, amount);
+      assertThat(service.addBand(target.id(), request).ruleCount()).isEqualTo(1);
+      assertThatThrownBy(() -> service.addBand(target.id(), request)).hasMessageContaining("已有新版本");
+      var revised = service.options("2026-10", "M01").stream()
+          .filter(option -> option.supplierCode().equals("S02")).findFirst().orElseThrow();
+      assertThat(revised.id()).isNotEqualTo(target.id());
+      var calculator = new OriginalRangeRuleCalculator();
+      var rule = service.detail(revised.id()).saved().rule();
+      assertThat(calculator.select(rule, low).priceExcludingTax()).isEqualByComparingTo("10");
+      assertThat(calculator.select(rule, high).priceExcludingTax()).isEqualByComparingTo(amount);
+      assertThat(service.detail(target.id()).saved().rule().bands()).hasSize(4);
+      assertThat(rules.selectList(null).stream().filter(item -> "S01".equals(item.getSupplierCode())))
+          .hasSize(1);
+      assertThat(bands.selectCount(null)).isEqualTo(13);
+
+      var downloaded = service.supplementTemplate(revised.id());
+      try (var book = new XSSFWorkbook(new java.io.ByteArrayInputStream(downloaded.bytes()))) {
+        var row = book.getSheet("系统补充行情档位").getRow(1);
+        assertThat(row.getCell(3).getStringCellValue()).isEqualTo("其他供应商");
+        assertThat(row.getCell(4).getStringCellValue()).isEqualTo("S02");
+        assertThat(book.getSheet("矩阵").getRow(4).getCell(9).getNumericCellValue()).isEqualTo(10);
+      }
+      assertThat(service.preview(command(downloaded.bytes())).errors()).isEmpty();
+    } finally {
+      org.springframework.security.core.context.SecurityContextHolder.clearContext();
+    }
+  }
+
+  private OriginalRangeImportService.Command supplement(byte[] bytes, Long ruleId) {
+    return new OriginalRangeImportService.Command(
+        bytes, "区间原稿-补档.xlsx", "COMMERCIAL", "2026-10", null, null, ruleId);
+  }
+
+  private byte[] withOtherSupplier(byte[] bytes) throws Exception {
+    try (var book = new XSSFWorkbook(new java.io.ByteArrayInputStream(bytes));
+        var out = new ByteArrayOutputStream()) {
+      var other = book.getSheet("ImportData").createRow(2);
+      String[] values = {"210", "M01", "其他供应商", "S02", "SPEC", "只"};
+      for (int i = 0; i < values.length; i++) other.createCell(i).setCellValue(values[i]);
+      other.createCell(6).setCellValue(99);
+      other.createCell(7).setCellValue(false);
+      var matrix = book.getSheet("矩阵").createRow(4);
+      matrix.createCell(0).setCellValue("M01");
+      matrix.createCell(1).setCellValue("SPEC");
+      matrix.createCell(2).setCellValue("其他供应商");
+      for (int col = 3; col < 11; col++) matrix.createCell(col).setCellValue(10);
+      book.write(out);
+      return out.toByteArray();
+    }
+  }
+
+  private byte[] withNewBand(byte[] bytes, String bounds, boolean changeExisting) throws Exception {
+    try (var book = new XSSFWorkbook(new java.io.ByteArrayInputStream(bytes));
+        var out = new ByteArrayOutputStream()) {
+      var matrix = book.getSheet("矩阵");
+      matrix.getRow(1).createCell(11).setCellValue(bounds);
+      matrix.getRow(2).createCell(11).setCellValue("不含税");
+      matrix.getRow(2).createCell(12).setCellValue("含13%税价");
+      matrix.getRow(3).createCell(11).setCellValue(0);
+      matrix.getRow(3).createCell(12).setCellValue(0);
+      if (changeExisting) matrix.getRow(3).getCell(3).setCellValue(99);
+      book.write(out);
+      return out.toByteArray();
+    }
+  }
+
   private void publishFinance(String scheme) throws Exception {
     byte[] bytes;
     try (var input = getClass().getResourceAsStream("/finance-factor/commercial-original.xlsx")) {
@@ -475,7 +664,8 @@ class OriginalRangeImportIntegrationTest {
         command.businessUnitType(),
         command.pricingMonth(),
         preview.fileSha256(),
-        preview.previewFingerprint());
+        preview.previewFingerprint(),
+        command.supplementRuleId());
   }
 
   private byte[] workbook(double start, boolean missing) throws Exception {

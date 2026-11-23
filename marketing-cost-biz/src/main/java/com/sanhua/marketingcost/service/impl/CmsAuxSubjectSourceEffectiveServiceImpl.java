@@ -126,6 +126,10 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
       CmsCostSourceEffective oldSnapshot = copyEffective(existing);
       CmsCostSourceEffective saved =
           upsert(existing, costYear, selected, 1, selectedEligibility.getReason(), operator, businessUnitType);
+      if (saved == null) {
+        response.setSkippedCount(response.getSkippedCount() + 1);
+        continue;
+      }
       if (sync != null) {
         sync.recordSelection(oldSnapshot, saved, response);
       } else {
@@ -158,12 +162,11 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
 
   @Override
   @Transactional
+  @com.sanhua.marketingcost.service.technicaldata.RefreshPendingInputs(modules={"AUXILIARY"}, wholeUnit=true, unitArgument=2)
   public CmsCostSourceEffective refreshSource(
       CmsEffectiveSourceRefreshRequest request, String operator, String businessUnitType) {
     validateRefreshRequest(request);
-    Aggregate aggregate =
-        aggregateAux(request.getCostYear(), businessUnitType)
-            .get(key(request.getParentCode(), request.getNewPeriod(), request.getSubjectCode()));
+    Aggregate aggregate = aggregateSubjectPeriod(request, businessUnitType);
     if (aggregate == null) {
       throw new IllegalArgumentException("未找到该料号在新期间的 CMS 辅料来源");
     }
@@ -179,6 +182,36 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
         upsert(existing, request.getCostYear(), aggregate, 0, request.getRefreshReason(), operator, businessUnitType);
     insertLog(saved.getId(), request.getCostYear(), aggregate, oldSnapshot, "REFRESH", request.getRefreshReason(), operator, businessUnitType);
     return saved;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public CmsCostSourceEffective previewSource(CmsEffectiveSourceRefreshRequest request, String businessUnitType) {
+    validateRefreshRequest(request);
+    PlanEligibility eligibility = eligibility(request.getParentCode(), request.getNewPeriod(), businessUnitType);
+    if (!eligibility.isAuxSubjectAllowed()) throw new IllegalArgumentException(eligibility.getReason());
+    Aggregate aggregate = aggregateSubjectPeriod(request, businessUnitType);
+    if (aggregate == null) throw new IllegalArgumentException("未找到该料号在所选期间的 CMS 辅料科目明细");
+    var source = new CmsCostSourceEffective();
+    fillSource(source, request.getCostYear(), aggregate, businessUnitType);
+    return source;
+  }
+
+  private Aggregate aggregateSubjectPeriod(CmsEffectiveSourceRefreshRequest request, String businessUnitType) {
+    String unit = normalizeBusinessUnit(businessUnitType);
+    var subject = loadAuxSubjectDefinitions(unit).get(request.getSubjectCode());
+    if (subject == null) return null;
+    var rows = productSubjectCostRawMapper.selectList(new QueryWrapper<CmsProductSubjectCostRaw>()
+        .eq("business_unit_type", unit).eq("parent_code", request.getParentCode())
+        .eq("period", request.getNewPeriod()).eq("second_subject_code", request.getSubjectCode()).orderByAsc("id"));
+    if (rows.isEmpty()) return null;
+    var aggregate = new Aggregate(request.getParentCode(), request.getNewPeriod(),
+        request.getSubjectCode(), subject.subjectName);
+    for (var row : rows) {
+      aggregate.amount = aggregate.amount.add(toYuan(row.getMaterialPrice()));
+      aggregate.rowIds.add(row.getId());
+    }
+    return aggregate;
   }
 
   @Override
@@ -286,6 +319,23 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
       String operator,
       String businessUnitType) {
     CmsCostSourceEffective effective = existing == null ? new CmsCostSourceEffective() : existing;
+    fillSource(effective, costYear, aggregate, businessUnitType);
+    effective.setDefaultFlag(defaultFlag);
+    effective.setRefreshReason(reason);
+    effective.setConfirmedBy(operator);
+    if (existing == null) {
+      effectiveMapper.insert(effective);
+    } else if (defaultFlag == 1) {
+      int updated = effectiveMapper.update(effective, new QueryWrapper<CmsCostSourceEffective>()
+          .eq("id", effective.getId()).eq("default_flag", 1));
+      if (updated == 0) return null;
+    } else {
+      effectiveMapper.updateById(effective);
+    }
+    return effective;
+  }
+
+  private void fillSource(CmsCostSourceEffective effective, int costYear, Aggregate aggregate, String businessUnitType) {
     effective.setCostYear(costYear);
     effective.setSourceType(AUX_SUBJECT);
     effective.setParentCode(aggregate.parentCode);
@@ -295,16 +345,7 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
     effective.setSourceTable(SUBJECT_TABLE);
     effective.setSourceRowIds(joinIds(aggregate.rowIds));
     effective.setAmountYuan(aggregate.amount.setScale(6, RoundingMode.HALF_UP));
-    effective.setDefaultFlag(defaultFlag);
-    effective.setRefreshReason(reason);
-    effective.setConfirmedBy(operator);
     effective.setBusinessUnitType(normalizeBusinessUnit(businessUnitType));
-    if (existing == null) {
-      effectiveMapper.insert(effective);
-    } else {
-      effectiveMapper.updateById(effective);
-    }
-    return effective;
   }
 
   private CmsCostSourceEffective findExisting(

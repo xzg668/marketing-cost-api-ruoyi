@@ -10,4 +10,8 @@ public interface PriceLinkedImportDispatchService {
   PriceLinkedType2ImportPreviewResponse preview(PriceLinkedImportCommand command);
 
   PriceItemImportResponse confirm(PriceLinkedImportCommand command);
+
+  long previewVoidOriginal(long id, String pricingMonth, String businessUnitType);
+
+  void voidOriginal(long id, String pricingMonth, String businessUnitType, long expectedRuleCount);
 }

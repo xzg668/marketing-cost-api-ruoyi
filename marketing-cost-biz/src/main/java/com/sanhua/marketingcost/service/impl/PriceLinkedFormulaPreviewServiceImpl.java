@@ -464,7 +464,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
       PriceLinkedItem exact =
           priceLinkedItemMapper.selectOne(
               Wrappers.lambdaQuery(PriceLinkedItem.class)
-                  .notIn(PriceLinkedItem::getRuleStatus, "STAGED", "NOT_SELECTED")
+                  .notIn(PriceLinkedItem::getRuleStatus, "STAGED", "NOT_SELECTED", PriceLinkedItem.VOIDED)
                   .eq(PriceLinkedItem::getMaterialCode, materialCode)
                   .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
                   .orderByDesc(PriceLinkedItem::getId)
@@ -476,7 +476,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
     List<PriceLinkedItem> rows =
         priceLinkedItemMapper.selectList(
             Wrappers.lambdaQuery(PriceLinkedItem.class)
-                .notIn(PriceLinkedItem::getRuleStatus, "STAGED", "NOT_SELECTED")
+                .notIn(PriceLinkedItem::getRuleStatus, "STAGED", "NOT_SELECTED", PriceLinkedItem.VOIDED)
                 .eq(PriceLinkedItem::getMaterialCode, materialCode)
                 .orderByDesc(PriceLinkedItem::getPricingMonth)
                 .orderByDesc(PriceLinkedItem::getId)

@@ -6,4 +6,9 @@ public record ProductCostingRequest(
     Long oaFormItemId,
     String periodMonth,
     String initiatedBy,
-    boolean force) {}
+    boolean force,
+    boolean includeSavedCostRun) {
+  public ProductCostingRequest(String oaNo, Long oaFormItemId, String periodMonth, String initiatedBy, boolean force) {
+    this(oaNo, oaFormItemId, periodMonth, initiatedBy, force, false);
+  }
+}

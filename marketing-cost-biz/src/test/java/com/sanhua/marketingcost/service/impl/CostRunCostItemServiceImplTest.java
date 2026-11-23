@@ -609,8 +609,13 @@ class CostRunCostItemServiceImplTest {
             .multiply(new BigDecimal("0.00475")).setScale(6, java.math.RoundingMode.HALF_UP));
     when(qualityMapper.selectOne(any(Wrapper.class))).thenReturn(rate);
     rate.setLossRate(BigDecimal.ZERO);
+    var zero = svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"), context, null, true, ignored -> {});
+    assertThat(findItem(zero, "LOSS").getRate()).isZero();
+    assertThat(findItem(zero, "LOSS").getAmount()).isZero();
+    assertThat(findItem(zero, "LOSS").getRemark()).isNull();
+    rate.setLossRate(new BigDecimal("-0.01"));
     org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"),
-        context, null, true, ignored -> {})).hasMessageContaining("必须大于 0%");
+        context, null, true, ignored -> {})).hasMessageContaining("必须大于等于 0%");
     when(qualityMapper.selectOne(any(Wrapper.class))).thenThrow(new IllegalStateException("公共费率查询异常"));
     org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"),
         context, null, true, ignored -> {})).hasMessageContaining("公共费率查询异常");

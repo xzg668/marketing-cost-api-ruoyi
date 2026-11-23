@@ -79,6 +79,83 @@ class CostingPerformanceIntegrationTest extends OriginalPricingIntegrationTestBa
         "SELECT MAX(import_batch_id) FROM lp_material_master_raw WHERE active_flag=1 AND organization_code='COMMERCIAL'",String.class));
   }
 
+  @Test void u9ParentBaseRebuildsAnAffectedCostThenReusesTheCorrectedVersion() {
+    actor = "base_" + UUID.randomUUID().toString().substring(0, 8);
+    jdbc.update("INSERT INTO sys_user(user_name,nick_name,password,business_unit_type,status,del_flag,create_by,create_time,update_by,update_time) VALUES(?,'BOM底数验收','unused','COMMERCIAL','0','0','TEST',NOW(),'TEST',NOW())", actor);
+    long user = jdbc.queryForObject("SELECT user_id FROM sys_user WHERE user_name=?", Long.class, actor);
+    jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES(?,1)", user);
+    var auth = new UsernamePasswordAuthenticationToken(actor, null, List.of(new SimpleGrantedAuthority("*:*:*")));
+    auth.setDetails(Map.of("businessUnitType", "COMMERCIAL"));
+    SecurityContextHolder.getContext().setAuthentication(auth);
+    try {
+      var quote = seedQuote("PARENT-BASE", 1);
+      long item = quote.items().getFirst();
+      String product = quote.products().getFirst();
+      String material = product + "-PART";
+      var request = new ProductCostingRequest(quote.oa(), item, month, actor, false);
+      requireSuccess(pipeline.execute(request));
+      String amounts = "SELECT p.amount FROM lp_cost_run_part_item p "
+          + "JOIN lp_quote_cost_run_version v ON v.id=p.cost_run_version_id "
+          + "WHERE v.oa_form_item_id=? AND v.version_no IS NOT NULL AND p.part_code=? ORDER BY v.id";
+      assertThat(jdbc.queryForList(amounts, BigDecimal.class, item, material)).containsExactly(new BigDecimal("5.000000"));
+      insertU9ParentBase(product, material);
+      requireSuccess(pipeline.execute(request));
+      assertThat(jdbc.queryForList(amounts, BigDecimal.class, item, material))
+          .containsExactly(new BigDecimal("5.000000"), new BigDecimal("0.000263"));
+      assertThat(jdbc.update("UPDATE lp_bom_u9_source SET import_batch_id='NEXT-U9-BATCH' WHERE child_material_no=?", material)).isEqualTo(1);
+      assertThat(jdbc.update("""
+          UPDATE lp_bom_raw_hierarchy SET material_code='REUSED-SOURCE-ID',
+            source_import_batch_id='NEXT-U9-BATCH',build_batch_id='NEXT-HIERARCHY'
+          WHERE top_product_code=? AND material_code=?
+          """, product, material)).isEqualTo(1);
+      requireSuccess(pipeline.execute(request));
+      assertThat(jdbc.queryForList(amounts, BigDecimal.class, item, material))
+          .containsExactly(new BigDecimal("5.000000"), new BigDecimal("0.000263"));
+      requireSuccess(pipeline.execute(new ProductCostingRequest(quote.oa(), item, month, actor, true)));
+      assertThat(jdbc.queryForList(amounts, BigDecimal.class, item, material))
+          .containsExactly(new BigDecimal("5.000000"), new BigDecimal("0.000263"), new BigDecimal("0.000263"));
+      assertThat(capturedParentBases(material)).isEmpty();
+
+      var firstQuote = seedQuote("FROZEN-BASE", 1);
+      long firstItem = firstQuote.items().getFirst();
+      String firstProduct = firstQuote.products().getFirst();
+      String firstMaterial = firstProduct + "-PART";
+      insertU9ParentBase(firstProduct, firstMaterial);
+      requireSuccess(pipeline.execute(new ProductCostingRequest(firstQuote.oa(), firstItem, month, actor, false)));
+      assertThat(capturedParentBases(firstMaterial)).singleElement()
+          .satisfies(base -> assertThat(base).isEqualByComparingTo("19000"));
+      assertThat(jdbc.update("UPDATE lp_bom_u9_source SET import_batch_id='NEXT-U9-BATCH',parent_base_qty=25000 WHERE child_material_no=?", firstMaterial))
+          .isEqualTo(1);
+      requireSuccess(pipeline.execute(new ProductCostingRequest(firstQuote.oa(), firstItem, month, actor, true)));
+      assertThat(jdbc.queryForList(amounts, BigDecimal.class, firstItem, firstMaterial))
+          .containsExactly(new BigDecimal("0.000263"), new BigDecimal("0.000263"));
+      assertThat(capturedParentBases(firstMaterial)).singleElement()
+          .satisfies(base -> assertThat(base).isEqualByComparingTo("19000"));
+    } finally {
+      SecurityContextHolder.clearContext();
+    }
+  }
+
+  private void insertU9ParentBase(String product, String material) {
+    assertThat(jdbc.update("""
+        INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,
+          parent_material_no,child_material_no,bom_purpose,bom_version,child_seq,child_type,
+          effective_from,effective_to,qty_per_parent,parent_base_qty)
+        SELECT source_import_batch_id,'U9_API',NOW(),price_org_code,parent_code,material_code,
+          bom_purpose,bom_version,sort_seq,'标准',effective_from,effective_to,qty_per_parent,19000
+        FROM lp_bom_raw_hierarchy WHERE top_product_code=? AND material_code=?
+        """, product, material)).isEqualTo(1);
+  }
+
+  private List<BigDecimal> capturedParentBases(String material) {
+    return jdbc.queryForList("""
+        SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(raw_node_json,'$.frozenU9ParentBaseQty')) AS DECIMAL(20,8))
+        FROM lp_quote_bom_monthly_snapshot_detail
+        WHERE JSON_UNQUOTE(JSON_EXTRACT(raw_node_json,'$.materialCode'))=?
+          AND JSON_EXTRACT(raw_node_json,'$.frozenU9ParentBaseQty') IS NOT NULL
+        """, BigDecimal.class, material);
+  }
+
   @Test void singleAndWholeQuoteBaseline() throws Exception {
     actor="perf_"+UUID.randomUUID().toString().substring(0,8);
     jdbc.update("INSERT INTO sys_user(user_name,nick_name,password,business_unit_type,status,del_flag,create_by,create_time,update_by,update_time) VALUES(?,'性能验收','unused','COMMERCIAL','0','0','PERF',NOW(),'PERF',NOW())",actor);

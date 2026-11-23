@@ -35,10 +35,14 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -58,6 +62,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
   private final ObjectMapper objectMapper;
   private final QuoteBomContextResolver quoteBomContextResolver;
+  private final JdbcTemplate jdbc;
 
   public QuoteIngestServiceImpl(
       QuoteNormalizeService quoteNormalizeService,
@@ -70,7 +75,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       QuoteBomStatusMapper quoteBomStatusMapper,
       QuoteCostRunVersionInvalidationService versionInvalidationService,
       ObjectMapper objectMapper,
-      QuoteBomContextResolver quoteBomContextResolver) {
+      QuoteBomContextResolver quoteBomContextResolver,
+      JdbcTemplate jdbc) {
     this.quoteNormalizeService = quoteNormalizeService;
     this.quoteIngestLogService = quoteIngestLogService;
     this.oaFormMapper = oaFormMapper;
@@ -82,21 +88,32 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     this.versionInvalidationService = versionInvalidationService;
     this.objectMapper = objectMapper;
     this.quoteBomContextResolver = quoteBomContextResolver;
+    this.jdbc = jdbc;
   }
 
   @Override
   @Transactional
   public QuoteIngestResponse ingest(QuoteIngestRequest request) {
-    return ingestDocument(request, false);
+    return ingestDocument(request, false, null);
   }
 
   @Override
   @Transactional
   public QuoteIngestResponse ingestFromOa(QuoteIngestRequest request) {
-    return ingestDocument(request, true);
+    return ingestDocument(request, true, null);
   }
 
-  private QuoteIngestResponse ingestDocument(QuoteIngestRequest request, boolean oaSource) {
+  @Override
+  @Transactional
+  public QuoteIngestResponse updateFromOa(QuoteIngestRequest request, OaForm form,
+      boolean headerChanged, Set<String> changedLines) {
+    return ingestDocument(request, true, new OaRevision(form, headerChanged, changedLines));
+  }
+
+  private record OaRevision(OaForm form, boolean headerChanged, Set<String> changedLines) {}
+
+  private QuoteIngestResponse ingestDocument(
+      QuoteIngestRequest request, boolean oaSource, OaRevision revision) {
     String requestId = resolveRequestId(request);
     String idempotencyKey = resolveIdempotencyKey(request);
     String payloadJson = toJson(request);
@@ -131,6 +148,11 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     }
 
     String oaNo = resolveOaNo(normalized.getHeader(), request);
+    if (revision != null) {
+      applyOaRevision(revision, normalized, log.getId());
+      quoteIngestLogService.markImported(log, normalized, revision.form().getId(), oaNo);
+      return importedResponse(log, normalized, revision.form());
+    }
     OaForm existingForm = oaSource ? null : findExistingForm(oaNo, request);
     if (!oaSource
         && existingForm != null
@@ -174,6 +196,20 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       OaForm existing, QuoteNormalizedHeader header, String oaNo, Long logId) {
     OaForm form = existing == null ? new OaForm() : existing;
     form.setOaNo(oaNo);
+    applySourceHeader(form, header, logId);
+    if (!StringUtils.hasText(form.getCalcStatus())) {
+      form.setCalcStatus("未核算");
+    }
+    if (existing == null) {
+      form.setCreatedAt(LocalDateTime.now());
+      oaFormMapper.insert(form);
+    } else {
+      oaFormMapper.updateById(form);
+    }
+    return form;
+  }
+
+  private void applySourceHeader(OaForm form, QuoteNormalizedHeader header, Long logId) {
     form.setSourceType(header.getSourceType());
     form.setSourceSystem(header.getSourceSystem());
     form.setExternalFormNo(header.getExternalFormNo());
@@ -213,21 +249,19 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     form.setSaleLink(header.getSaleLink());
     form.setRemark(header.getRemark());
     form.setIngestLogId(logId);
-    if (!StringUtils.hasText(form.getCalcStatus())) {
-      form.setCalcStatus("未核算");
-    }
     form.setUpdatedAt(LocalDateTime.now());
-    if (existing == null) {
-      form.setCreatedAt(LocalDateTime.now());
-      oaFormMapper.insert(form);
-    } else {
-      oaFormMapper.updateById(form);
-    }
-    return form;
   }
 
   /** 只有未核算历史单重新导入才替换明细；新单不删除空范围，避免并发插入间隙锁冲突。 */
   private void clearExistingDetails(Long formId) {
+    clearSourceExtraFields(formId);
+    quoteBomStatusMapper.delete(
+        Wrappers.lambdaQuery(QuoteBomStatus.class).eq(QuoteBomStatus::getOaFormId, formId));
+    oaFormItemMapper.delete(
+        Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, formId));
+  }
+
+  private void clearSourceExtraFields(Long formId) {
     oaFormExtraFeeMapper.delete(
         Wrappers.lambdaQuery(OaFormExtraFee.class).eq(OaFormExtraFee::getOaFormId, formId));
     oaFormHeaderExtraFieldMapper.delete(
@@ -236,10 +270,112 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     oaFormItemExtraFieldMapper.delete(
         Wrappers.lambdaQuery(OaFormItemExtraField.class)
             .eq(OaFormItemExtraField::getOaFormId, formId));
-    quoteBomStatusMapper.delete(
-        Wrappers.lambdaQuery(QuoteBomStatus.class).eq(QuoteBomStatus::getOaFormId, formId));
-    oaFormItemMapper.delete(
-        Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, formId));
+  }
+
+  private void applyOaRevision(OaRevision revision, QuoteNormalizedDocument document, Long logId) {
+    OaForm form = revision.form();
+    String previousCustomer = quoteBomContextResolver.resolveCustomer(form, null).value();
+    if (revision.headerChanged()) {
+      applySourceHeader(form, document.getHeader(), logId);
+      oaFormMapper.updateOaSourceHeader(form);
+    } else {
+      oaFormMapper.update(null, Wrappers.<OaForm>lambdaUpdate()
+          .eq(OaForm::getId, form.getId()).set(OaForm::getIngestLogId, logId)
+          .set(OaForm::getUpdatedAt, LocalDateTime.now()));
+    }
+    boolean customerChanged = !Objects.equals(previousCustomer,
+        quoteBomContextResolver.resolveCustomer(form, null).value());
+    Map<String, OaFormItem> prior = new LinkedHashMap<>();
+    for (var row : oaFormItemMapper.lockOaSourceItems(form.getId())) {
+      prior.put(row.getExternalLineId(), row);
+    }
+    Map<String, Long> itemIds = new HashMap<>();
+    boolean needsCosting = revision.headerChanged();
+    for (var source : document.getItems()) {
+      var item = prior.remove(source.getExternalLineId());
+      if (item == null) {
+        item = new OaFormItem();
+        item.setOaFormId(form.getId());
+        applySourceItem(item, source);
+        item.setCreatedAt(LocalDateTime.now());
+        oaFormItemMapper.insert(item);
+        insertBomStatus(form, source, item.getId());
+        needsCosting = true;
+      } else {
+        needsCosting |= reviseOaItem(form, item, source, revision, customerChanged);
+      }
+      itemIds.put(itemKey(source.getExternalLineId(), source.getSeq()), item.getId());
+    }
+    for (var removed : prior.values()) {
+      if (Integer.valueOf(1).equals(removed.getDeleted())) continue;
+      markOaInputChanged(removed.getId(), null);
+      retireTechnicalTask(removed.getId());
+      oaFormItemMapper.deleteById(removed.getId());
+      needsCosting = true;
+    }
+    if (needsCosting) {
+      oaFormMapper.update(null, Wrappers.<OaForm>lambdaUpdate().eq(OaForm::getId, form.getId())
+          .set(OaForm::getCalcStatus, "待核算"));
+    }
+    clearSourceExtraFields(form.getId());
+    insertExtraFees(form, document, itemIds, logId);
+    insertExtraFields(form, document, itemIds, logId);
+  }
+
+  private boolean reviseOaItem(OaForm form, OaFormItem item, QuoteNormalizedItem source,
+      OaRevision revision, boolean customerChanged) {
+    boolean restored = Integer.valueOf(1).equals(item.getDeleted());
+    String previousCode = QuoteProductIdentityUtils.resolveCostingCode(item);
+    String previousMethod = quoteBomContextResolver.normalizePackageMethod(item.getPackageMethod());
+    boolean sourceChanged = restored || revision.changedLines().contains(source.getExternalLineId());
+    if (sourceChanged || revision.headerChanged()) {
+      applySourceItem(item, source);
+      oaFormItemMapper.updateOaSourceItem(item);
+    } else if (!Objects.equals(item.getSeq(), source.getSeq())) {
+      oaFormItemMapper.update(null, Wrappers.<OaFormItem>lambdaUpdate()
+          .eq(OaFormItem::getId, item.getId()).set(OaFormItem::getSeq, source.getSeq())
+          .set(OaFormItem::getUpdatedAt, LocalDateTime.now()));
+    }
+    String code = QuoteProductIdentityUtils.resolveCostingCode(item);
+    boolean identityChanged = !Objects.equals(previousCode, code);
+    if (identityChanged) retireTechnicalTask(item.getId());
+    if (restored || identityChanged || customerChanged
+        || !Objects.equals(previousMethod, quoteBomContextResolver.normalizePackageMethod(item.getPackageMethod()))) {
+      quoteBomStatusMapper.delete(Wrappers.<QuoteBomStatus>lambdaQuery()
+          .eq(QuoteBomStatus::getOaFormItemId, item.getId()));
+      insertBomStatus(form, source, item.getId());
+    }
+    if (!sourceChanged && !revision.headerChanged()) return false;
+    markOaInputChanged(item.getId(), code);
+    return true;
+  }
+
+  private void markOaInputChanged(long itemId, String code) {
+    jdbc.update("""
+        UPDATE lp_quote_costing_workspace SET workspace_status='STALE', current_step='QUOTE_BOM',
+          product_code=COALESCE(?,product_code), stale_reason_code='OA_REQUIREMENT_UPDATED',
+          last_error_step=NULL,last_error_code=NULL,last_error_message=NULL,
+          lock_version=lock_version+1,updated_at=NOW(3)
+        WHERE oa_form_item_id=?
+        """, code, itemId);
+    jdbc.update("UPDATE oa_form_item SET calc_status='待核算' WHERE id=?", itemId);
+  }
+
+  /** 产品退出当前需求时归档活动任务，冻结资料和人员收发历史保留。 */
+  private void retireTechnicalTask(long itemId) {
+    var tasks = jdbc.queryForList("""
+        SELECT id FROM lp_quote_tech_task WHERE oa_form_item_id=? AND active_flag=1 ORDER BY id FOR UPDATE
+        """, Long.class, itemId);
+    for (Long taskId : tasks) {
+      jdbc.update("""
+          UPDATE lp_quote_tech_product SET active_flag=0,active_lock_key=NULL,
+            row_version=row_version+1,updated_at=NOW(3) WHERE task_id=? AND active_flag=1
+          """, taskId);
+      jdbc.update("""
+          UPDATE lp_quote_tech_task SET active_flag=0,active_lock_key=NULL,
+            task_status='CANCELLED',task_version=task_version+1,updated_at=NOW(3) WHERE id=?
+          """, taskId);
+    }
   }
 
   private ItemInsertResult insertItems(OaForm form, QuoteNormalizedDocument normalized) {
@@ -248,51 +384,55 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     for (QuoteNormalizedItem source : normalized.getItems()) {
       OaFormItem item = new OaFormItem();
       item.setOaFormId(form.getId());
-      item.setExternalLineId(source.getExternalLineId());
-      item.setSeq(source.getSeq());
-      item.setProductName(source.getProductName());
-      item.setCustomerDrawing(source.getCustomerDrawing());
-      item.setCustomerCode(source.getCustomerCode());
-      item.setMaterialNo(source.getMaterialNo());
-      item.setSunlModel(source.getSunlModel());
-      item.setSpec(source.getSpec());
-      item.setProductAttr(source.getProductAttr());
-      item.setBusinessType(source.getBusinessType());
-      item.setFirstQuoteFlag(booleanToTinyint(source.getFirstQuoteFlag()));
-      item.setCertificationRequired(booleanToTinyint(source.getCertificationRequired()));
-      item.setOriginCountry(source.getOriginCountry());
-      item.setTechnicianName(source.getTechnicianName());
-      item.setPackageType(source.getPackageType());
-      item.setPackageMethod(source.getPackageMethod());
-      item.setPackageComponentCode(source.getPackageComponentCode());
-      item.setPackageQty(source.getPackageQty());
-      item.setShippingFee(source.getShippingFee());
-      item.setSupportQty(source.getSupportQty());
-      item.setAnnualVolume(source.getAnnualVolume());
-      item.setProjectNo(source.getProjectNo());
-      item.setProductStatus(source.getProductStatus());
-      item.setScrapRate(source.getScrapRate());
-      item.setUnitLaborCost(source.getUnitLaborCost());
-      item.setTotalWithShip(source.getTotalWithShip());
-      item.setTotalNoShip(source.getTotalNoShip());
-      item.setMaterialCost(source.getMaterialCost());
-      item.setLaborCost(source.getLaborCost());
-      item.setManufacturingCost(source.getManufacturingCost());
-      item.setManagementCost(source.getManagementCost());
-      item.setValidMonth(source.getValidMonth());
-      item.setSus304WeightG(source.getSus304WeightG());
-      item.setSus316WeightG(source.getSus316WeightG());
-      item.setCopperWeightG(source.getCopperWeightG());
-      item.setClassificationStatus(source.getClassificationStatus());
-      item.setBusinessUnitType(source.getBusinessUnitType());
-      item.setValidDate(source.getValidDate());
+      applySourceItem(item, source);
       item.setCreatedAt(LocalDateTime.now());
-      item.setUpdatedAt(LocalDateTime.now());
       oaFormItemMapper.insert(item);
       itemIdMap.put(itemKey(source.getExternalLineId(), source.getSeq()), item.getId());
       itemIdsByPosition.add(item.getId());
     }
     return new ItemInsertResult(itemIdMap, itemIdsByPosition);
+  }
+
+  private void applySourceItem(OaFormItem item, QuoteNormalizedItem source) {
+    item.setExternalLineId(source.getExternalLineId());
+    item.setSeq(source.getSeq());
+    item.setProductName(source.getProductName());
+    item.setCustomerDrawing(source.getCustomerDrawing());
+    item.setCustomerCode(source.getCustomerCode());
+    item.setMaterialNo(source.getMaterialNo());
+    item.setSunlModel(source.getSunlModel());
+    item.setSpec(source.getSpec());
+    item.setProductAttr(source.getProductAttr());
+    item.setBusinessType(source.getBusinessType());
+    item.setFirstQuoteFlag(booleanToTinyint(source.getFirstQuoteFlag()));
+    item.setCertificationRequired(booleanToTinyint(source.getCertificationRequired()));
+    item.setOriginCountry(source.getOriginCountry());
+    item.setTechnicianName(source.getTechnicianName());
+    item.setPackageType(source.getPackageType());
+    item.setPackageMethod(source.getPackageMethod());
+    item.setPackageComponentCode(source.getPackageComponentCode());
+    item.setPackageQty(source.getPackageQty());
+    item.setShippingFee(source.getShippingFee());
+    item.setSupportQty(source.getSupportQty());
+    item.setAnnualVolume(source.getAnnualVolume());
+    item.setProjectNo(source.getProjectNo());
+    item.setProductStatus(source.getProductStatus());
+    item.setScrapRate(source.getScrapRate());
+    item.setUnitLaborCost(source.getUnitLaborCost());
+    item.setTotalWithShip(source.getTotalWithShip());
+    item.setTotalNoShip(source.getTotalNoShip());
+    item.setMaterialCost(source.getMaterialCost());
+    item.setLaborCost(source.getLaborCost());
+    item.setManufacturingCost(source.getManufacturingCost());
+    item.setManagementCost(source.getManagementCost());
+    item.setValidMonth(source.getValidMonth());
+    item.setSus304WeightG(source.getSus304WeightG());
+    item.setSus316WeightG(source.getSus316WeightG());
+    item.setCopperWeightG(source.getCopperWeightG());
+    item.setClassificationStatus(source.getClassificationStatus());
+    item.setBusinessUnitType(source.getBusinessUnitType());
+    item.setValidDate(source.getValidDate());
+    item.setUpdatedAt(LocalDateTime.now());
   }
 
   private void insertExtraFees(
@@ -393,33 +533,36 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   private void insertBomStatuses(
       OaForm form, QuoteNormalizedDocument normalized, List<Long> itemIdsByPosition) {
     for (int index = 0; index < normalized.getItems().size(); index++) {
-      QuoteNormalizedItem source = normalized.getItems().get(index);
-      // 原单可先保存缺识别资料的行；不能创建没有产品身份的 BOM 检查记录。
-      if (QuoteProductIdentityUtils.resolveCostingCode(
-              source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing())
-          == null) continue;
-      QuoteBomStatus status = new QuoteBomStatus();
-      status.setOaFormId(form.getId());
-      status.setOaFormItemId(itemIdsByPosition.get(index));
-      status.setOaNo(form.getOaNo());
-      status.setProductCode(
-          QuoteProductIdentityUtils.resolveCostingCode(
-              source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing()));
-      status.setProductModel(source.getSunlModel());
-      status.setCustomerCode(quoteBomContextResolver.resolveCustomer(form, null).value());
-      status.setPackageType(source.getPackageType());
-      status.setPackageMethod(
-          quoteBomContextResolver.normalizePackageMethod(source.getPackageMethod()));
-      status.setCostPeriodMonth(quoteBomContextResolver.resolveCostPeriodMonth(form));
-      status.setTechnicianName(source.getTechnicianName());
-      status.setBomStatus(
-          StringUtils.hasText(source.getMaterialNo())
-              ? QuoteBomStatusCode.NOT_CHECKED.getCode()
-              : QuoteBomStatusCode.NO_BOM.getCode());
-      status.setCreatedAt(LocalDateTime.now());
-      status.setUpdatedAt(LocalDateTime.now());
-      quoteBomStatusMapper.insert(status);
+      insertBomStatus(form, normalized.getItems().get(index), itemIdsByPosition.get(index));
     }
+  }
+
+  private void insertBomStatus(OaForm form, QuoteNormalizedItem source, Long itemId) {
+    // 原单可先保存缺识别资料的行；不能创建没有产品身份的 BOM 检查记录。
+    if (QuoteProductIdentityUtils.resolveCostingCode(
+            source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing())
+        == null) return;
+    QuoteBomStatus status = new QuoteBomStatus();
+    status.setOaFormId(form.getId());
+    status.setOaFormItemId(itemId);
+    status.setOaNo(form.getOaNo());
+    status.setProductCode(
+        QuoteProductIdentityUtils.resolveCostingCode(
+            source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing()));
+    status.setProductModel(source.getSunlModel());
+    status.setCustomerCode(quoteBomContextResolver.resolveCustomer(form, null).value());
+    status.setPackageType(source.getPackageType());
+    status.setPackageMethod(
+        quoteBomContextResolver.normalizePackageMethod(source.getPackageMethod()));
+    status.setCostPeriodMonth(quoteBomContextResolver.resolveCostPeriodMonth(form));
+    status.setTechnicianName(source.getTechnicianName());
+    status.setBomStatus(
+        StringUtils.hasText(source.getMaterialNo())
+            ? QuoteBomStatusCode.NOT_CHECKED.getCode()
+            : QuoteBomStatusCode.NO_BOM.getCode());
+    status.setCreatedAt(LocalDateTime.now());
+    status.setUpdatedAt(LocalDateTime.now());
+    quoteBomStatusMapper.insert(status);
   }
 
   private record ItemInsertResult(Map<String, Long> itemIdMap, List<Long> itemIdsByPosition) {}

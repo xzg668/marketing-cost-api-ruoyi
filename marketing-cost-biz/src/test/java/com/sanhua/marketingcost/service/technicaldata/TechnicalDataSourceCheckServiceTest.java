@@ -52,7 +52,7 @@ class TechnicalDataSourceCheckServiceTest {
         TechnicalDataAvailability.UNCONFIRMED, "PACKAGE_PENDING", "由包装专用检查验证", null, context.scanAt()));
     workspace = new QuoteCostingWorkspace(); workspace.setCurrentBomBuildBatchId("BOM-1");
     when(u9.read(any())).thenReturn(CurrentU9BomResult.available("U9", "V1", "BOM-1", 2));
-    when(salary.read(anyString(), anyInt(), anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(), null));
+    when(salary.read(anyString(), anyInt(), anyString(), anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(), null));
     when(prices.calculate(any())).thenReturn(priceResult(List.of(), "READY"));
   }
 
@@ -104,7 +104,7 @@ class TechnicalDataSourceCheckServiceTest {
     var result = service.preview(context, workspace, java.util.Set.of(TechnicalDataModuleType.SALARY));
     assertThat(result.facts()).extracting(TechnicalDataSourceFact::moduleType).containsExactly(TechnicalDataModuleType.SALARY);
     verifyNoInteractions(u9, drawings, manufacturing, packaging, netLoss, prices);
-    verify(salary).read(anyString(), anyInt(), anyString());
+    verify(salary).read(anyString(), anyInt(), anyString(), anyString());
   }
 
   @Test void pendingPriceStillUsesTheActualCalculatorAndDoesNotPretendMissingPriceWasResolved() {
@@ -127,7 +127,7 @@ class TechnicalDataSourceCheckServiceTest {
 
   @Test void noOriginalBomRequiresProductDrawingAuxiliaryAndSolderEvenWhenReferenceDataExists() {
     when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
-    when(salary.read(anyString(), anyInt(), anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(
+    when(salary.read(anyString(), anyInt(), anyString(), anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(
         List.of(wage(1,"SALARY_DIRECT","2.5"),wage(2,"SALARY_INDIRECT","0.08")),1L));
     var requirements = new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts());
     assertThat(requirements).filteredOn(TechnicalDataModuleRequirement::required)
@@ -247,15 +247,15 @@ class TechnicalDataSourceCheckServiceTest {
 
   @Test void confirmedSingleWageIncludingZeroIsUsableWithoutInventingSecondWage() {
     for (String type : List.of("SALARY_DIRECT","SALARY_INDIRECT")) {
-      when(salary.read(anyString(),anyInt(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(wage(1,type,"0")),5L));
+      when(salary.read(anyString(),anyInt(),anyString(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(wage(1,type,"0")),5L));
       assertThat(fact(TechnicalDataModuleType.SALARY).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
     }
-    verify(salary, times(2)).read("PRODUCT",2026,"COMMERCIAL");
+    verify(salary, times(2)).read("PRODUCT",2026,"COMMERCIAL",context.materialOrganizationCode());
   }
 
   @Test void unapprovedOrUnconfirmedSalaryEntersTechnicalSalarySupplement() {
     for (var rows : List.of(List.<CmsCostSourceEffective>of(), List.of(wage(1,"SALARY_INDIRECT","0.1715")))) {
-      when(salary.read(anyString(),anyInt(),anyString()))
+      when(salary.read(anyString(),anyInt(),anyString(),anyString()))
           .thenReturn(new TechnicalDataSalarySourceQuery.Source(rows, null));
       var requirements = new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts());
       assertThat(requirements).filteredOn(row -> row.moduleType().equals("SALARY"))
@@ -270,7 +270,7 @@ class TechnicalDataSourceCheckServiceTest {
   }
 
   @Test void salaryReadFailureCannotCreateTechnicalSalarySupplement() {
-    when(salary.read(anyString(),anyInt(),anyString())).thenThrow(new IllegalStateException("source unavailable"));
+    when(salary.read(anyString(),anyInt(),anyString(),anyString())).thenThrow(new IllegalStateException("source unavailable"));
     assertThat(new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts()))
         .filteredOn(row -> row.moduleType().equals("SALARY"))
         .allSatisfy(row -> {
@@ -280,14 +280,14 @@ class TechnicalDataSourceCheckServiceTest {
   }
 
   @Test void bothWagesConfirmedAbsentProduceOnlySalaryGapWhenU9Exists() {
-    when(salary.read(anyString(),anyInt(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(),7L));
+    when(salary.read(anyString(),anyInt(),anyString(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(),7L));
     assertThat(service.check(context,workspace).facts()).filteredOn(row -> row.availability()==TechnicalDataAvailability.MISSING)
         .extracting(TechnicalDataSourceFact::moduleType).containsExactly(TechnicalDataModuleType.SALARY);
   }
 
   @Test void duplicateWageTypeAndInvalidMoneyRemainErrors() {
     for (var values : List.of(List.of(wage(1,"SALARY_DIRECT","-1")),List.of(wage(1,"SALARY_DIRECT","1"),wage(2,"SALARY_DIRECT","2")))) {
-      when(salary.read(anyString(),anyInt(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(values,7L));
+      when(salary.read(anyString(),anyInt(),anyString(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(values,7L));
       assertThat(fact(TechnicalDataModuleType.SALARY).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
     }
   }
@@ -373,14 +373,18 @@ class TechnicalDataSourceCheckServiceTest {
     verify(prices).calculate(any());
   }
 
-  @Test void netLossPublicPositiveAndMissingAreIndependentOfBomWhileInvalidRatesRemainErrors() {
+  @Test void netLossPublicZeroPositiveAndMissingAreIndependentOfBomWhileInvalidRatesRemainErrors() {
     var positive = new com.sanhua.marketingcost.service.NetLossRateQuery.Source("AVAILABLE", "NET_LOSS_SOURCE_AVAILABLE", "已有公共费率",
         1L, "PRODUCT", "产品", "MODEL", "BARE", "211", 2026, "COMMERCIAL", 2L, new BigDecimal("0.003"));
     when(netLoss.lookup("PRODUCT", "MODEL", "211", 2026, "COMMERCIAL")).thenReturn(positive);
     assertThat(fact(TechnicalDataModuleType.NET_LOSS).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
-    var zero = new com.sanhua.marketingcost.service.NetLossRateQuery.Source("ERROR", "NET_LOSS_RATE_INVALID", "公共费率必须大于0",
+    var zero = new com.sanhua.marketingcost.service.NetLossRateQuery.Source("AVAILABLE", "NET_LOSS_SOURCE_AVAILABLE", "已有公共费率",
         1L, "PRODUCT", "产品", "MODEL", "BARE", "211", 2026, "COMMERCIAL", 2L, BigDecimal.ZERO);
     when(netLoss.lookup("PRODUCT", "MODEL", "211", 2026, "COMMERCIAL")).thenReturn(zero);
+    assertThat(fact(TechnicalDataModuleType.NET_LOSS).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
+    var invalid = new com.sanhua.marketingcost.service.NetLossRateQuery.Source("ERROR", "NET_LOSS_RATE_INVALID", "公共费率无效",
+        1L, "PRODUCT", "产品", "MODEL", "BARE", "211", 2026, "COMMERCIAL", 2L, new BigDecimal("-0.003"));
+    when(netLoss.lookup("PRODUCT", "MODEL", "211", 2026, "COMMERCIAL")).thenReturn(invalid);
     assertThat(fact(TechnicalDataModuleType.NET_LOSS).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
     var missing = new com.sanhua.marketingcost.service.NetLossRateQuery.Source("MISSING", "NET_LOSS_BARE_MISSING", "没有裸品",
         1L, "PRODUCT", "产品", "MODEL", null, "211", 2026, "COMMERCIAL", null, null);

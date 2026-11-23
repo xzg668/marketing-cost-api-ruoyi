@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +15,7 @@ import com.sanhua.marketingcost.mapper.FactorIdentityMapper;
 import com.sanhua.marketingcost.mapper.FactorUploadBatchMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.security.PermissionService;
 import com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader;
 import com.sanhua.marketingcost.service.impl.OriginalLinkedWorkbookParser.Rule;
 import com.sanhua.marketingcost.service.pricing.FactorPriceScope;
@@ -29,14 +31,19 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /** 公共联动原稿：完整只读预检、确认时版本复核、整批追加规则；不写公共因素价格。 */
 @Service
 public class OriginalLinkedImportService {
+  public static final String VOIDED = "VOIDED";
+
   @org.springframework.beans.factory.annotation.Autowired(required=false)
   private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
 
@@ -100,6 +107,93 @@ public class OriginalLinkedImportService {
 
   public PriceLinkedType2ImportPreviewResponse preview(PriceLinkedImportCommand command) {
     return prepare(command, scope(command)).preview();
+  }
+
+  public static boolean canVoid(FactorUploadBatch batch) {
+    return "PUBLISHED".equals(batch.getStatus()) && canManageUpload(batch);
+  }
+
+  private static boolean canManageUpload(FactorUploadBatch batch) {
+    var auth = SecurityContextHolder.getContext().getAuthentication();
+    if (auth == null || !auth.isAuthenticated()) return false;
+    var authorities = auth.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList();
+    if (!authorities.contains(PermissionService.ALL_PERMISSION)
+        && !authorities.contains("price:linked-item:import")) return false;
+    if (isAdministrator()) return true;
+    return Objects.equals(batch.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType())
+        && (auth.getName().equals(batch.getUploadedBy()) || authorities.contains("price:linked-item:admin")
+            || authorities.contains("price:finance-base:admin"));
+  }
+
+  private static boolean isAdministrator() {
+    var auth = SecurityContextHolder.getContext().getAuthentication();
+    return auth != null && auth.getAuthorities().stream()
+        .anyMatch(authority -> "ROLE_ADMIN".equalsIgnoreCase(authority.getAuthority()));
+  }
+
+  @Transactional(readOnly = true)
+  public long previewVoid(long id, String pricingMonth, String businessUnitType) {
+    String unit = voidBusinessUnit(businessUnitType);
+    var batch = uploadForVoid(id, FactorPriceScope.month(pricingMonth), unit, false);
+    if (!canVoid(batch)) throw new IllegalArgumentException("这次导入已作废，请刷新文件清单");
+    return items.selectCount(rulesForVoid(batch));
+  }
+
+  public void voidUpload(long id, String pricingMonth, String businessUnitType, long expectedRuleCount) {
+    String unit = voidBusinessUnit(businessUnitType);
+    String month = FactorPriceScope.month(pricingMonth);
+    transaction.executeWithoutResult(status -> {
+      identities.lockForFinancePublication(unit);
+      var batch = uploadForVoid(id, month, unit, true);
+      if (VOIDED.equals(batch.getStatus())) return;
+      // Current selection excludes these rules. Historical price and workbook references remain readable.
+      var now = LocalDateTime.now();
+      var withdrawn = new PriceLinkedItem();
+      withdrawn.setRuleStatus(PriceLinkedItem.VOIDED);
+      withdrawn.setUpdatedAt(now);
+      if (items.update(withdrawn, rulesForVoid(batch)) != expectedRuleCount)
+        throw new IllegalArgumentException("受影响的条数已变化，请重新预览后再确认");
+      int affected = batches.update(null, Wrappers.lambdaUpdate(FactorUploadBatch.class)
+          .eq(FactorUploadBatch::getId, batch.getId())
+          .eq(FactorUploadBatch::getStatus, "PUBLISHED")
+          .set(FactorUploadBatch::getStatus, VOIDED)
+          .set(FactorUploadBatch::getUpdatedAt, now));
+      if (affected != 1) throw new IllegalArgumentException("导入状态已变化，请刷新后再试");
+      refreshEffectivePrices(new Scope(unit, List.of(batch.getPriceOrgCode()), month));
+    });
+  }
+
+  private String voidBusinessUnit(String requested) {
+    String unit = Objects.toString(requested, "").trim().toUpperCase(Locale.ROOT);
+    if (!List.of("COMMERCIAL", "HOUSEHOLD").contains(unit)) throw new IllegalArgumentException("请选择业务单元");
+    if (!isAdministrator() && !unit.equals(BusinessUnitContext.getCurrentBusinessUnitType()))
+      throw new AccessDeniedException("无权作废其他业务单元的原稿");
+    return unit;
+  }
+
+  private FactorUploadBatch uploadForVoid(long id, String month, String unit, boolean lock) {
+    var batch = batches.selectOne(Wrappers.lambdaQuery(FactorUploadBatch.class)
+        .eq(FactorUploadBatch::getId, id)
+        .eq(FactorUploadBatch::getBusinessUnitType, unit)
+        .eq(FactorUploadBatch::getPriceMonth, month)
+        .eq(FactorUploadBatch::getImportType, "LINKED_ORIGINAL")
+        .in(FactorUploadBatch::getStatus, "PUBLISHED", VOIDED)
+        .isNull(FactorUploadBatch::getTechnicalVersionId)
+        .last(lock, "FOR UPDATE"));
+    if (batch == null || !canManageUpload(batch)) throw new AccessDeniedException("无权作废该导入记录");
+    return batch;
+  }
+
+  private LambdaQueryWrapper<PriceLinkedItem> rulesForVoid(FactorUploadBatch batch) {
+    // Month carry-forward keeps this source ID. Those copies retire with the original workbook.
+    return Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .eq(PriceLinkedItem::getSourceUploadBatchId, batch.getId())
+        .eq(PriceLinkedItem::getRuleStatus, "PUBLISHED")
+        .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+        .eq(PriceLinkedItem::getExpressionVersion, OriginalLinkedRuleSnapshot.VERSION)
+        .eq(PriceLinkedItem::getBusinessUnitType, batch.getBusinessUnitType())
+        .eq(PriceLinkedItem::getOrgCode, batch.getPriceOrgCode())
+        .eq(PriceLinkedItem::getDeleted, 0);
   }
 
   public PriceItemImportResponse confirm(PriceLinkedImportCommand command) {
@@ -526,16 +620,22 @@ public class OriginalLinkedImportService {
   }
 
   private PriceItemImportResponse complete(PriceItemImportResponse response, Scope scope) {
+    var generation = refreshEffectivePrices(scope);
+    response.setEffectivePriceGeneratedCount(generation.generated());
+    response.setEffectivePriceWaitingCount(generation.waitingRules());
+    response.setEffectivePriceStatus(generation.waitingRules() > 0 ? "WAIT_FINANCE_BASE" : "READY");
+    return response;
+  }
+
+  private com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.Generation
+      refreshEffectivePrices(Scope scope) {
     if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("PRICE"),scope.businessUnit(),java.util.Set.of(),java.util.Set.of()));
     var generation =
         new com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.Generation(
             0, 0, 0);
     for (String org : scope.orgs())
       generation = generation.plus(effectivePrices.generateScope(scope.businessUnit(), org));
-    response.setEffectivePriceGeneratedCount(generation.generated());
-    response.setEffectivePriceWaitingCount(generation.waitingRules());
-    response.setEffectivePriceStatus(generation.waitingRules() > 0 ? "WAIT_FINANCE_BASE" : "READY");
-    return response;
+    return generation;
   }
 
   private Scope scope(PriceLinkedImportCommand command) {

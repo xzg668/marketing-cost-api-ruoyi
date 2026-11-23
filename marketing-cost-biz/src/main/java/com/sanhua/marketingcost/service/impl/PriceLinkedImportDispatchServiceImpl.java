@@ -51,6 +51,16 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
   }
 
   @Override
+  public long previewVoidOriginal(long id, String pricingMonth, String businessUnitType) {
+    return originals.previewVoid(id, pricingMonth, businessUnitType);
+  }
+
+  @Override
+  public void voidOriginal(long id, String pricingMonth, String businessUnitType, long expectedRuleCount) {
+    originals.voidUpload(id, pricingMonth, businessUnitType, expectedRuleCount);
+  }
+
+  @Override
   @Transactional(readOnly = true)
   public PriceLinkedType2ImportPreviewResponse preview(PriceLinkedImportCommand command) {
     byte[] bytes = requireBytes(command);

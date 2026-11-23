@@ -11,6 +11,13 @@ public final class OrdinaryCostAmounts {
       BigDecimal manufactureFee, BigDecimal adjustedManufactureCost, BigDecimal management,
       BigDecimal sales, BigDecimal finance, BigDecimal total) {}
 
+  public record DepartmentAmount(BigDecimal basis, BigDecimal amount) {}
+
+  public static DepartmentAmount department(BigDecimal labor, BigDecimal manhourRate, BigDecimal effectiveRate) {
+    BigDecimal basis = labor.divide(manhourRate, 6, RoundingMode.HALF_UP);
+    return new DepartmentAmount(basis, money(basis.multiply(effectiveRate)));
+  }
+
   public static BigDecimal money(BigDecimal amount) {
     return amount.setScale(6, RoundingMode.HALF_UP);
   }

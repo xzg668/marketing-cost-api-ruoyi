@@ -83,4 +83,55 @@ public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
          AND calc_status = '已核算'
       """)
   long countCalculatedRunnableItems(@Param("oaFormId") Long oaFormId);
+
+  @Select("""
+      SELECT * FROM oa_form_item WHERE oa_form_id = #{formId} ORDER BY id FOR UPDATE
+      """)
+  List<OaFormItem> lockOaSourceItems(@Param("formId") Long formId);
+
+  /** OA 重推的来源字段全量采用，包含本次清空的字段。 */
+  @Update("""
+      UPDATE oa_form_item
+         SET seq = #{source.seq},
+             product_name = #{source.productName},
+             customer_drawing = #{source.customerDrawing},
+             customer_code = #{source.customerCode},
+             material_no = #{source.materialNo},
+             sunl_model = #{source.sunlModel},
+             spec = #{source.spec},
+             product_attr = #{source.productAttr},
+             business_type = #{source.businessType},
+             first_quote_flag = #{source.firstQuoteFlag},
+             certification_required = #{source.certificationRequired},
+             origin_country = #{source.originCountry},
+             technician_name = #{source.technicianName},
+             package_type = #{source.packageType},
+             package_method = #{source.packageMethod},
+             package_component_code = #{source.packageComponentCode},
+             package_qty = #{source.packageQty},
+             shipping_fee = #{source.shippingFee},
+             support_qty = #{source.supportQty},
+             annual_volume = #{source.annualVolume},
+             project_no = #{source.projectNo},
+             product_status = #{source.productStatus},
+             scrap_rate = #{source.scrapRate},
+             unit_labor_cost = #{source.unitLaborCost},
+             total_with_ship = #{source.totalWithShip},
+             total_no_ship = #{source.totalNoShip},
+             material_cost = #{source.materialCost},
+             labor_cost = #{source.laborCost},
+             manufacturing_cost = #{source.manufacturingCost},
+             management_cost = #{source.managementCost},
+             valid_month = #{source.validMonth},
+             sus304_weight_g = #{source.sus304WeightG},
+             sus316_weight_g = #{source.sus316WeightG},
+             copper_weight_g = #{source.copperWeightG},
+             classification_status = #{source.classificationStatus},
+             business_unit_type = #{source.businessUnitType},
+             valid_date = #{source.validDate},
+             updated_at = #{source.updatedAt},
+             deleted = 0
+       WHERE id = #{source.id} AND oa_form_id = #{source.oaFormId}
+      """)
+  int updateOaSourceItem(@Param("source") OaFormItem source);
 }

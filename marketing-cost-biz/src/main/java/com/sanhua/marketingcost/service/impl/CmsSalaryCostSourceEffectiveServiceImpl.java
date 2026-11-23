@@ -116,8 +116,8 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     }
     Aggregate aggregate =
         SALARY_DIRECT.equals(request.getSourceType())
-            ? aggregateDirect(request.getCostYear(), businessUnitType).get(key(request.getParentCode(), request.getNewPeriod()))
-            : aggregateIndirect(request.getCostYear(), businessUnitType).get(key(request.getParentCode(), request.getNewPeriod()));
+            ? directAggregate(request.getParentCode(), request.getNewPeriod(), businessUnitType)
+            : indirectAggregate(request.getParentCode(), request.getNewPeriod(), businessUnitType);
     if (aggregate == null) {
       throw new IllegalArgumentException("未找到该料号在新期间的 CMS 工资来源");
     }
@@ -137,6 +137,61 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
         upsert(existing, request.getCostYear(), request.getSourceType(), aggregate, 0, request.getRefreshReason(), operator, businessUnitType);
     insertLog(saved.getId(), request.getCostYear(), request.getSourceType(), aggregate, oldSnapshot, "REFRESH", request.getRefreshReason(), operator, businessUnitType);
     return saved;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public CmsCostSourceEffective previewDirectSource(String parentCode, String period, String businessUnitType) {
+    PlanEligibility eligibility = eligibility(parentCode, period, businessUnitType);
+    if (!eligibility.isDirectLaborAllowed()) {
+      throw new IllegalArgumentException(eligibility.getReason());
+    }
+    Aggregate aggregate = directAggregate(parentCode, period, businessUnitType);
+    if (aggregate == null) {
+      throw new IllegalArgumentException("未找到该料号在" + period + "的 CMS 车间料工费");
+    }
+    return previewSource(aggregate, SALARY_DIRECT, businessUnitType);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public CmsCostSourceEffective previewIndirectSource(String parentCode, String period, String businessUnitType) {
+    PlanEligibility eligibility = eligibility(parentCode, period, businessUnitType);
+    if (!eligibility.isIndirectLaborAllowed()) {
+      throw new IllegalArgumentException(eligibility.getReason());
+    }
+    Aggregate aggregate = indirectAggregate(parentCode, period, businessUnitType);
+    if (aggregate == null) {
+      throw new IllegalArgumentException("未找到该料号在" + period + "的 CMS 辅助人员工资");
+    }
+    return previewSource(aggregate, SALARY_INDIRECT, businessUnitType);
+  }
+
+  private CmsCostSourceEffective previewSource(Aggregate aggregate, String type, String businessUnitType) {
+    CmsCostSourceEffective source = new CmsCostSourceEffective();
+    source.setParentCode(aggregate.parentCode);
+    source.setPeriod(aggregate.period);
+    source.setSourceType(type);
+    source.setSubjectCode(subjectCode(type, aggregate));
+    source.setSubjectName(subjectName(type, aggregate));
+    source.setBusinessUnitType(normalizeBusinessUnit(businessUnitType));
+    source.setSourceTable(SALARY_DIRECT.equals(type) ? WORKSHOP_TABLE : SUBJECT_TABLE);
+    source.setSourceRowIds(joinIds(aggregate.rowIds));
+    source.setAmountYuan(aggregate.amount.setScale(6, RoundingMode.HALF_UP));
+    return source;
+  }
+
+  private Aggregate directAggregate(String parentCode, String period, String businessUnitType) {
+    List<CmsWorkshopLaborRaw> rows = workshopLaborRawMapper.selectList(new QueryWrapper<CmsWorkshopLaborRaw>()
+        .select("id", "working_cost_cent")
+        .eq("parent_code", parentCode)
+        .eq("period", period)
+        .eq("business_unit_type", normalizeBusinessUnit(businessUnitType))
+        .orderByAsc("id"));
+    if (rows.isEmpty()) return null;
+    var aggregate = new Aggregate(parentCode, period);
+    for (var row : rows) addDirectRow(aggregate, row);
+    return aggregate;
   }
 
   @Override
@@ -248,6 +303,10 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       CmsCostSourceEffective oldSnapshot = copyEffective(existing);
       CmsCostSourceEffective saved =
           upsert(existing, costYear, sourceType, selected, 1, selectedEligibility.getReason(), operator, businessUnitType);
+      if (saved == null) {
+        response.setSkippedCount(response.getSkippedCount() + 1);
+        continue;
+      }
       if (sync != null) {
         sync.recordSelection(oldSnapshot, saved, response);
       } else {
@@ -289,12 +348,16 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
         Aggregate aggregate =
             result.computeIfAbsent(key(row.getParentCode(), row.getPeriod()),
                 ignored -> new Aggregate(row.getParentCode(), row.getPeriod()));
-        aggregate.amount = aggregate.amount.add(toYuan(row.getWorkingCostCent()));
-        aggregate.rowIds.add(row.getId());
-        aggregate.fillSubject(DIRECT_LABOR_SUBJECT_CODE, DIRECT_LABOR_SUBJECT_NAME);
-        aggregate.fillMeta(row.getParentName(), row.getParentSpec(), row.getParentType(), row.getFirstUnitName());
+        addDirectRow(aggregate, row);
       });
     return result;
+  }
+
+  private void addDirectRow(Aggregate aggregate, CmsWorkshopLaborRaw row) {
+    aggregate.amount = aggregate.amount.add(toYuan(row.getWorkingCostCent()));
+    aggregate.rowIds.add(row.getId());
+    aggregate.fillSubject(DIRECT_LABOR_SUBJECT_CODE, DIRECT_LABOR_SUBJECT_NAME);
+    aggregate.fillMeta(row.getParentName(), row.getParentSpec(), row.getParentType(), row.getFirstUnitName());
   }
 
   private Map<String, Aggregate> aggregateIndirect(int costYear, String businessUnitType) {
@@ -318,12 +381,29 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       }
       Aggregate aggregate =
           result.computeIfAbsent(key(row.getParentCode(), row.getPeriod()), ignored -> new Aggregate(row.getParentCode(), row.getPeriod()));
-      aggregate.amount = aggregate.amount.add(toYuan(row.getMaterialPrice()));
-      aggregate.rowIds.add(row.getId());
-      aggregate.fillSubject(indirectSubject.subjectCode, indirectSubject.subjectName);
-      aggregate.fillMeta(row.getParentName(), row.getParentSpec(), row.getParentType(), row.getFirstUnitName());
+      addIndirectRow(aggregate, row, indirectSubject);
     }
     return result;
+  }
+
+  private Aggregate indirectAggregate(String parentCode, String period, String businessUnitType) {
+    SubjectDefinition subject = loadIndirectLaborSubject(businessUnitType);
+    if (subject == null) return null;
+    var rows = productSubjectCostRawMapper.selectList(new QueryWrapper<CmsProductSubjectCostRaw>()
+        .eq("business_unit_type", normalizeBusinessUnit(businessUnitType))
+        .eq("parent_code", parentCode).eq("period", period)
+        .eq("second_subject_code", subject.subjectCode).orderByAsc("id"));
+    if (rows.isEmpty()) return null;
+    var aggregate = new Aggregate(parentCode, period);
+    for (var row : rows) addIndirectRow(aggregate, row, subject);
+    return aggregate;
+  }
+
+  private void addIndirectRow(Aggregate aggregate, CmsProductSubjectCostRaw row, SubjectDefinition subject) {
+    aggregate.amount = aggregate.amount.add(toYuan(row.getMaterialPrice()));
+    aggregate.rowIds.add(row.getId());
+    aggregate.fillSubject(subject.subjectCode, subject.subjectName);
+    aggregate.fillMeta(row.getParentName(), row.getParentSpec(), row.getParentType(), row.getFirstUnitName());
   }
 
   private SubjectDefinition loadIndirectLaborSubject(String businessUnitType) {
@@ -369,6 +449,11 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     effective.setBusinessUnitType(normalizeBusinessUnit(businessUnitType));
     if (existing == null) {
       effectiveMapper.insert(effective);
+    } else if (defaultFlag == 1) {
+      // A finance update can replace a default after the synchronization read it.
+      int written = effectiveMapper.update(effective, new QueryWrapper<CmsCostSourceEffective>()
+          .eq("id", effective.getId()).eq("default_flag", 1));
+      if (written == 0) return null;
     } else {
       effectiveMapper.updateById(effective);
     }

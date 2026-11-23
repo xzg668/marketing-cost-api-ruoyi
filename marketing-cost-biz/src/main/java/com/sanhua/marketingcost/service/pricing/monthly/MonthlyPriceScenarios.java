@@ -145,6 +145,7 @@ public final class MonthlyPriceScenarios {
     BigDecimal financial;
     BigDecimal customer;
     HouseholdMetalCalculation.Trace householdCalculation=null;
+    Map<String, Object> recoveredLinkedCalculation = null;
     var customerContexts = new ArrayList<PriceFactorContext>();
     switch (kind) {
       case "HOUSEHOLD_INQUIRY" -> {
@@ -216,8 +217,16 @@ public final class MonthlyPriceScenarios {
         var source = read(fact.evidence().json(), MonthlyOriginalLinkedPriceSource.Snapshot.class).source();
         var saved = read(source.selectedPublication().getCalculationJson(), FinanceEffectivePriceService.Calculation.class);
         var context = convert(read(source.calculationJson(), JsonNode.class).path("context"), PriceFactorContext.class);
-        financial = linked.calculate(saved.linkedRule(), context.financialOnly()).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
-        customer = linked.calculate(saved.linkedRule(), customerContext(context, customerPrices, publications, customerContexts)).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
+        var inputs = OriginalLinkedRuleCalculator.quotationInputs(linked, source.selected(), saved.linkedRule(), context);
+        var rule = inputs.rule();
+        var p0 = linked.calculate(rule, inputs.context().financialOnly());
+        var p1 = linked.calculate(rule, customerContext(inputs.context(), customerPrices, publications, customerContexts));
+        financial = p0.priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
+        customer = p1.priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
+        if (rule != saved.linkedRule())
+          recoveredLinkedCalculation = Map.of("expression", rule.compiled().expression(),
+              "sourceTaxIncluded", rule.taxIncluded(), "factorBindings", rule.factors(), "inputs", p0.inputs(),
+              "customerInputs", p1.inputs());
       }
       case "RANGE_FACTOR" -> {
         var source = read(fact.evidence().json(), MonthlyOriginalRangePriceSource.Snapshot.class).source();
@@ -314,6 +323,7 @@ public final class MonthlyPriceScenarios {
     evidence.put("customerCopperPerTon", customerPrices.copper()); evidence.put("financialPrice", financial);
     evidence.put("customerZincPerTon", customerPrices.zinc());
     evidence.put("customerMaterialPrices", customerPrices);
+    if (recoveredLinkedCalculation != null) evidence.put("recoveredLinkedCalculation", recoveredLinkedCalculation);
     if (!customerContexts.isEmpty()) evidence.put("customerFactorContexts", customerContexts);
     if(householdCalculation!=null) {
       evidence.put("householdCalculation",householdCalculation);

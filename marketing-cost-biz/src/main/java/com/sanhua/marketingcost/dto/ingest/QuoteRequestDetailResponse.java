@@ -9,6 +9,7 @@ import lombok.Data;
 
 @Data
 public class QuoteRequestDetailResponse {
+  private com.sanhua.marketingcost.service.costing.QuoteMonthCloseService.OrderStatus monthClose;
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.View oaWorkflow;
   private Long id;
   private String oaNo;

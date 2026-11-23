@@ -140,7 +140,7 @@ public class U9BomAlternativeMetadata {
    * EasyData's documented occurrence key retains that original line; accept it only when every
    * business field matches. Opaque legacy keys continue to use the hierarchy organization.
    */
-  static String sourceOrganization(BomRawHierarchy row) {
+  public static String sourceOrganization(BomRawHierarchy row) {
     String organization = SourceLine.text(row.getPriceOrgCode());
     String[] parts = SourceLine.text(row.getSourceLineKey()).split("\\|", -1);
     if ("U9".equalsIgnoreCase(row.getSourceType()) && "210".equals(organization)

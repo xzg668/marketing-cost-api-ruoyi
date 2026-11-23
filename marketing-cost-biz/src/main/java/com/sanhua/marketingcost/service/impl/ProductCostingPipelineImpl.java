@@ -33,6 +33,9 @@ import org.springframework.util.StringUtils;
 /** 编排 BOM、价格准备与成本发布；输入及失败规则由专职组件处理。 */
 @Service
 public class ProductCostingPipelineImpl implements ProductCostingPipeline {
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private com.sanhua.marketingcost.service.QuoteMonthCloseLocks monthCloseLocks;
+
   private static final org.slf4j.Logger log =
       org.slf4j.LoggerFactory.getLogger(ProductCostingPipelineImpl.class);
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
@@ -97,7 +100,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
         () -> {
           ProductCostingContext current = contextResolver.resolve(request);
           oaWorkflowAccess.requireCosting(current.form().getId());
-          return withSourceCheck(current, executeResolved(current, request.force()));
+          requireOpenMonth(current);
+          return withSourceCheck(current, executeResolved(current, request.force(), request.includeSavedCostRun()));
         });
   }
 
@@ -110,9 +114,10 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
 
   private ProductCostingResult prepareResolved(ProductCostingContext context, boolean force) {
     oaWorkflowAccess.requireCosting(context.form().getId());
+    requireOpenMonth(context);
     try {
       if (force || !successLookup.hasCurrentVersion(context))
-        return withSourceCheck(context, executeStages(context, true));
+        return withSourceCheck(context, executeStages(context, true, false));
       ProductCostingContext current = contextResolver.resolveRevision(context);
       var reusable = successLookup.find(current);
       if (reusable.isPresent()) {
@@ -138,7 +143,13 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     } catch (RuntimeException exception) {
       return failure(context, "INPUT_CHECK", exception, true);
     }
-    return withSourceCheck(context, executeStages(context, true));
+    return withSourceCheck(context, executeStages(context, true, false));
+  }
+
+  private void requireOpenMonth(ProductCostingContext context) {
+    if (monthCloseLocks != null) {
+      monthCloseLocks.requireOpen(context.form().getBusinessUnitType(), context.periodMonth(), context.itemId());
+    }
   }
 
   private ProductCostingResult withSourceCheck(
@@ -159,23 +170,23 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     return result;
   }
 
-  private ProductCostingResult executeResolved(ProductCostingContext context, boolean force) {
+  private ProductCostingResult executeResolved(ProductCostingContext context, boolean force, boolean includeSavedCostRun) {
     try {
       // 新产品没有成功版本可复用，直接进入正式检查；价格和成本发布边界仍完整校验。
-      if (force || !successLookup.hasCurrentVersion(context)) return executeStages(context, false);
+      if (force || !successLookup.hasCurrentVersion(context)) return executeStages(context, false, includeSavedCostRun);
       context = contextResolver.resolveRevision(context);
       ProductCostingResult reusable = reusableSuccess(context);
       if (reusable != null) return reusable;
     } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException pendingApproval) {
       // 审批尚未齐全仍可检查 BOM/价格缺口；正式成本阶段必须再次核验批准输入。
-      return executeStages(context, false);
+      return executeStages(context, false, includeSavedCostRun);
     } catch (RuntimeException exception) {
       return failure(context, "INPUT_CHECK", exception, false);
     }
-    return executeStages(context, false);
+    return executeStages(context, false, includeSavedCostRun);
   }
 
-  private ProductCostingResult executeStages(ProductCostingContext scope, boolean preparationOnly) {
+  private ProductCostingResult executeStages(ProductCostingContext scope, boolean preparationOnly, boolean includeSavedCostRun) {
     String stage = STEP_BOM;
     try {
       if (costItems != null) {
@@ -257,6 +268,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
               false,
               readiness.getWarningCount() > 0 ? readiness.getMessage() : "产品核算成功");
       result.setTechnicalDataCheck(sourceCheck);
+      if (includeSavedCostRun) result.setSavedCostRun(cost);
       return result;
     } catch (RuntimeException exception) {
       return failure(scope, stage, exception, preparationOnly);

@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.QualityLossRateImportRequest;
 import com.sanhua.marketingcost.dto.QualityLossRateImportResponse;
+import com.sanhua.marketingcost.dto.QualityLossRateRequest;
 import com.sanhua.marketingcost.entity.QualityLossRate;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import java.math.BigDecimal;
@@ -20,21 +22,35 @@ import org.mockito.ArgumentCaptor;
 class QualityLossRateServiceImplTest {
 
   @Test
-  void publicZeroCannotBeCreatedEditedOrImported() {
+  void publicZeroCanBeCreatedAndEdited() {
     QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
     var service = new QualityLossRateServiceImpl(mapper);
-    var input = new com.sanhua.marketingcost.dto.QualityLossRateRequest();
+    var input = new QualityLossRateRequest();
     input.setRateYear(2026); input.setBareProductCode("BARE"); input.setLossRate(BigDecimal.ZERO);
-    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.create(input)).hasMessageContaining("必须大于0");
+    var created = service.create(input);
+    assertThat(created.getLossRate()).isZero();
+    verify(mapper).insert(created);
     QualityLossRate existing = new QualityLossRate();
     existing.setId(1L); existing.setBusinessUnitType("COMMERCIAL");
     existing.setRateYear(2026); existing.setBareProductCode("BARE"); existing.setLossRate(new BigDecimal("0.003"));
     when(mapper.selectById(1L)).thenReturn(existing);
-    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.update(1L, input)).hasMessageContaining("必须大于0");
-    var imported = service.importItems(request(row(2, "BARE", "0")));
-    assertThat(imported.getErrorMessages()).containsExactly("Excel第2行公共净损失率必须大于0且小于1");
-    verify(mapper, never()).insert(any(QualityLossRate.class));
-    verify(mapper, never()).updateById(any(QualityLossRate.class));
+    assertThat(service.update(1L, input).getLossRate()).isZero();
+    verify(mapper).updateById(existing);
+  }
+
+  @Test
+  void rejectsNegativeAndHundredPercentRates() {
+    QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
+    var service = new QualityLossRateServiceImpl(mapper);
+    var input = new QualityLossRateRequest();
+    input.setRateYear(2026);
+    input.setBareProductCode("BARE");
+    for (String value : List.of("-0.001", "1")) {
+      input.setLossRate(new BigDecimal(value));
+      assertThatThrownBy(() -> service.create(input)).hasMessageContaining("必须大于等于0%且小于100%");
+      var imported = service.importItems(request(row(2, "BARE", value)));
+      assertThat(imported.getErrorMessages()).containsExactly("Excel第2行公共净损失率必须大于等于0%且小于100%");
+    }
     verify(mapper, never()).upsertBatch(any());
   }
 
@@ -59,6 +75,7 @@ class QualityLossRateServiceImplTest {
     assertThat(inserted.getMaterialSpec()).isEqualTo("SPEC-C");
     assertThat(inserted.getCategorySpec()).isEqualTo("SPEC-H");
     assertThat(inserted.getFourthLevel()).isEqualTo("四级值");
+    assertThat(inserted.getLossRate()).isEqualByComparingTo("0.0025");
     assertThat(inserted.getSourceType()).isEqualTo("EXCEL_IMPORT");
   }
 
@@ -103,14 +120,14 @@ class QualityLossRateServiceImplTest {
 
     QualityLossRateImportResponse result =
         new QualityLossRateServiceImpl(mapper)
-            .importItems(request(row(5, "102053856", "0.00475")));
+            .importItems(request(row(5, "102053856", "0")));
 
     assertThat(result.getInserted()).isZero();
     assertThat(result.getUpdated()).isEqualTo(1);
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<QualityLossRate>> captor = ArgumentCaptor.forClass(List.class);
     verify(mapper).upsertBatch(captor.capture());
-    assertThat(captor.getValue().get(0).getLossRate()).isEqualByComparingTo("0.00475");
+    assertThat(captor.getValue().get(0).getLossRate()).isZero();
   }
 
   private QualityLossRateImportRequest request(QualityLossRateImportRequest.QualityLossRateRow row) {

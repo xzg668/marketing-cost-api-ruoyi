@@ -195,11 +195,18 @@ public class QuoteRequestController {
   @GetMapping("/{oaNo}")
   public CommonResult<QuoteRequestDetailResponse> detail(@PathVariable("oaNo") String oaNo) {
     try {
-      return CommonResult.success(quoteRequestQueryService.getRequestDetail(oaNo));
+      var result = quoteRequestQueryService.getRequestDetail(oaNo);
+      if (result != null && monthCloseService != null) {
+        result.setMonthClose(monthCloseService.orderStatus(oaNo));
+      }
+      return CommonResult.success(result);
     } catch (QuoteIngestException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }
   }
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private com.sanhua.marketingcost.service.costing.QuoteMonthCloseService monthCloseService;
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
   @GetMapping("/{oaNo}/items/{oaFormItemId}/costing-workbench")

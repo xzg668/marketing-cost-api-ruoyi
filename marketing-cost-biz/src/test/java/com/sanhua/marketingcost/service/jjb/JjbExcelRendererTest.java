@@ -79,10 +79,25 @@ public class JjbExcelRendererTest {
     try (var book = new XSSFWorkbook(new ByteArrayInputStream(bytes.toByteArray()))) {
       var sales = java.util.stream.StreamSupport.stream(book.getSheetAt(0).spliterator(), false)
           .filter(row -> row.getCell(2) != null && row.getCell(2).toString().equals("SALES_EXP"))
-          .findFirst().orElseThrow().getCell(15);
+          .findFirst().orElseThrow().getCell(3);
       assertThat(sales.getCellType()).isEqualTo(CellType.NUMERIC);
       assertThat(sales.getNumericCellValue()).isEqualTo(0.12);
       assertThat(new DataFormatter(Locale.CHINA).formatCellValue(sales)).endsWith("%（OEM）");
+    }
+  }
+
+  @Test void cmsColumnShowsSavedPeriodWhileTheRateRemainsInTheAmountDetail() throws Exception {
+    var base = model(0, 0, 0);
+    var aux = JjbReadModel.Row.builder().section("MATERIAL_DETAIL").kind("COST")
+        .code("AUX_0201").name("工艺辅料").amount("3.150000").rate("1.05").cmsSourceNote("CMS 2026-07").build();
+    var rows = new ArrayList<>(base.rows());
+    rows.addFirst(aux);
+    var model = new JjbReadModel(base.identity(), base.header(), rows, base.monthlyPrices(), base.totals(), base.warnings());
+    try (var workbook = render(model)) {
+      var sheet = workbook.getSheetAt(0);
+      var row = sheet.getRow(find(sheet, "工艺辅料").getRowIndex());
+      assertThat(row.getCell(15).getStringCellValue()).isEqualTo("CMS 2026-07");
+      assertThat(row.getCell(6).getCellComment().getString().getString()).contains("rate=1.05");
     }
   }
 
@@ -246,8 +261,8 @@ public class JjbExcelRendererTest {
           sheet.getRow(find(sheet, "不含税总成本2").getRowIndex()).getCell(6),
           m.totals().finalQuoteAmount());
       Row rate = sheet.getRow(find(sheet, "MGMT_EXP").getRowIndex());
-      assertThat(rate.getCell(15).getNumericCellValue()).isEqualTo(.085);
-      assertThat(rate.getCell(15).getCellStyle().getDataFormatString()).endsWith("%");
+      assertThat(new DataFormatter().formatCellValue(rate.getCell(15))).isEmpty();
+      assertThat(rate.getCell(6).getCellComment().getString().getString()).contains("rate=0.085");
       assertThat(wb.getPrintArea(0)).contains("$A$1:$P$");
       assertThat(sheet.getRepeatingRows().getLastRow()).isEqualTo(5);
       assertThat(sheet.getPrintSetup().getFitWidth()).isEqualTo((short) 1);

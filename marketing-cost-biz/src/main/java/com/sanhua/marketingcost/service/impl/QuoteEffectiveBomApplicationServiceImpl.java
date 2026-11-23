@@ -35,6 +35,7 @@ import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelect
 import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomBlockIssue;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomBuildRequest;
+import com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomBuildResult;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomExclusion;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomNodeDraft;
@@ -101,6 +102,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private final MaterialQuoteShapeResolver materialShapeResolver;
   private final SupplierRatioShapeResolver supplierRatioShapeResolver;
   private final QuoteEffectiveBomBuilder effectiveBomBuilder;
+  private final U9BomQuantityBasis quantityBasis;
   private final EffectiveBomVariantHasher effectiveBomVariantHasher;
   private final QuoteBomContextResolver contextResolver;
   private final QuoteBomStatusService quoteBomStatusService;
@@ -131,7 +133,9 @@ public class QuoteEffectiveBomApplicationServiceImpl
       ElectronicDrawingPreparationSource drawingPreparation,
       com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
       QuotePricingPeriod pricingPeriods,
-      com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom) {
+      com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource completeBom,
+      U9BomQuantityBasis quantityBasis) {
+    this.quantityBasis = quantityBasis;
     this.completeBom = completeBom;
     this.pricingPeriods = pricingPeriods;
     this.preparationMapper = preparationMapper;
@@ -398,7 +402,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     EffectiveBomBuildResult built =
         effectiveBomBuilder.build(
             new EffectiveBomBuildRequest(
-                rawSnapshot.rows(),
+                quantityBasis.normalize(rawSnapshot.rows()),
                 groupResolution.groups(),
                 selections.selectedMaterialByGroup(),
                 shapeDecisions,

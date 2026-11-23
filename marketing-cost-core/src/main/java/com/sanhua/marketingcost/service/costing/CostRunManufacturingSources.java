@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Bounded public-source reads. Technical overrides, sums and uplift belong to the original costing. */
@@ -23,19 +24,32 @@ public final class CostRunManufacturingSources {
   public static final int MAX_BATCH_OBJECTS = 64;
   private final CostRunManufacturingSourceMapper mapper;
   private final com.sanhua.marketingcost.mapper.AuxCostItemMapper auxiliaryMapper;
+  private final CmsQuoteSalarySources quoteSalary;
+  private record SalarySlot(int originalSlot, String organization) {}
 
   public CostRunManufacturingSources(CostRunManufacturingSourceMapper mapper) {
     this(mapper,null);
   }
-  @org.springframework.beans.factory.annotation.Autowired
   public CostRunManufacturingSources(CostRunManufacturingSourceMapper mapper,
       com.sanhua.marketingcost.mapper.AuxCostItemMapper auxiliaryMapper) {
+    this(mapper, auxiliaryMapper, null);
+  }
+
+  @Autowired
+  public CostRunManufacturingSources(CostRunManufacturingSourceMapper mapper,
+      com.sanhua.marketingcost.mapper.AuxCostItemMapper auxiliaryMapper, CmsQuoteSalarySources quoteSalary) {
     this.mapper = Objects.requireNonNull(mapper);
     this.auxiliaryMapper=auxiliaryMapper;
+    this.quoteSalary = quoteSalary;
   }
 
   public record Demand(Integer costYear, String businessUnitType, String pricingMonth,
-      Set<String> materialCodes, boolean salaryNeeded, boolean auxiliaryNeeded) {
+      Set<String> materialCodes, boolean salaryNeeded, boolean auxiliaryNeeded, String materialOrganizationCode) {
+    public Demand(Integer costYear, String businessUnitType, String pricingMonth,
+        Set<String> materialCodes, boolean salaryNeeded, boolean auxiliaryNeeded) {
+      this(costYear, businessUnitType, pricingMonth, materialCodes, salaryNeeded, auxiliaryNeeded, null);
+    }
+
     public Demand {
       materialCodes = Collections.unmodifiableSet(new LinkedHashSet<>(materialCodes));
       if (materialCodes.size() > 256
@@ -80,14 +94,21 @@ public final class CostRunManufacturingSources {
       auxiliarySlots.forEach((scope,slot)->SinteredBaseSurfaceCosts.apply(aux.get(slot),scope.businessUnitType(),auxiliaryMapper));
     }
     var result = new ArrayList<Sources>(stable.size());
+    var completedSalary = new LinkedHashMap<SalarySlot, List<CmsCostSourceEffective>>();
     for (var demand : stable) {
       Integer wageSlot = demand.costYear() == null || !demand.salaryNeeded()
           ? null : salarySlots.get(scope(demand, false));
       Integer auxSlot = demand.costYear() == null || !demand.auxiliaryNeeded()
           ? null : auxiliarySlots.get(scope(demand, true));
+      var salary = wageSlot == null ? List.<CmsCostSourceEffective>of() : wages.get(wageSlot);
+      if (wageSlot != null && quoteSalary != null) {
+        var key = new SalarySlot(wageSlot, demand.materialOrganizationCode());
+        salary = completedSalary.computeIfAbsent(key, slot ->
+            quoteSalary.complete(demand.materialCodes(), demand.costYear(), demand.businessUnitType(),
+                slot.organization(), wages.get(slot.originalSlot())));
+      }
       result.add(new Sources(
-          wageSlot == null ? List.of() : wages.get(wageSlot).stream()
-              .map(row -> copy(row, CmsCostSourceEffective::new)).toList(),
+          salary.stream().map(row -> copy(row, CmsCostSourceEffective::new)).toList(),
           auxSlot == null ? List.of() : aux.get(auxSlot).stream()
               .map(row -> copy(row, AuxCostItemDto::new)).toList()));
     }

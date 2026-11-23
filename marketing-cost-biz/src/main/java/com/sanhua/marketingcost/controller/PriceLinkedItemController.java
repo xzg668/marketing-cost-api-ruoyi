@@ -3,6 +3,8 @@ package com.sanhua.marketingcost.controller;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
+import com.sanhua.marketingcost.annotation.OperationLog;
+import com.sanhua.marketingcost.annotation.OperationType;
 import com.sanhua.marketingcost.dto.LinkedImportedFileDto;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedImportCommand;
@@ -219,7 +221,7 @@ public class PriceLinkedItemController {
         previewFileSha256);
   }
 
-  /** 只查询指定月份已发布的公共联动原稿文件，不加载整批规则和日志。 */
+  /** 查询指定月份发布过的公共联动原稿文件，不加载整批规则和日志。 */
   @PreAuthorize("@ss.hasPermi('price:linked-item:import-history:list')"
       + " or @ss.hasPermi('price:linked-item:list') or @ss.hasPermi('price:linked-item:import')")
   @GetMapping("/items/imported-files")
@@ -229,6 +231,23 @@ public class PriceLinkedItemController {
       @RequestParam(defaultValue = "1") int page,
       @RequestParam(defaultValue = "20") int pageSize) {
     return CommonResult.success(priceLinkedItemService.importedFiles(pricingMonth, businessUnitType, page, pageSize));
+  }
+
+  @PreAuthorize("@ss.hasPermi('price:linked-item:import')")
+  @GetMapping("/items/imported-files/{id}/void-preview")
+  public CommonResult<Long> previewVoidOriginal(
+      @PathVariable long id, @RequestParam String pricingMonth, @RequestParam String businessUnitType) {
+    return CommonResult.success(priceLinkedImportDispatchService.previewVoidOriginal(id, pricingMonth, businessUnitType));
+  }
+
+  @PreAuthorize("@ss.hasPermi('price:linked-item:import')")
+  @OperationLog(module = "联动价格原稿作废", operationType = OperationType.UPDATE)
+  @PostMapping("/items/imported-files/{id}/void")
+  public CommonResult<Boolean> voidOriginal(
+      @PathVariable long id, @RequestParam String pricingMonth, @RequestParam String businessUnitType,
+      @RequestParam long expectedRuleCount) {
+    priceLinkedImportDispatchService.voidOriginal(id, pricingMonth, businessUnitType, expectedRuleCount);
+    return CommonResult.success(true);
   }
 
   /** 新增联动价格明细 */

@@ -7,12 +7,21 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
 /** 基价齐全后绑定财务因素。每次发布、每份文件只解析一次，原稿版本不随基价修订。 */
 @Component
 public class OriginalLinkedPublicationSource {
   public static final String VERSION = "ORIGINAL_WORKBOOK_V1";
+  public static final String QUOTATION_FACTOR_REVISION = "ORIGINAL_WORKBOOK_MARKET_FACTORS_V1";
+  private static final Map<String, Pattern> QUOTATION_FACTORS = Map.of(
+      "AVG|1#CU", metal("Cu|电解铜"), "AVG|1#ZN", metal("Zn|电解锌"),
+      "AVG|1#AG", metal("Ag|白银"), "AVG|1#SN", metal("Sn|锡"),
+      "AVG|美国柜装黄铜", Pattern.compile("美国柜装黄铜"), "AVG|H65黄铜边料", Pattern.compile("H65\\s*黄铜边料"));
+  private final com.github.benmanes.caffeine.cache.Cache<Long, BindingBatch> quotationSources =
+      com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(24)
+          .expireAfterAccess(java.time.Duration.ofMinutes(10)).build();
   private final com.sanhua.marketingcost.mapper.PriceLinkedItemMapper items;
   private final OriginalLinkedWorkbookParser parser;
   private final OriginalLinkedRuleSnapshot snapshots;
@@ -66,6 +75,41 @@ public class OriginalLinkedPublicationSource {
     private final Map<Long, OriginalLinkedWorkbookParser.ParsedWorkbook> rules = new HashMap<>();
     private final Map<String, Set<String>> catalogs = new HashMap<>();
     private final Set<Long> legacySnapshots = new java.util.HashSet<>();
+  }
+
+  private static Pattern metal(String aliases) {
+    return Pattern.compile("(?<![A-Za-z0-9])(?:" + aliases + ")(?![A-Za-z0-9])", Pattern.CASE_INSENSITIVE);
+  }
+
+  public static boolean mayNeedQuotationBinding(String description, Set<String> boundKeys) {
+    if (description == null || description.isBlank()) return false;
+    return QUOTATION_FACTORS.entrySet().stream().anyMatch(entry -> !boundKeys.contains(entry.getKey())
+        && entry.getValue().matcher(description).find());
+  }
+
+  /** The description selects old rules to check. Bindings come only from the hashed, selected workbook row. */
+  public OriginalLinkedWorkbookParser.Rule restoreQuotationFactors(PriceLinkedItem item,
+      OriginalLinkedWorkbookParser.Rule saved) {
+    if (item.getSourceUploadBatchId() == null || !mayNeedQuotationBinding(saved.sourceFormulaText(),
+        saved.factors().values().stream().map(OriginalLinkedWorkbookParser.FactorInput::canonicalKey)
+            .collect(java.util.stream.Collectors.toSet()))) return saved;
+    var batch = quotationSources.get(item.getSourceUploadBatchId(), ignored -> new BindingBatch());
+    OriginalLinkedWorkbookParser.Rule restored;
+    synchronized (batch) {
+      restored = read(item, batch);
+    }
+    var originalAddresses = saved.factors().values().stream()
+        .map(OriginalLinkedWorkbookParser.FactorInput::address).collect(java.util.stream.Collectors.toSet());
+    boolean hasNewFactor = restored.factors().values().stream().anyMatch(factor ->
+        QUOTATION_FACTORS.containsKey(factor.canonicalKey()) && !originalAddresses.contains(factor.address()));
+    if (!hasNewFactor) return saved;
+    boolean sameBindings = saved.factors().values().stream().allMatch(prior -> restored.factors().values().stream()
+        .anyMatch(factor -> factor.address().equals(prior.address()) && factor.canonicalKey().equals(prior.canonicalKey())
+            && factor.unit() == prior.unit()));
+    if (!sameBindings || !saved.sourceFormula().equals(restored.sourceFormula())
+        || saved.taxIncluded() != restored.taxIncluded() || saved.originalPrice().compareTo(restored.originalPrice()) != 0)
+      throw new IllegalArgumentException("旧联动公式与已保存原稿的计算依据不一致：" + item.getId());
+    return restored;
   }
 
   public OriginalLinkedWorkbookParser.Rule read(PriceLinkedItem item, BindingBatch batch) {

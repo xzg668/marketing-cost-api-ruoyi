@@ -98,12 +98,15 @@ public class OriginalLinkedPriceRuntime {
       FinanceEffectivePriceService.Calculation saved) {
     var response = new PriceLinkedFormulaPreviewResponse();
     try {
-      var rule = saved == null ? snapshots.read(item) : saved.linkedRule();
-      if (rule == null) throw new IllegalArgumentException("联动有效价缺少发布时绑定的原稿规则");
+      var savedRule = saved == null ? snapshots.read(item) : saved.linkedRule();
+      if (savedRule == null) throw new IllegalArgumentException("联动有效价缺少发布时绑定的原稿规则");
+      var inputs = OriginalLinkedRuleCalculator.quotationInputs(calculator, item, savedRule,
+          saved == null ? context(item, pricingMonth, null, oaForm) : saved.context());
+      var rule = inputs.rule();
       PriceFactorContext context =
           saved == null
-              ? context(item, pricingMonth, customerCopperPerTon, oaForm)
-              : quoteContext(saved.context(), pricingMonth, customerCopperPerTon, oaForm,
+              ? (customerCopperPerTon == null ? inputs.context() : inputs.context().withCustomerCopperPerTon(customerCopperPerTon))
+              : quoteContext(inputs.context(), pricingMonth, customerCopperPerTon, oaForm,
                   rule.factors().values().stream().anyMatch(factor -> com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(factor.canonicalKey())));
       var result =
           saved == null || changedInputs(rule, saved.linked(), context)

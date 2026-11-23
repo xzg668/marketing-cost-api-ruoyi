@@ -402,9 +402,10 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     var query = Wrappers.lambdaQuery(FactorUploadBatch.class)
         .select(FactorUploadBatch::getId, FactorUploadBatch::getFileName,
             FactorUploadBatch::getPriceOrgCode, FactorUploadBatch::getLinkedRowCount,
-            FactorUploadBatch::getUploadedBy, FactorUploadBatch::getPublishedAt)
+            FactorUploadBatch::getUploadedBy, FactorUploadBatch::getPublishedAt, FactorUploadBatch::getStatus,
+            FactorUploadBatch::getBusinessUnitType)
         .eq(FactorUploadBatch::getImportType, "LINKED_ORIGINAL")
-        .eq(FactorUploadBatch::getStatus, "PUBLISHED")
+        .in(FactorUploadBatch::getStatus, "PUBLISHED", OriginalLinkedImportService.VOIDED)
         .isNull(FactorUploadBatch::getTechnicalVersionId)
         .eq(FactorUploadBatch::getPriceMonth, month)
         .eq(FactorUploadBatch::getBusinessUnitType, businessUnit)
@@ -416,7 +417,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     return new PageResult<>(result.getRecords().stream().map(batch ->
         new LinkedImportedFileDto(
             batch.getId(), batch.getFileName(), batch.getPriceOrgCode(), batch.getLinkedRowCount(),
-            batch.getUploadedBy(), batch.getPublishedAt())).toList(), result.getTotal());
+            batch.getUploadedBy(), batch.getPublishedAt(), batch.getStatus(),
+            OriginalLinkedImportService.canVoid(batch))).toList(), result.getTotal());
   }
 
   @Override

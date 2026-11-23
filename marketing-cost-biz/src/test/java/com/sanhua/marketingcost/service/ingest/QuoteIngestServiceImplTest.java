@@ -75,7 +75,8 @@ class QuoteIngestServiceImplTest {
             quoteBomStatusMapper,
             versionInvalidationService,
             objectMapper,
-            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-10"));
+            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-10"),
+            mock(org.springframework.jdbc.core.JdbcTemplate.class));
     stubInsertIds();
   }
 

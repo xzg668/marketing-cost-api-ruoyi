@@ -22,20 +22,25 @@ public class OaMessageRepository {
   public OaMessageRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
   public Message receive(OaPeer peer, OaMessageCodec.InterfaceType type, OaMessageCodec.Envelope envelope) {
-    return save(peer, type, envelope, "INBOUND");
+    return save(peer, type, envelope, "INBOUND", true);
+  }
+
+  /** 用首条 I01 消息锁串行化同一 OA 流程的接收。修订另存原文。 */
+  public Message lockQuotationOrigin(OaPeer peer, OaMessageCodec.Envelope envelope) {
+    return save(peer, OaMessageCodec.InterfaceType.QUOTE_REQUEST, envelope, "INBOUND", false);
   }
 
   public Message enqueue(OaPeer peer, OaMessageCodec.InterfaceType type, OaMessageCodec.Envelope envelope) {
-    return save(peer, type, envelope, "OUTBOUND");
+    return save(peer, type, envelope, "OUTBOUND", true);
   }
 
   private Message save(OaPeer peer, OaMessageCodec.InterfaceType type,
-      OaMessageCodec.Envelope envelope, String direction) {
+      OaMessageCodec.Envelope envelope, String direction, boolean compareContent) {
     try (var call = OaInterfaceLog.start("OA_MESSAGE_STORE")) {
       call.field("direction", direction).field("interfaceType", type).field("requestId", envelope.requestId())
           .field("sourceSystem", peer.sourceSystem()).field("environment", peer.environment());
       try {
-        Message message = saveMessage(peer, type, envelope, direction);
+        Message message = saveMessage(peer, type, envelope, direction, compareContent);
         call.field("messageId", message.id()).field("state", message.status()).field("stage", "PENDING_COMMIT");
         call.result("HANDLED", null, null);
         return message;
@@ -44,7 +49,7 @@ public class OaMessageRepository {
   }
 
   private Message saveMessage(OaPeer peer, OaMessageCodec.InterfaceType type,
-      OaMessageCodec.Envelope envelope, String direction) {
+      OaMessageCodec.Envelope envelope, String direction, boolean compareContent) {
     jdbc.update("""
         INSERT INTO lp_oa_integration_message
           (source_system,environment,direction,request_id,interface_type,schema_version,occurred_at,
@@ -58,7 +63,7 @@ public class OaMessageRepository {
         SELECT * FROM lp_oa_integration_message
         WHERE source_system=? AND environment=? AND direction=? AND request_id=? FOR UPDATE
         """, this::read, peer.sourceSystem(), peer.environment(), direction, envelope.requestId());
-    if (!envelope.hash().equals(message.payloadHash())) {
+    if (compareContent && !envelope.hash().equals(message.payloadHash())) {
       throw OaIntegrationException.conflict("REQUEST_CONTENT_CONFLICT", "同一来源及环境的 requestId 已用于另一份报文");
     }
     return message;

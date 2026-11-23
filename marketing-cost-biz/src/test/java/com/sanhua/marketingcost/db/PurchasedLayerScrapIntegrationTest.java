@@ -28,6 +28,17 @@ class PurchasedLayerScrapIntegrationTest extends MaterialShapeSwitchIntegrationT
     assertThat(part(outsourced,s.parent())).isEqualByComparingTo("7.5");
     assertThat(part(outsourced,s.raw())).isEqualByComparingTo("25");
     assertThat(part(outsourced,s.scrap())).isEqualByComparingTo("-2.688");
+    var stored = call(org.springframework.http.HttpMethod.GET, "/api/v1/cost-run/detail?oaNo=" + s.oaNo()
+        + "&productCode=" + s.product() + "&oaFormItemId=" + s.itemId() + "&versionId=" + outsourced, null);
+    var recovered = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+    for (var row : stored.path("sheet").path("rows")) {
+      if (s.scrap().equals(row.path("code").asText())) recovered.add(row);
+    }
+    assertThat(recovered).hasSize(2);
+    assertThat(recovered.stream().map(row -> new BigDecimal(row.path("quantity").asText())))
+        .containsExactlyInAnyOrder(new BigDecimal("-0.0094"), new BigDecimal("-0.125"));
+    assertThat(recovered.stream().map(row -> new BigDecimal(row.path("amount").asText()))
+        .reduce(BigDecimal.ZERO, BigDecimal::add)).isEqualByComparingTo("-2.688");
     choose(s,"PURCHASE");assertThat(calculate(s).path("pipelineStatus").asText()).isEqualTo("SUCCESS");
     assertThat(part(latest(s),recovery)).isNull();assertThat(part(latest(s),s.scrap())).isEqualByComparingTo("-0.188");
     assertThat(part(original,recovery)).isEqualByComparingTo("-0.152");

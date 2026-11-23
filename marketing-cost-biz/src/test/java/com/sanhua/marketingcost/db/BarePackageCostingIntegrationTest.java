@@ -34,11 +34,15 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
   @Autowired BomRawHierarchyMapper hierarchy;
   @Autowired ProductCostingPipeline pipeline;
   @Autowired QuoteEffectiveBomApplicationService trees;
+  @Autowired com.sanhua.marketingcost.service.CostInputRevisionService revisions;
+  @Autowired com.sanhua.marketingcost.mapper.OaFormMapper forms;
+  @Autowired com.sanhua.marketingcost.mapper.OaFormItemMapper items;
   @Autowired com.sanhua.marketingcost.service.technicaldata.QuoteTechnicalDataPersistenceService technicalPersistence;
   @MockBean EffectiveTechnicalDataQueryService technicalInput;
   @org.springframework.boot.test.mock.mockito.SpyBean
   com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalarySourceQuery salarySources;
   String product, material, month;
+  String seededSalarySubject;
   long form, item;
   LocalDateTime date;
 
@@ -63,7 +67,16 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     when(technicalInput.preparationMaterials(anyLong(),anyString())).thenReturn(List.of());
   }
 
-  @AfterEach void clearActor() { SecurityContextHolder.clearContext(); }
+  @AfterEach void clearActor() {
+    try {
+      if (seededSalarySubject != null) {
+        jdbc.update("DELETE FROM cms_subject_setting_raw WHERE second_subject_code=?", seededSalarySubject);
+        jdbc.update("DELETE FROM cms_sync_publish_signal WHERE batch_no=?", product);
+      }
+    } finally {
+      SecurityContextHolder.clearContext();
+    }
+  }
 
   @Test void bodyTreeAndPriceChecksExistBeforePackagingAndApprovedPackagingIsCostedExactlyOnce() {
     var missing=pipeline.execute(new ProductCostingRequest(product,item,month,"bare-package-test",true));
@@ -75,6 +88,97 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_bom_costing_row WHERE oa_form_item_id=?",Integer.class,item)).isPositive();
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?",Integer.class,item)).isZero();
 
+    String box=approvePackaging();
+    var expanded=trees.getEffectiveBom(product,item);
+    assertThat(expanded.nodes()).hasSize(3).anySatisfy(n -> assertThat(n.materialCode()).isEqualTo(box));
+    var success=pipeline.execute(new ProductCostingRequest(product,item,month,"bare-package-test",true));
+    assertThat(success.getPipelineStatus()).as(success.getMessage()).isEqualTo("SUCCESS");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",Integer.class,success.getCostVersionId(),box)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT amount FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",BigDecimal.class,success.getCostVersionId(),box)).isEqualByComparingTo("6");
+    var repeated=pipeline.execute(new ProductCostingRequest(product,item,month,"bare-package-test",false));
+    assertThat(repeated.getCostVersionId()).isEqualTo(success.getCostVersionId());
+  }
+
+  @Test void sameModelSalaryFeedsSavedCostAndTheOriginalCodeTakesOverWhenItHasWages() {
+    approvePackaging();
+    String model = product + "-MODEL";
+    String reference = product + "-REF";
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=? WHERE material_code=?", model, product);
+    jdbc.update("""
+        INSERT INTO lp_material_master_raw(material_code,material_name,material_model,unit,organization_code,
+          import_batch_id,active_flag) VALUES(?,'参考料号',?,'件','COMMERCIAL',?,1)
+        """, reference, model, product);
+    jdbc.update("DELETE FROM cms_cost_source_effective WHERE parent_code=?", product);
+    String subject = product + "-SALARY";
+    seededSalarySubject = subject;
+    jdbc.update("""
+        INSERT INTO cms_subject_setting_raw(import_batch_id,row_no,first_subject_code,first_subject_name,
+          second_subject_code,second_subject_name,business_unit_type)
+        VALUES(1,1,'03','工资',?,'辅助人员工资','COMMERCIAL')
+        """, subject);
+    jdbc.update("INSERT INTO cms_sync_publish_signal(batch_no,cost_year,business_unit_type,status) VALUES(?,?,'COMMERCIAL','SUCCESS')",
+        product, date.getYear());
+    addCmsSalary(reference, subject, 4, 1);
+
+    var result = pipeline.execute(new ProductCostingRequest(product,item,month,"same-model-salary",true));
+    assertThat(result.getPipelineStatus()).as(result.getMessage()).isEqualTo("SUCCESS");
+    long version = result.getCostVersionId();
+    assertThat(savedSalary(version, "DIRECT_LABOR")).isEqualByComparingTo("4");
+    assertThat(savedSalary(version, "INDIRECT_LABOR")).isEqualByComparingTo("1");
+    assertThat(jdbc.queryForObject("SELECT remark FROM lp_cost_run_cost_item WHERE cost_run_version_id=? AND cost_code='DIRECT_LABOR'",
+        String.class, version)).contains("同型号工资", reference);
+    String snapshot = wageSnapshot(version);
+    assertThat(snapshot).contains(reference, model, "cms_workshop_labor_raw");
+    var repeated = pipeline.execute(new ProductCostingRequest(product,item,month,"same-model-salary",false));
+    assertThat(repeated.getCostVersionId()).isEqualTo(version);
+
+    String revision = revisions.currentRevision(forms.selectById(form), items.selectById(item), month);
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=? WHERE material_code=?", model + "-OTHER", reference);
+    assertThat(revisions.currentRevision(forms.selectById(form), items.selectById(item), month)).isNotEqualTo(revision);
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=? WHERE material_code=?", model, reference);
+    assertThat(revisions.currentRevision(forms.selectById(form), items.selectById(item), month)).isEqualTo(revision);
+
+    addCmsSalary(product, subject, 7, 2);
+    var exact = pipeline.execute(new ProductCostingRequest(product,item,month,"same-model-salary",false));
+    assertThat(exact.getPipelineStatus()).as(exact.getMessage()).isEqualTo("SUCCESS");
+    assertThat(exact.getCostVersionId()).isNotEqualTo(version);
+    assertThat(savedSalary(exact.getCostVersionId(), "DIRECT_LABOR")).isEqualByComparingTo("7");
+    assertThat(savedSalary(exact.getCostVersionId(), "INDIRECT_LABOR")).isEqualByComparingTo("2");
+    assertThat(wageSnapshot(version)).isEqualTo(snapshot);
+  }
+
+  private void addCmsSalary(String code, String subject, int direct, int indirect) {
+    jdbc.update("""
+        INSERT INTO cms_workshop_labor_raw(import_batch_id,row_no,period,parent_code,source_row_id,
+          working_cost_cent,working_cost_yuan,business_unit_type) VALUES(1,1,?,?,?, ?,?,'COMMERCIAL')
+        """, month, code, code, direct * 100, direct);
+    jdbc.update("""
+        INSERT INTO cms_product_subject_cost_raw(import_batch_id,row_no,period,parent_code,source_row_id,
+          second_subject_code,material_price,material_price_yuan,business_unit_type)
+        VALUES(1,1,?,?,?,?,?,?,'COMMERCIAL')
+        """, month, code, code, subject, indirect * 100, indirect);
+    for (String type : List.of("SALARY_DIRECT", "SALARY_INDIRECT")) {
+      boolean primary = "SALARY_DIRECT".equals(type);
+      String table = primary ? "cms_workshop_labor_raw" : "cms_product_subject_cost_raw";
+      var id = jdbc.queryForObject("SELECT id FROM " + table + " WHERE parent_code=?", Long.class, code);
+      jdbc.update("""
+          INSERT INTO cms_cost_source_effective(cost_year,source_type,parent_code,period,subject_code,subject_name,
+            source_table,source_row_ids,amount_yuan,business_unit_type) VALUES(?,?,?,?,?,?,?,?,?,'COMMERCIAL')
+          """, date.getYear(), type, code, month, primary ? "0301" : subject,
+          primary ? "直接人工工资" : "辅助人员工资", table, id.toString(), primary ? direct : indirect);
+    }
+  }
+
+  private BigDecimal savedSalary(long version, String type) {
+    return jdbc.queryForObject("SELECT amount FROM lp_cost_run_cost_item WHERE cost_run_version_id=? AND cost_code=?",
+        BigDecimal.class, version, type);
+  }
+
+  private String wageSnapshot(long version) {
+    return jdbc.queryForObject("SELECT jianji_snapshot_json FROM lp_quote_cost_run_version WHERE id=?", String.class, version);
+  }
+
+  private String approvePackaging() {
     String box=product+"-BOX";
     jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,main_category_code,main_category_name,shape_attr) VALUES(?,'包装纸箱','件','COMMERCIAL',?,1,'25','包装材料','采购件')",box,product);
     new OrdinaryCostingTestSources(jdbc,hierarchy).comparisonFixedPrice(box,"3",date);
@@ -99,14 +203,7 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
         List.of(new EffectiveTechnicalDataInput.ModuleSource("PACKAGE",technicalProduct,version,version,"a".repeat(64))),List.of(line));
     when(technicalInput.preparationMaterials(item,month)).thenReturn(List.of(line));
     when(technicalInput.resolve(item,month)).thenReturn(approved);
-    var expanded=trees.getEffectiveBom(product,item);
-    assertThat(expanded.nodes()).hasSize(3).anySatisfy(n -> assertThat(n.materialCode()).isEqualTo(box));
-    var success=pipeline.execute(new ProductCostingRequest(product,item,month,"bare-package-test",true));
-    assertThat(success.getPipelineStatus()).as(success.getMessage()).isEqualTo("SUCCESS");
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",Integer.class,success.getCostVersionId(),box)).isEqualTo(1);
-    assertThat(jdbc.queryForObject("SELECT amount FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",BigDecimal.class,success.getCostVersionId(),box)).isEqualByComparingTo("6");
-    var repeated=pipeline.execute(new ProductCostingRequest(product,item,month,"bare-package-test",false));
-    assertThat(repeated.getCostVersionId()).isEqualTo(success.getCostVersionId());
+    return box;
   }
 
   @Test void oneSourceCheckReportsPackagingSalaryNetLossAndMissingMaterialPriceTogether() {
@@ -114,7 +211,7 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     jdbc.update("DELETE FROM lp_quality_loss_rate WHERE bare_product_code=?",product);
     jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",material);
     org.mockito.Mockito.doReturn(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalarySourceQuery.Source(List.of(),51L))
-        .when(salarySources).read(product,date.getYear(),"COMMERCIAL");
+        .when(salarySources).read(product,date.getYear(),"COMMERCIAL","COMMERCIAL");
     var result=pipeline.prepare(new ProductCostingRequest(product,item,month,"bare-package-test",true));
     assertThat(trees.getEffectiveBom(product,item).nodes()).hasSize(2);
     assertThat(result.getTechnicalDataCheck().modules().stream().filter(m -> m.required()).map(m -> m.moduleType()))

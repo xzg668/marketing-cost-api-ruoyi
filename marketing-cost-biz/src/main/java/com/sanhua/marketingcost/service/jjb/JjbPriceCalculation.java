@@ -34,9 +34,11 @@ final class JjbPriceCalculation {
     if (selected.hasNonNull("id")) label.add("来源编号 " + selected.path("id").asText());
     String sourceName = String.join(" · ", label);
     if (pair == null) return new Price(family.materialCode(), sourceName, "历史未记录", "历史未记录", "历史未记录计算依据");
-    var calculation = source.hasNonNull("calculationJson") ? tree(source.path("calculationJson").asText())
+    var savedCalculation = source.hasNonNull("calculationJson") ? tree(source.path("calculationJson").asText())
         : source.has("calculation") ? source.path("calculation") : selected.path("calculation");
     var customer = tree(pair.customerEvidenceJson());
+    var recovered = customer.path("recoveredLinkedCalculation");
+    var calculation = recovered.isObject() ? recovered : savedCalculation;
     var context = customerContext(customer, family.materialCode());
     var baseInputs = new LinkedHashMap<String, String>();
     var customerInputs = new LinkedHashMap<String, String>();
@@ -52,7 +54,8 @@ final class JjbPriceCalculation {
         FactorPriceUnit unit = factorUnit(binding.path("unit").asText());
         String base = plain(calculation.path("inputs").path(entry.getKey()));
         if (base != null) baseInputs.put(entry.getKey(), base);
-        String value = context != null ? number(context.requiredPrice(key, unit, true))
+        String value = recovered.isObject() ? plain(recovered.path("customerInputs").path(entry.getKey()))
+            : context != null ? number(context.requiredPrice(key, unit, true))
             : pair.financialPrice().compareTo(pair.customerPrice()) == 0 ? base : null;
         if (value != null) customerInputs.put(entry.getKey(), value); else customerInputs.remove(entry.getKey());
         bases.add(factorName(key) + " " + Objects.toString(base, "历史未记录") + " " + unitName(unit));

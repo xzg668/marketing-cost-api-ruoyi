@@ -111,6 +111,40 @@ class CostRunFeeSourcesIntegrationTest {
     assertThat(statements()).isEqualTo(initial);
   }
 
+  @Test void netLossChecksBareThenExactQuoteCodeWithinTheSameYearAndBusinessUnit() {
+    String product = code(), bare = code(), model = code(), noBare = code();
+    insert("lp_material_master_raw", Map.of("material_code", product, "organization_code", "COMMERCIAL",
+        "active_flag", 1, "main_category_code", "10", "bare_code", bare, "material_model", model));
+    insert("lp_material_master_raw", Map.of("material_code", noBare, "organization_code", "COMMERCIAL",
+        "active_flag", 1, "main_category_code", "10"));
+    for (String code : List.of(product, noBare)) {
+      insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", code,
+          "business_unit_type", "COMMERCIAL", "loss_rate", "0"));
+    }
+    insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", bare,
+        "business_unit_type", "PLATE", "loss_rate", "0.02"));
+    insert("lp_quality_loss_rate", Map.of("rate_year", 2025, "bare_product_code", bare,
+        "business_unit_type", "COMMERCIAL", "loss_rate", "0.03"));
+    var query = new com.sanhua.marketingcost.service.NetLossRateQuery(
+        session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class));
+    var requests = List.of(new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(product, null, "COMMERCIAL", 2026, "COMMERCIAL"),
+        new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(noBare, null, "COMMERCIAL", 2026, "COMMERCIAL"),
+        new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup("missing", model, "COMMERCIAL", 2026, "COMMERCIAL"));
+    var results = query.lookupBatch(requests, reader);
+    assertThat(results).isEqualTo(requests.stream()
+        .map(q -> query.lookup(q.code(), q.model(), q.organization(), q.year(), q.businessUnit())).toList());
+    assertThat(results.subList(0, 2)).allSatisfy(result -> {
+      assertThat(result.status()).isEqualTo("AVAILABLE");
+      assertThat(result.rate()).isZero();
+    });
+    assertThat(query.search("CODE", product, "COMMERCIAL", 2026, "COMMERCIAL")).containsExactly(results.getFirst());
+    assertThat(results.getLast().status()).isEqualTo("MISSING");
+    insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", bare,
+        "business_unit_type", "COMMERCIAL", "loss_rate", "0.04"));
+    assertThat(query.lookup(product, null, "COMMERCIAL", 2026, "COMMERCIAL").rate()).isEqualByComparingTo("0.04");
+    assertThat(query.lookupBatch(requests, reader).getFirst().rate()).isEqualByComparingTo("0.04");
+  }
+
   @Test void modelLookupKeepsAmbiguityLimitAndDoesNotIncludeComponentsOrOtherOrganizations() {
     String model = code();
     for (int i = 0; i < 3; i++) insert("lp_material_master_raw", Map.of("material_code", "P" + i + model,
@@ -128,21 +162,28 @@ class CostRunFeeSourcesIntegrationTest {
     assertThat(expected.get(0)).hasSize(2); assertThat(expected.get(1)).hasSize(1); assertThat(expected.get(2)).isEmpty();
   }
 
-  @Test void netLossBatchPreservesMissingBareInvalidRatesAndDuplicateConfigurationFailures() {
-    String missingBare = code(), invalid = code();
+  @Test void netLossBatchPreservesZeroMissingBareInvalidRatesAndDuplicateConfigurationFailures() {
+    String missingBare = code(), zero = code(), invalid = code();
     insert("lp_material_master_raw", Map.of("material_code", missingBare, "organization_code", "COMMERCIAL",
         "active_flag", 1, "main_category_code", "10"));
     insert("lp_material_master_raw", Map.of("material_code", invalid, "organization_code", "COMMERCIAL",
         "active_flag", 1, "main_category_code", "11"));
+    insert("lp_material_master_raw", Map.of("material_code", zero, "organization_code", "COMMERCIAL",
+        "active_flag", 1, "main_category_code", "11"));
     insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", invalid,
         "business_unit_type", "COMMERCIAL", "loss_rate", "-0.01"));
+    insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", zero,
+        "business_unit_type", "COMMERCIAL", "loss_rate", "0"));
     var query = new com.sanhua.marketingcost.service.NetLossRateQuery(
         session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class));
     var requests = List.of(new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(missingBare, null, "COMMERCIAL", 2026, "COMMERCIAL"),
+        new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(zero, null, "COMMERCIAL", 2026, "COMMERCIAL"),
         new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(invalid, null, "COMMERCIAL", 2026, "COMMERCIAL"));
     var result = query.lookupBatch(requests, reader);
     assertThat(result).isEqualTo(requests.stream().map(q -> query.lookup(q.code(), q.model(), q.organization(), q.year(), q.businessUnit())).toList());
     assertThat(result.getFirst().reasonCode()).isEqualTo("NET_LOSS_BARE_MISSING");
+    assertThat(result.get(1).status()).isEqualTo("AVAILABLE");
+    assertThat(result.get(1).rate()).isZero();
     assertThat(result.getLast().status()).isEqualTo("ERROR");
     assertThat(result.getLast().reasonCode()).isEqualTo("NET_LOSS_RATE_INVALID");
     insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", invalid,

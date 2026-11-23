@@ -199,7 +199,10 @@ class QuoteEffectiveBomQueryServiceTest {
             quoteBomStatusService, new com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions(
                 (ignoredItem, ignoredMonth) -> null, mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)),
             drawingPreparation, repriceBom, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth(),
-            mock(com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource.class));
+            mock(com.sanhua.marketingcost.service.technicaldata.TechnicalBomPreparationSource.class),
+            new com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis(
+                mock(com.sanhua.marketingcost.mapper.BomU9SourceMapper.class), rawMapper,
+                mock(com.sanhua.marketingcost.service.PackageComponentIdentifyService.class)));
     snapshot = snapshot(42L);
   }
 

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 final class BomCostingRowAggregation {
 
@@ -16,23 +17,46 @@ final class BomCostingRowAggregation {
     if (rows == null || rows.isEmpty()) {
       return new Result(List.of(), Map.of());
     }
-    Map<Key, BomCostingRow> rowByKey = new LinkedHashMap<>();
-    Map<String, String> pathAliases = new LinkedHashMap<>();
+    Map<Key, List<BomCostingRow>> groups = new LinkedHashMap<>();
     for (BomCostingRow row : rows) {
-      if (row == null) {
-        continue;
-      }
-      Key key = Key.of(row);
-      BomCostingRow existing = rowByKey.get(key);
-      if (existing == null) {
-        rowByKey.put(key, row);
-        aliasPath(pathAliases, row.getPath(), row.getPath());
-        continue;
-      }
-      merge(existing, row);
-      aliasPath(pathAliases, row.getPath(), existing.getPath());
+      if (row != null) groups.computeIfAbsent(Key.of(row), key -> new ArrayList<>()).add(row);
     }
-    return new Result(new ArrayList<>(rowByKey.values()), pathAliases);
+    List<BomCostingRow> aggregated = new ArrayList<>();
+    Map<String, String> pathAliases = new LinkedHashMap<>();
+    for (var group : groups.values()) {
+      var first = group.getFirst();
+      captureRecoveryBreakdown(group);
+      aliasPath(pathAliases, first.getPath(), first.getPath());
+      for (var row : group.subList(1, group.size())) {
+        merge(first, row);
+        aliasPath(pathAliases, row.getPath(), first.getPath());
+      }
+      aggregated.add(first);
+    }
+    return new Result(aggregated, pathAliases);
+  }
+
+  /** Keep the price/billing identity intact while retaining each recovery before adding quantities. */
+  private static void captureRecoveryBreakdown(List<BomCostingRow> group) {
+    if (group.size() < 2 || group.stream().noneMatch(BomCostingRowAggregation::outsourceScrap)
+        || group.stream().anyMatch(row -> !"BYPRODUCT_EXTRA".equals(row.getSettlementRowType())
+            || row.getQtyPerTop() == null || row.getQtyPerTop().signum() >= 0 || row.getPath() == null)) return;
+    var lines = group.stream().map(row -> {
+      var line = new LinkedHashMap<String, Object>();
+      line.put("path", row.getPath());
+      line.put("quantity", row.getQtyPerTop());
+      line.put("name", outsourceScrap(row) || row.getParentCode() == null ? row.getMaterialName()
+          : Objects.toString(row.getMaterialName(), row.getMaterialCode()) + "（" + row.getParentCode() + " 副产品）");
+      line.put("drawingNo", row.getMaterialSpec());
+      if (outsourceScrap(row)) line.put("outsource", row.getQuotationShapeEvidence());
+      return line;
+    }).toList();
+    group.getFirst().setQuotationShapeEvidence(Map.of("kind", "RECOVERY_BREAKDOWN_V1", "lines", lines));
+  }
+
+  private static boolean outsourceScrap(BomCostingRow row) {
+    return row.getQuotationShapeEvidence() != null
+        && "OUTSOURCE_SCRAP_V1".equals(row.getQuotationShapeEvidence().get("kind"));
   }
 
   /**

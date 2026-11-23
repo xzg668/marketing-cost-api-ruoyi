@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.service.PriceFixedItemService;
 import com.sanhua.marketingcost.service.ProductCostingPipeline;
 import com.sanhua.marketingcost.service.QualityLossRateService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingProductQuery;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingRefresh;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataTaskApplicationService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor;
 import java.math.BigDecimal;
@@ -21,7 +22,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -39,6 +41,7 @@ class PendingSupplementPublicImportIntegrationTest extends OriginalPricingIntegr
   @Autowired protected PriceFixedItemService prices;
   @Autowired protected QualityLossRateService rates;
   @Autowired protected TechnicalDataPendingProductQuery pending;
+  @Autowired private TechnicalDataPendingRefresh pendingRefresh;
   @Autowired protected TechnicalDataTaskApplicationService tasks;
   protected String oaNo, material, month;
   protected long itemId;
@@ -78,14 +81,23 @@ class PendingSupplementPublicImportIntegrationTest extends OriginalPricingIntegr
 
   protected void additionalSources() {}
 
-  @Test void realImportsRemoveOnlyResolvedGapsWithoutCreatingSupplementOrPreviewRows() {
-    var before=protectedRows();
+  @ParameterizedTest
+  @CsvSource({"0,true", "0.02,true", "0,false"})
+  void realImportsRemoveOnlyResolvedGapsWithoutCreatingSupplementOrPreviewRows(String rate, boolean importByBareCode) {
+    var before=protectedRows(false);
     importPrice();
+    pendingRefresh.runBatch();
     var remaining=pending.page("ALL",null,month,null,oaNo,0,20).getFirst();
     assertThat(remaining.product().modules()).filteredOn(m->m.required())
         .extracting(m->m.moduleType()).containsExactly("NET_LOSS");
-    assertThat(protectedRows()).isEqualTo(before);
-    importRate();
+    assertThat(protectedRows(false)).isEqualTo(before);
+    String rateCode = importByBareCode ? oaNo+"-BARE" : oaNo;
+    importRate(rateCode, new BigDecimal(rate));
+    assertThat(jdbc.queryForObject(
+        "SELECT loss_rate FROM lp_quality_loss_rate WHERE bare_product_code=? AND rate_year=? AND business_unit_type='COMMERCIAL'",
+        BigDecimal.class, rateCode, YearMonth.parse(month).getYear())).isEqualByComparingTo(rate);
+    pendingRefresh.runBatch();
+    var beforeRead=protectedRows();
     for(int i=0;i<2;i++) {
       var page=tasks.workbench(1,20,null,month,null,oaNo,ADMIN);
       assertThat(page.total()).isZero();
@@ -93,7 +105,20 @@ class PendingSupplementPublicImportIntegrationTest extends OriginalPricingIntegr
       assertThat(page.summary().pending()).isZero();
       assertThat(pending.hasPendingItem(oaNo,itemId)).isFalse();
     }
-    assertThat(protectedRows()).isEqualTo(before);
+    assertThat(protectedRows()).isEqualTo(beforeRead);
+    assertThat(protectedRows(false)).isEqualTo(before);
+    if (!importByBareCode) {
+      var cost = pipeline.execute(new ProductCostingRequest(oaNo,itemId,month,"import-gap-costing-test",true));
+      assertThat(cost.getPipelineStatus()).as(cost.getMessage()).isEqualTo("SUCCESS");
+      assertThat(cost.getTotalCost()).isPositive();
+      var loss = jdbc.queryForMap(
+          "SELECT rate,amount FROM lp_cost_run_cost_item WHERE cost_run_version_id=? AND cost_code='LOSS'",
+          cost.getCostVersionId());
+      assertThat((BigDecimal) loss.get("rate")).isZero();
+      assertThat((BigDecimal) loss.get("amount")).isZero();
+      var repeated = pipeline.execute(new ProductCostingRequest(oaNo,itemId,month,"import-gap-costing-repeat",false));
+      assertThat(repeated.getCostVersionId()).isEqualTo(cost.getCostVersionId());
+    }
   }
 
   protected void importPrice() {
@@ -109,15 +134,31 @@ class PendingSupplementPublicImportIntegrationTest extends OriginalPricingIntegr
   }
 
   protected void importRate() {
-    var row=new QualityLossRateImportRequest.QualityLossRateRow();row.setBareProductCode(oaNo+"-BARE");
-    row.setLossRate(new BigDecimal("0.02"));row.setProductName("公共资料导入验收");
+    importRate(oaNo+"-BARE", new BigDecimal("0.02"));
+  }
+
+  private void importRate(String rateCode, BigDecimal rate) {
+    var row=new QualityLossRateImportRequest.QualityLossRateRow();row.setBareProductCode(rateCode);
+    row.setLossRate(rate);row.setProductName("公共资料导入验收");
     var request=new QualityLossRateImportRequest();request.setRows(List.of(row));request.setRateYear(YearMonth.parse(month).getYear());
-    assertThat(rates.importItems(request).getInserted()).isEqualTo(1);
+    var imported=rates.importItems(request);
+    assertThat(imported.getInserted()).isEqualTo(1);
+    assertThat(imported.getErrorMessages()).isEmpty();
   }
 
   protected Map<String,Object> protectedRows() {
+    return protectedRows(true);
+  }
+
+  private Map<String,Object> protectedRows(boolean includePendingProjection) {
     var result=new LinkedHashMap<String,Object>();
-    result.put("workspace",jdbc.queryForList("SELECT * FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId));
+    var workspace=jdbc.queryForMap("SELECT * FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",itemId);
+    if (!includePendingProjection) {
+      workspace.put("technical_check_json", jdbc.queryForObject(
+          "SELECT JSON_REMOVE(technical_check_json,'$.pending') FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",
+          String.class,itemId));
+    }
+    result.put("workspace",List.of(workspace));
     for(String table:List.of("lp_quote_tech_task","lp_quote_tech_product","lp_quote_tech_module","lp_quote_tech_data_version",
         "lp_quote_tech_oa_recipient","lp_quote_tech_submission","lp_quote_tech_price_claim","lp_price_prepare_batch",
         "lp_price_prepare_item","lp_price_prepare_gap","lp_material_monthly_price","lp_quote_cost_run_version"))

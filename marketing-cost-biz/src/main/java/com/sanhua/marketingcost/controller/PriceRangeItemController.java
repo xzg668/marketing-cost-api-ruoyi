@@ -10,7 +10,12 @@ import com.sanhua.marketingcost.entity.PriceRangeItem;
 import com.sanhua.marketingcost.service.PriceRangeItemService;
 import com.sanhua.marketingcost.service.impl.OriginalRangeImportService;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -41,7 +46,8 @@ public class PriceRangeItemController {
   public CommonResult<OriginalRangeImportService.Preview> previewOriginal(
       @RequestParam MultipartFile file,
       @RequestParam String pricingMonth,
-      @RequestParam(required = false) String businessUnitType)
+      @RequestParam(required = false) String businessUnitType,
+      @RequestParam(required = false) Long supplementRuleId)
       throws IOException {
     return CommonResult.success(
         originals.preview(
@@ -51,7 +57,8 @@ public class PriceRangeItemController {
                 businessUnitType,
                 pricingMonth,
                 null,
-                null)));
+                null,
+                supplementRuleId)));
   }
 
   @PreAuthorize("@ss.hasPermi('price:range:import')")
@@ -60,6 +67,7 @@ public class PriceRangeItemController {
       @RequestParam MultipartFile file,
       @RequestParam String pricingMonth,
       @RequestParam(required = false) String businessUnitType,
+      @RequestParam(required = false) Long supplementRuleId,
       @RequestParam String expectedSha256,
       @RequestParam String previewFingerprint)
       throws IOException {
@@ -71,10 +79,35 @@ public class PriceRangeItemController {
                 businessUnitType,
                 pricingMonth,
                 expectedSha256,
-                previewFingerprint)));
+                previewFingerprint,
+                supplementRuleId)));
   }
 
-  /** 查询区间价格列表 */
+  @PreAuthorize("@ss.hasPermi('price:range:list') && @ss.hasPermi('price:range:import')")
+  @GetMapping("/original-rules/{id}/template")
+  public ResponseEntity<byte[]> originalTemplate(@PathVariable Long id) {
+    var file = originals.supplementTemplate(id);
+    return ResponseEntity.ok()
+        .contentType(MediaType.APPLICATION_OCTET_STREAM)
+        .header(HttpHeaders.CONTENT_DISPOSITION,
+            ContentDisposition.attachment().filename(file.name(), StandardCharsets.UTF_8).build().toString())
+        .body(file.bytes());
+  }
+
+  @PreAuthorize("@ss.hasPermi('price:range:list')")
+  @GetMapping("/original-rules/options")
+  public CommonResult<List<OriginalRangeImportService.RuleOption>> originalOptions(
+      @RequestParam String pricingMonth, @RequestParam String materialCode) {
+    return CommonResult.success(originals.options(pricingMonth, materialCode));
+  }
+
+  @PreAuthorize("@ss.hasPermi('price:range:add') && @ss.hasPermi('price:range:list')")
+  @PostMapping("/original-rules/{id}/bands")
+  public CommonResult<OriginalRangeImportService.Publication> addOriginalBand(
+      @PathVariable Long id, @RequestBody OriginalRangeImportService.BandAddition request) {
+    return CommonResult.success(originals.addBand(id, request));
+  }
+
   @PreAuthorize("@ss.hasPermi('price:range:list')")
   @GetMapping("/original-rules/{id}")
   public CommonResult<OriginalRangeImportService.PublishedRule> originalDetail(

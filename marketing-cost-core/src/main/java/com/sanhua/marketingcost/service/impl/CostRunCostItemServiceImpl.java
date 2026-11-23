@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.service.costing.ProductPropertyCoefficients;
 import com.sanhua.marketingcost.service.costing.OemProductConfigStore;
 import com.sanhua.marketingcost.service.costing.ResolvedOrdinaryCost;
 import com.sanhua.marketingcost.service.costing.CmsCostCompositions;
+import com.sanhua.marketingcost.service.costing.CmsQuoteSalarySources;
 import com.sanhua.marketingcost.service.costing.CmsCompositionReader;
 import com.sanhua.marketingcost.dto.CostAmountComposition;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
@@ -166,6 +167,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final CostRunCacheLookupService cacheLookup;
   private final CostBusinessRuleProvider businessRuleProvider;
   @Autowired private CmsCompositionReader cmsCompositionReader;
+  @Autowired private CmsQuoteSalarySources quoteSalary;
   @Autowired(required=false) private com.sanhua.marketingcost.service.QuotationMaterialShapeInputs quoteShapeInputs;
   @Autowired(required=false) private com.sanhua.marketingcost.service.costing.CmsShapeCostAdjustment cmsShapeAdjustment;
   @Autowired(required=false) private OemProductConfigStore oemProducts;
@@ -1327,9 +1329,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           "lp_department_fund_rate.quote_ratio 为空, id=" + rate.getId());
     }
     BigDecimal effectiveRate = resolveDepartmentEffectiveRate(rate);
-    BigDecimal manhourCost = divide(laborTotal, manhourRate);
+    var department = com.sanhua.marketingcost.service.costing.OrdinaryCostAmounts.department(
+        laborTotal, manhourRate, effectiveRate);
     return new DepartmentSubjectAmount(
-        manhourCost, effectiveRate, multiplyAmount(manhourCost, effectiveRate), lookup.remark(),
+        department.basis(), effectiveRate, department.amount(), lookup.remark(),
         CmsCostCompositions.department(rate, laborTotal));
   }
 
@@ -2180,6 +2183,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       result.indirectRemark =
           missingEffectiveRemark(costSourceContext.costYear, "辅助员工工资", result.missingIndirectCodes);
     }
+    result.directRemark = joinRemarks(CmsCostCompositions.laborModelReferences(result.directSources), result.directRemark);
+    result.indirectRemark = joinRemarks(CmsCostCompositions.laborModelReferences(result.indirectSources), result.indirectRemark);
     return result;
   }
 
@@ -2230,13 +2235,18 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     List<CmsCostSourceEffective> rows = costSourceContext.prepared != null
         ? costSourceContext.prepared.salary() : cmsCostSourceEffectiveMapper.selectSalarySources(
             costSourceContext.costYear, costSourceContext.businessUnitType, materialCodes);
+    if (costSourceContext.prepared == null && quoteSalary != null) {
+      rows = quoteSalary.complete(materialCodes, costSourceContext.costYear, costSourceContext.businessUnitType,
+          costSourceContext.materialOrganizationCode, rows == null ? List.of() : rows);
+    }
     if (rows == null || rows.isEmpty()) {
       return Collections.emptyMap();
     }
     Map<String, CmsCostSourceEffective> result = new HashMap<>();
     for (CmsCostSourceEffective row : rows) {
       String sourceType = trimToNull(row.getSourceType());
-      String parentCode = trimToNull(row.getParentCode());
+      String parentCode = row.getSalaryModelMatch() == null
+          ? trimToNull(row.getParentCode()) : row.getSalaryModelMatch().productCode();
       if (sourceType != null && parentCode != null) {
         result.put(effectiveKey(sourceType, parentCode), row);
       }
@@ -2638,13 +2648,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return value != null && value.compareTo(BigDecimal.ZERO) > 0;
   }
 
-  private BigDecimal divide(BigDecimal numerator, BigDecimal denominator) {
-    if (denominator == null || denominator.compareTo(BigDecimal.ZERO) == 0) {
-      return BigDecimal.ZERO;
-    }
-    return numerator.divide(denominator, AMOUNT_SCALE, RoundingMode.HALF_UP);
-  }
-
   private BigDecimal multiplyRate(BigDecimal rate, BigDecimal upliftRate) {
     if (rate == null) {
       return null;
@@ -2653,13 +2656,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return rate;
     }
     return rate.multiply(upliftRate);
-  }
-
-  private BigDecimal multiplyAmount(BigDecimal base, BigDecimal rate) {
-    if (base == null || rate == null) {
-      return BigDecimal.ZERO;
-    }
-    return base.multiply(rate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
   }
 
   ProductCoefficientLookup lookupProductCoefficient(

@@ -356,6 +356,34 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     verify(oa,times(1)).submit(any());
   }
 
+  @Test void aReceiptForAnArchivedLineIsRecordedWithoutPublishingThatLineAgain() {
+    var f = dispatched(2, false);
+    long archived = f.taskIds().getFirst();
+    long current = f.taskIds().getLast();
+    for (long task : f.taskIds()) save(task, DING, "2.50");
+    var prepared = request(f.formId(), DING);
+    doAnswer(call -> {
+      var body = (ObjectNode) call.getArgument(0);
+      jdbc.update("""
+          UPDATE lp_quote_tech_product SET active_flag=0,active_lock_key=NULL WHERE task_id=?
+          """, archived);
+      jdbc.update("""
+          UPDATE lp_quote_tech_task SET active_flag=0,active_lock_key=NULL,task_status='CANCELLED' WHERE id=?
+          """, archived);
+      return new OaWorkflowResult("archive-check", OaWorkflowResult.Status.SUCCESS, 200, "0",
+          "成功", body.path("requestId").asText(), null, 1);
+    }).when(oa).submit(any());
+    assertThat(documents.submit(f.formId(), prepared, DING).status()).isEqualTo("SUCCESS");
+    assertThat(taskMapper.selectById(archived).getTaskStatus()).isEqualTo("CANCELLED");
+    assertThat(taskMapper.selectById(current).getTaskStatus()).isEqualTo("SUBMITTED");
+    assertThat(jdbc.queryForObject("""
+        SELECT submission_status FROM lp_quote_tech_submission WHERE task_id=?
+        """, String.class, archived)).isEqualTo("SENT");
+    assertThat(jdbc.queryForObject("""
+        SELECT effective_version_id FROM lp_quote_tech_product WHERE task_id=?
+        """, Long.class, archived)).isNull();
+  }
+
   @Test void incompleteProductPreventsWholeDocumentSubmission() {
     var f=dispatched(2,false);clearInvocations(oa);save(f.taskIds().getFirst(),DING,"1");
     assertThatThrownBy(() -> documents.submit(f.formId(),request(f.formId(),DING),DING)).hasMessageContaining("版本");

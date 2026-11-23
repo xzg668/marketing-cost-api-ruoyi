@@ -89,7 +89,8 @@ public class CostingPriceSourceReview {
       String month = text(row.getOrDefault("pricing_month", row.get("price_month"))); if (!month.isBlank()) periods.add(month);
       if (one(row.get("deleted")) || one(row.get("disabled")) || zero(row.get("active")) || zero(row.get("current_flag"))) details.add("包含已停用或历史记录");
       String status = text(row.get("rule_status"));
-      if (!status.isBlank() && !Set.of("LEGACY", "PUBLISHED").contains(status)) details.add("包含尚未发布的价格版本");
+      if ("VOIDED".equals(status)) details.add("包含已作废的价格版本");
+      else if (!status.isBlank() && !Set.of("LEGACY", "PUBLISHED").contains(status)) details.add("包含尚未发布的价格版本");
       if ("TECH_SUPPLEMENTAL".equals(row.get("source_kind")) && !"AVAILABLE".equals(row.get("technical_publication_status"))) details.add("补录价格尚未生效");
       if (source.ods() && !"COMMERCIAL".equals(unit)) details.add("该采购来源当前仅适用商用核算");
       if (source.table().equals("lp_material_monthly_price")) details.add("由原始价格来源首次采用保存，本次未命中时需核对其适用范围");

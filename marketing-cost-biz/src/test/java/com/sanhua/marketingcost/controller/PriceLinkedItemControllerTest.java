@@ -33,14 +33,15 @@ import org.springframework.mock.web.MockMultipartFile;
 class PriceLinkedItemControllerTest {
 
   private PriceLinkedItemService priceLinkedItemService;
+  private com.sanhua.marketingcost.service.PriceLinkedImportDispatchService priceLinkedImportDispatchService;
   private PriceLinkedItemController controller;
 
   @BeforeEach
   void setUp() {
     priceLinkedItemService = mock(PriceLinkedItemService.class);
-    var dispatch=mock(com.sanhua.marketingcost.service.PriceLinkedImportDispatchService.class);
-    controller = new PriceLinkedItemController(priceLinkedItemService, dispatch);
-    when(dispatch.confirm(any())).thenAnswer(invocation -> {
+    priceLinkedImportDispatchService=mock(com.sanhua.marketingcost.service.PriceLinkedImportDispatchService.class);
+    controller = new PriceLinkedItemController(priceLinkedItemService, priceLinkedImportDispatchService);
+    when(priceLinkedImportDispatchService.confirm(any())).thenAnswer(invocation -> {
       com.sanhua.marketingcost.dto.PriceLinkedImportCommand command=invocation.getArgument(0);
       return priceLinkedItemService.importExcel(new java.io.ByteArrayInputStream(command.getFileBytes()),command.getPricingMonth(),command.isOverwriteManual(),command.getBusinessUnitType(),command.getSourceFileName(),command.getEffectiveStrategy(),command.getFormulaEffectiveDate(),command.getFactorPriceConflictStrategy());
     });
@@ -65,13 +66,22 @@ class PriceLinkedItemControllerTest {
   @Test
   void importedFilesReturnsPagedFileSummary() {
     var row = new com.sanhua.marketingcost.dto.LinkedImportedFileDto(
-        12L, "原稿.xls", "210", 123, "alice", java.time.LocalDateTime.of(2026, 10, 13, 8, 0));
+        12L, "原稿.xls", "210", 123, "alice", java.time.LocalDateTime.of(2026, 10, 13, 8, 0),
+        "PUBLISHED", true);
     when(priceLinkedItemService.importedFiles("2026-10", "COMMERCIAL", 3, 20))
         .thenReturn(new PageResult<>(List.of(row), 61L));
     var response = controller.importedFiles("2026-10", "COMMERCIAL", 3, 20);
     assertThat(response.isSuccess()).isTrue();
     assertThat(response.getData().getTotal()).isEqualTo(61);
     assertThat(response.getData().getList()).containsExactly(row);
+  }
+
+  @Test
+  void importsHistoryPreviewsAndVoidsOnlyTheRequestedRecord() {
+    when(priceLinkedImportDispatchService.previewVoidOriginal(66L, "2026-11", "COMMERCIAL")).thenReturn(9L);
+    assertThat(controller.previewVoidOriginal(66L, "2026-11", "COMMERCIAL").getData()).isEqualTo(9L);
+    assertThat(controller.voidOriginal(66L, "2026-11", "COMMERCIAL", 9L).getData()).isTrue();
+    verify(priceLinkedImportDispatchService).voidOriginal(66L, "2026-11", "COMMERCIAL", 9L);
   }
 
   @Test

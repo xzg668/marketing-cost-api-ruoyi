@@ -23,6 +23,8 @@ public class ProductCostingResult {
   private String costRunNo;
   private String versionNo;
   private BigDecimal totalCost;
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private QuoteCostRunWorkbenchResponse savedCostRun;
   private boolean reusedSuccess;
   private boolean retryable;
   /** 保存本次检查的完整缺口，整单导出无需再次逐产品取价。 */

@@ -192,22 +192,10 @@ public class JjbExcelRenderer {
       String oemNote = com.sanhua.marketingcost.service.costing.OemProductConfigStore.RATE_NOTE;
       boolean oem = v.rate() != null && "SALES_EXP".equals(v.code()) && text(v.remark()).contains(oemNote);
       string(row, 13, oem && oemNote.equals(v.remark()) ? "" : compact(v.remark(), 12));
-      if (!v.separateCalculation().isEmpty()) {
-        var c = v.separateCalculation();
-        string(row, 14, "基础金额="+c.get("baseAmount")+"；净损失率="+percent(c.get("lossRate"))
-            +"；零件制造费用率="+percent(c.get("manufactureRate"))+"；三项费用率="+percent(c.get("threeExpenseRate")));
-      }
-      else if (v.rate() != null && !ordinaryRate) {
-        String rateFormat = "ADJUSTED_MANUFACTURE_COST".equals(v.code()) ? DECIMAL : PERCENT;
-        numeric(row, 14, v.rate(), oem ? rateFormat + "\"" + oemNote + "\"" : rateFormat);
-      }
-      else if ("HOUSEHOLD".equals(v.kind())) string(row, 14, "H=" + percent(v.householdRate()) + "；S=" + percent(v.salesRate()));
-      else if ("FEE".equals(v.kind())) string(row, 14, switch (text(v.feeState())) {
-        case "MISSING" -> "未填写"; case "EXPLICIT_NONE" -> "明确无费用";
-        case "EXPLICIT_AMOUNT" -> "有效填写金额"; case "LEGACY" -> "历史保存值"; default -> "";
-      });
+      if (oem) numeric(row, 3, v.rate(), PERCENT + "\"" + oemNote + "\"");
+      string(row, 14, v.cmsSourceNote());
       comment(row.getCell(col(13)), text(v.remark()));
-      comment(row.getCell(col(14)), v.toString());
+      comment(row.getCell(col(5)), v.toString());
       pageHeight += row.getHeightInPoints();
     }
 

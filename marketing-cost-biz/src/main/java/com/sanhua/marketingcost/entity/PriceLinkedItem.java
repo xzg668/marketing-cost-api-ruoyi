@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 
 @TableName("lp_price_linked_item")
 public class PriceLinkedItem {
+  public static final String VOIDED = "VOIDED";
   /** PRC-01：原稿/财务版本契约；旧数据的未知来源保持为空。 */
   private String ruleIdentityKey;
   private Integer ruleRevision;

@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.pricing.monthly;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
@@ -10,6 +11,10 @@ import com.sanhua.marketingcost.mapper.QuoteEffectiveBomNodeMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
+import com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis;
+import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
+import com.sanhua.marketingcost.service.impl.OriginalLinkedPublicationSource;
+import com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices;
 import java.util.*;
 import org.springframework.stereotype.Component;
 
@@ -23,10 +28,13 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
   private final MonthlyPriceDocumentCodec codec;
   private final MonthlyPreparationEvidence evidence;
   private final OaFormItemExtraFieldMapper extraFields;
+  private final U9BomQuantityBasis quantityBasis;
+  private final MonthlyBomSnapshotDetailService snapshots;
 
   public MonthlyQuotationInputRevision(PricePrepareItemMapper preparations,
       QuoteEffectiveBomNodeMapper nodes, QuoteCostingWorkspaceService workspaces,
-      MonthlyMaterialPrices prices, MonthlyPriceDocumentCodec codec, OaFormItemExtraFieldMapper extraFields) {
+      MonthlyMaterialPrices prices, MonthlyPriceDocumentCodec codec, OaFormItemExtraFieldMapper extraFields,
+      U9BomQuantityBasis quantityBasis, MonthlyBomSnapshotDetailService snapshots) {
     this.preparations = preparations;
     this.nodes = nodes;
     this.workspaces = workspaces;
@@ -34,6 +42,8 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
     this.codec = codec;
     evidence = new MonthlyPreparationEvidence(codec);
     this.extraFields = extraFields;
+    this.quantityBasis = quantityBasis;
+    this.snapshots = snapshots;
   }
 
   @Override public Scope read(OaForm form, OaFormItem item, String month) {
@@ -41,11 +51,12 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
         .eq(PricePrepareItem::getOaFormItemId, item.getId())
         .eq(PricePrepareItem::getPeriodMonth, month)
         .eq(PricePrepareItem::getCurrentFlag, 1));
-    if (prepared.isEmpty()) return Scope.unprepared();
     var workspace = workspaces.find(item.getId(), month).orElse(null);
     List<QuoteEffectiveBomNode> original = workspace == null || workspace.getCurrentBomBuildBatchId() == null
         ? List.of() : nodes.selectList(Wrappers.<QuoteEffectiveBomNode>lambdaQuery()
             .eq(QuoteEffectiveBomNode::getBuildBatchId, workspace.getCurrentBomBuildBatchId()));
+    var quantityRevision = quantityBasis.revision(original, snapshots::load);
+    if (prepared.isEmpty()) return unprepared(quantityRevision);
     var byPath = new HashMap<String, QuoteEffectiveBomNode>();
     original.forEach(node -> byPath.put(MonthlyBomPricingScope.pathKey(node.getNodePath()), node));
     var rows = new LinkedHashMap<PricePrepareItem, MonthlyPreparationInputs>();
@@ -61,7 +72,7 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
     }
     // A pending sibling must not make already adopted inputs depend on current source tables again.
     // Entirely old/unprepared history retains its existing discovery path.
-    if (rows.values().stream().allMatch(Objects::isNull)) return Scope.unprepared();
+    if (rows.values().stream().allMatch(Objects::isNull)) return unprepared(quantityRevision);
     var saved = ids.isEmpty() ? Map.<Long, MonthlyAdoptionPlan.Selection>of()
         : prices.readByIds(item.getBusinessUnitType(), ids);
     var observedRequests=rows.values().stream().filter(Objects::nonNull).flatMap(input->input.prices().stream())
@@ -72,6 +83,10 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
     var currentAnnual = needsAnnual ? new AnnualUsageInput(item.getAnnualVolume(), item.getAnnualVolume()==null?null:
         extraFields.selectAnnualVolumeUnit(item.getId())).piecesIfKnown() : null;
     var canonical = new TreeSet<String>();
+    if (quantityRevision != null) canonical.add(quantityRevision);
+    if (!CustomerMaterialPrices.fromQuotation(form).isEmpty()
+        && saved.values().stream().anyMatch(this::mayNeedQuotationBinding))
+      canonical.add(OriginalLinkedPublicationSource.QUOTATION_FACTOR_REVISION);
     var unresolved = new TreeSet<String>();
     var suppressed = new HashSet<String>();
     var boundNodes = new HashSet<String>();
@@ -146,6 +161,24 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
     }
     household.addAll(unresolved);
     return new Scope(MonthlyPriceDocumentCodec.sha256(String.join("\n", canonical)), unresolved, household, true);
+  }
+
+  private static Scope unprepared(String quantityRevision) {
+    return quantityRevision == null ? Scope.unprepared()
+        : new Scope("UNPREPARED:" + quantityRevision, Set.of(), Set.of(), false);
+  }
+
+  private boolean mayNeedQuotationBinding(MonthlyAdoptionPlan.Selection selection) {
+    String document = selection.fact().evidence().json();
+    if (!document.contains("sourceFormulaText")) return false;
+    var source = codec.decode(codec.wrap(document), JsonNode.class);
+    if (!"LINKED".equals(source.path("sourceKind").asText())) return false;
+    String publication = source.path("source").path("selectedPublication").path("calculationJson").asText();
+    if (publication.isBlank()) return false;
+    var rule = codec.decode(codec.wrap(publication), JsonNode.class).path("linkedRule");
+    var keys = new HashSet<String>();
+    rule.path("factors").forEach(factor -> keys.add(factor.path("canonicalKey").asText()));
+    return OriginalLinkedPublicationSource.mayNeedQuotationBinding(rule.path("sourceFormulaText").asText(), keys);
   }
 
   /** Pending MAKE/PACK rows may still carry the necessary raw/scrap material identities. */

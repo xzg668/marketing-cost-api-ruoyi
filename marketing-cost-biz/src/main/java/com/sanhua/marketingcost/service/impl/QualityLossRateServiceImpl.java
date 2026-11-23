@@ -271,14 +271,14 @@ public class QualityLossRateServiceImpl implements QualityLossRateService {
       return "Excel第" + rowNo + "行缺裸品料号";
     }
     if (!isRateValid(entity.getLossRate())) {
-      return "Excel第" + rowNo + "行公共净损失率必须大于0且小于1";
+      return "Excel第" + rowNo + "行公共净损失率必须大于等于0%且小于100%";
     }
     return null;
   }
 
   private boolean isValid(QualityLossRate entity) {
     if (!isRateValid(entity.getLossRate())) {
-      throw new IllegalArgumentException("公共净损失率必须大于0且小于100%");
+      throw new IllegalArgumentException("公共净损失率必须大于等于0%且小于100%");
     }
     return entity.getRateYear() != null
         && StringUtils.hasText(entity.getBareProductCode());

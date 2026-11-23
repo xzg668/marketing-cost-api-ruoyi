@@ -99,6 +99,8 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     spring.registerBean("transactionManager", DataSourceTransactionManager.class, () -> manager);
     spring.registerBean(QuoteBomMonthlySnapshotMapper.class, () -> mapper);
     spring.registerBean(LiveU9BomGateway.class, () -> LIVE);
+    spring.registerBean(com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis.class,
+        () -> mock(com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis.class));
     spring.registerBean(MonthlyBomSnapshotDetailService.class, () -> mock(MonthlyBomSnapshotDetailService.class));
     spring.registerBean(MonthlySnapshotU9BomGateway.class);
     spring.refresh();

@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
+import com.sanhua.marketingcost.service.QuoteMonthCloseLocks;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
 import com.sanhua.marketingcost.entity.CostRunBatch;
@@ -43,6 +44,8 @@ import org.springframework.util.StringUtils;
 @Service
 public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionService {
   private final QuotePricingPeriod pricingPeriods;
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private QuoteMonthCloseLocks monthCloseLocks;
 
   private static final char[] HEX = "0123456789abcdef".toCharArray();
 
@@ -340,8 +343,12 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       OaForm oaForm,
       List<OaFormItem> items,
       String pricingMonth, boolean prepareMaterials) {
+    Map<Long, Long> locked = monthCloseLocks == null ? Map.of()
+        : monthCloseLocks.forOrder(oaForm.getBusinessUnitType(), pricingMonth, oaForm.getOaNo());
+    List<OaFormItem> openItems = locked.isEmpty() ? items
+        : items.stream().filter(item -> item != null && !locked.containsKey(item.getId())).toList();
     List<Long> itemIds =
-        (items == null ? List.<OaFormItem>of() : items).stream()
+        (openItems == null ? List.<OaFormItem>of() : openItems).stream()
             .filter(java.util.Objects::nonNull)
             .map(OaFormItem::getId)
             .filter(java.util.Objects::nonNull)
@@ -350,12 +357,17 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     Map<Long, QuoteCostRunVersion> versions = loadVersions(workspaces.values());
     Map<String, CostRunTask> tasksByKey = new LinkedHashMap<>();
     Map<Long, String> sourceRevisions =
-        prepareMaterials ? Map.of() : inputRevisionService.currentRevisions(oaForm, items, pricingMonth);
+        prepareMaterials ? Map.of() : inputRevisionService.currentRevisions(oaForm, openItems, pricingMonth);
     int skipped = 0;
     for (OaFormItem item : items == null ? List.<OaFormItem>of() : items) {
       CostRunTask task = buildQuoteTask(batch, oaForm, item);
       if (task == null || tasksByKey.putIfAbsent(task.getCalcObjectKey(), task) != null) {
         skipped++;
+        continue;
+      }
+      if (locked.containsKey(item.getId())) {
+        task.setStatus(CostRunTaskStatus.SKIPPED_CURRENT.name());
+        task.setProgress(100);
         continue;
       }
       if (prepareMaterials) task.setRequestSnapshotJson(task.getRequestSnapshotJson().replaceFirst("\\}$", ",\"prepareMaterials\":true}"));

@@ -2,7 +2,16 @@ package com.sanhua.marketingcost.service.costing;
 
 import static org.assertj.core.api.Assertions.*;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestItemResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceReview;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceScope;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class QuoteCostingGapExportServiceTest {
@@ -15,9 +24,25 @@ class QuoteCostingGapExportServiceTest {
     var item=product("TOP");item.setId(1L);
     var workspace=new com.sanhua.marketingcost.dto.ingest.QuoteCostingWorkspaceResponse();
     workspace.setWorkspaceStatus("WAIT_PRICE");workspace.setLastErrorMessage("缺少供货比率：000123");item.setCostingWorkspace(workspace);
+    var second=product("OTHER-TOP");second.setId(2L);second.setCostingWorkspace(workspace);
+    var unavailable=product("LEGACY-TOP");unavailable.setId(3L);unavailable.setCostingWorkspace(workspace);
     var quote=new com.sanhua.marketingcost.dto.ingest.QuoteRequestDetailResponse();
-    quote.setId(1L);quote.setBusinessUnitType("COMMERCIAL");quote.setItems(java.util.List.of(item));
+    quote.setId(1L);quote.setBusinessUnitType("COMMERCIAL");quote.setItems(java.util.List.of(item,second,unavailable));
     org.mockito.Mockito.when(quotes.getRequestDetail("OA")).thenReturn(quote);
+    var firstPrices = new QuotePricePrepareWorkbenchResponse();
+    firstPrices.setSupplierPriceReviews(List.of(review(1L,"2026-11","FIXED", "000123",
+        candidate("S1","供应商1","1.25")), review(1L,"2026-11","LINKED","000123",
+        candidate(null,"供应商2","2.125")), review(1L,"2026-10","FIXED","000123",candidate("S1","供应商1","99")),
+        review(1L,"2026-11","FIXED","OTHER-MATERIAL",candidate("S1","供应商1","99"))));
+    var secondPrices = new QuotePricePrepareWorkbenchResponse();
+    secondPrices.setSupplierPriceReviews(List.of(review(2L,"2026-11","RANGE","000123",candidate("S2","供应商2","2.5"))));
+    org.mockito.Mockito.when(prices.checkPriceSources(org.mockito.ArgumentMatchers.eq("OA"),
+        org.mockito.ArgumentMatchers.eq(1L),org.mockito.ArgumentMatchers.any())).thenReturn(firstPrices);
+    org.mockito.Mockito.when(prices.checkPriceSources(org.mockito.ArgumentMatchers.eq("OA"),
+        org.mockito.ArgumentMatchers.eq(2L),org.mockito.ArgumentMatchers.any())).thenReturn(secondPrices);
+    org.mockito.Mockito.when(prices.checkPriceSources(org.mockito.ArgumentMatchers.eq("OA"),
+        org.mockito.ArgumentMatchers.eq(3L),org.mockito.ArgumentMatchers.any()))
+        .thenThrow(new com.sanhua.marketingcost.service.ingest.QuoteIngestException("旧BOM已过期"));
     var material=new com.sanhua.marketingcost.entity.MaterialMasterRaw();
     material.setMaterialCode("000123");material.setMaterialName("物料");material.setMaterialSpec("独立规格");
     material.setMaterialModel("真正型号");material.setUnit("件");material.setShapeAttr("采购件");
@@ -52,11 +77,17 @@ class QuoteCostingGapExportServiceTest {
       try(var book=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(bytes))) {
         var sheet=book.getSheetAt(0);
         assertThat(sheet.getSheetName()).isEqualTo(com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook.SHEET_NAME);
+        var headers = new ArrayList<>(SupplierSupplyRatioWorkbook.HEADERS);
+        headers.add(SupplierSupplyRatioWorkbook.SUPPLIER_PRICE_HEADER);
         assertThat(java.util.stream.IntStream.range(0,sheet.getRow(0).getLastCellNum())
             .mapToObj(i->sheet.getRow(0).getCell(i).getStringCellValue()).toList())
-            .isEqualTo(com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook.HEADERS);
+            .isEqualTo(headers);
         assertThat(sheet.getRow(1).getCell(0).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.STRING);
         assertThat(sheet.getRow(1).getCell(2).getStringCellValue()).isEqualTo("独立规格");
+        assertThat(sheet.getRow(1).getCell(11).getNumericCellValue()).isEqualTo(1.25);
+        assertThat(sheet.getRow(2).getCell(11).getStringCellValue())
+            .contains("2.125（TOP / 210 / 联动价）", "2.5（OTHER-TOP / 210 / 区间价）");
+        assertThat(sheet.getRow(3).getCell(11).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.BLANK);
         assertThat(book.getSheetAt(1).getSheetName()).isEqualTo("缺供货比率明细");
         assertThat(book.getSheet("填写说明")).isNotNull();
       }
@@ -77,8 +108,21 @@ class QuoteCostingGapExportServiceTest {
       var blankModel=parser.parse(new java.io.ByteArrayInputStream(service.export("OA",QuoteCostingGapExportService.Category.RATIO)),"空型号.xlsx",null);
       assertThat(blankModel.getErrors()).isEmpty();
       assertThat(blankModel.getRows()).allSatisfy(row->assertThat(row.getSpecModel()).isNull());
-      org.mockito.Mockito.verifyNoInteractions(prices);
+      for (long itemId : List.of(1L, 2L, 3L)) org.mockito.Mockito.verify(prices, org.mockito.Mockito.times(2))
+          .checkPriceSources(org.mockito.ArgumentMatchers.eq("OA"), org.mockito.ArgumentMatchers.eq(itemId),
+              org.mockito.ArgumentMatchers.argThat(req -> req.isRefreshCandidates() && "2026-11".equals(req.getPeriodMonth())));
     } finally {org.springframework.security.core.context.SecurityContextHolder.clearContext();}
+  }
+
+  private static SupplierPriceReview review(long id, String month, String type, String material,
+      SupplierPriceReview.Candidate candidate) {
+    return new SupplierPriceReview("scope", "fingerprint", new SupplierPriceScope("COMMERCIAL", "OA", id,
+        month, LocalDate.parse(month + "-01"), "210", material, type), List.of(candidate), "WAIT", null, null, "");
+  }
+
+  private static SupplierPriceReview.Candidate candidate(String code, String name, String unitPrice) {
+    return new SupplierPriceReview.Candidate(new SupplierPriceCandidate("key", code, name, new BigDecimal(unitPrice),
+        null, null), null);
   }
   private QuoteRequestItemResponse product(String code) {
     var item=new QuoteRequestItemResponse();item.setMaterialNo(code);return item;

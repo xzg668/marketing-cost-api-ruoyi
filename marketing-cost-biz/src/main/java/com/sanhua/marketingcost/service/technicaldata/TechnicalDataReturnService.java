@@ -580,7 +580,9 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
         throw invalid("OA 报价员办理状态或需求版本已变化，本次退回未发送");
       }
       var person = recipients.findById(scope.path("recipientId").asLong());
-      if (person == null
+      var task = tasks.selectByIdForUpdate(scope.path("taskId").asLong());
+      if (!Integer.valueOf(1).equals(task.getActiveFlag())
+          || person == null
           || !person.active()
           || !"RETURN_PENDING".equals(person.todoStatus())
           || !Objects.equals(person.returnMessageId(), message)
@@ -640,6 +642,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     for (long message : batches.messageIds(id)) {
       var scope = payload(message);
       var task = tasks.selectByIdForUpdate(scope.path("taskId").asLong());
+      if (!Integer.valueOf(1).equals(task.getActiveFlag())) continue;
       var person = recipients.findById(scope.path("recipientId").asLong());
       if (person == null) throw invalid("原退回负责人不存在，请核实原任务");
       if (!Objects.equals(person.returnMessageId(), message)

@@ -17,7 +17,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class JjbProjection {
   private final ObjectMapper json;
-  public JjbProjection(ObjectMapper json) { this.json = json.copy().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS); }
+  private final JjbRecoveryPresentation recoveries;
+  public JjbProjection(ObjectMapper json) {
+    this.json = json.copy().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    this.recoveries = new JjbRecoveryPresentation(this.json);
+  }
 
   private static String savedProductProperty(List<CostRunCostItem> adjustments) {
     var clause = java.util.regex.Pattern.compile("(?:^|[；;])\\s*属性=([^；;]+)");
@@ -55,6 +59,7 @@ public class JjbProjection {
     var calc = snapshot == null ? null : snapshot.calculation();
     var warnings = new ArrayList<String>(); var rows = new ArrayList<Row>();
     var costMap = stored.costs().stream().collect(Collectors.groupingBy(CostRunCostItem::getCostCode, LinkedHashMap::new, Collectors.toList()));
+    Map<String, String> cmsSourceNotes = cmsSourceNotes(calc);
     var consumed = new HashSet<Long>();
     var partsByPrepare = stored.parts().stream().filter(p -> p.getPricePrepareItemId() != null)
         .collect(Collectors.groupingBy(CostRunPartItem::getPricePrepareItemId));
@@ -117,12 +122,12 @@ public class JjbProjection {
     // Keep every legitimate ordinary detail, including historical public non-product expenses.
     for (var cost : stored.costs()) if (!reserved.contains(cost.getCostCode()) && !feeIds.contains(cost.getId())) {
       if ("OTHER_INDEPENDENT".equals(cost.getCostCode()) && cost.getAmount() != null && BigDecimal.ZERO.compareTo(cost.getAmount()) == 0) continue;
-      rows.add(cost(cost, "MATERIAL_DETAIL").build());
+      rows.add(cost(cost, "MATERIAL_DETAIL").cmsSourceNote(cmsSourceNotes.get(cost.getCostCode())).build());
     }
     rows = packagingDetails(rows, preparations, traces, warnings,
         snapshot == null || snapshot.pricingBom() == null ? List.of() : snapshot.pricingBom().nodes());
-    for (String code : ORDINARY) addCost(rows, costMap, code, "ORDINARY", calc, warnings);
-    for (String code : THREE) addCost(rows, costMap, code, "THREE_EXPENSES", calc, warnings);
+    for (String code : ORDINARY) addCost(rows, costMap, code, "ORDINARY", calc, warnings, cmsSourceNotes);
+    for (String code : THREE) addCost(rows, costMap, code, "THREE_EXPENSES", calc, warnings, cmsSourceNotes);
     rows.add(subtotal("THREE_SUBTOTAL", "THREE_EXPENSES", "三项费用小计", THREE.stream()
         .flatMap(code -> costMap.getOrDefault(code, List.of()).stream()).toList(), THREE.stream().allMatch(costMap::containsKey)));
     rows.addAll(separateRows);
@@ -233,9 +238,11 @@ public class JjbProjection {
         "报价信息取报价需求单；裸品码取同组织U9料品档案；核算金额、费率及财务Cu取所选保存版本",
         money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation,bareCode);
     rows = new JjbPricePresentation(json).apply(rows, calc, preparations);
-    rows = new JjbBomOrder(snapshot == null || snapshot.pricingBom() == null
-        ? List.of() : snapshot.pricingBom().nodes()).apply(rows);
-    return new JjbReadModel(identity,header,rows,calc==null?List.of():monthly(calc, snapshot.priceScenarios()),
+    var order = new JjbBomOrder(snapshot == null || snapshot.pricingBom() == null
+        ? List.of() : snapshot.pricingBom().nodes());
+    rows = order.apply(rows);
+    return new JjbReadModel(identity,header,order.apply(recoveries.apply(v, rows, preparations)),
+        calc==null?List.of():monthly(calc, snapshot.priceScenarios()),
         new Totals(money(t1),money(v.getCuMaterialAdjustment()),money(v.getFinalQuoteAmount())),warnings,
         new JjbCalculationExplanation(json).describe(snapshot, rows));
   }
@@ -485,12 +492,30 @@ public class JjbProjection {
           details));
     });return result;
   }
-  private void addCost(List<Row> rows,Map<String,List<CostRunCostItem>> map,String code,String section,MonthlyProductCost.Result calc,List<String> warnings) {
+  private static Map<String, String> cmsSourceNotes(MonthlyProductCost.Result calc) {
+    if (calc == null) return Map.of();
+    var notes = new HashMap<String, String>();
+    for (var row : calc.ordinaryInputs().details()) {
+      String code = row.costCode();
+      if (row.composition() == null || !("DIRECT_LABOR".equals(code) || "INDIRECT_LABOR".equals(code)
+          || code.startsWith("AUX_"))) continue;
+      String periods = row.composition().sources().stream().filter(source ->
+              "cms_workshop_labor_raw".equals(source.table()) || "cms_product_subject_cost_raw".equals(source.table()))
+          .map(com.sanhua.marketingcost.dto.CostAmountComposition.Source::period)
+          .filter(period -> period != null && period.matches("[0-9]{4}-(0[1-9]|1[0-2])"))
+          .distinct().sorted().collect(Collectors.joining(" / "));
+      if (!periods.isEmpty()) notes.put(code, "CMS " + periods);
+    }
+    return notes;
+  }
+
+  private void addCost(List<Row> rows,Map<String,List<CostRunCostItem>> map,String code,String section,
+      MonthlyProductCost.Result calc,List<String> warnings, Map<String, String> cmsSourceNotes) {
     var values=map.getOrDefault(code,List.of());
     if (values.isEmpty()) { rows.add(Row.builder().key(code).section(section).kind("COST").code(code).name(LABELS.get(code)).build());return; }
     if(values.size()>1) warnings.add("历史科目 "+code+" 存在多行，逐行保留");
     for(var c:values) {
-      var row=cost(c,section);
+      var row=cost(c,section).cmsSourceNote(cmsSourceNotes.get(code));
       if ("MATERIAL".equals(code)) row.remark(joinRemark(c.getRemark(),
           "含部品、辅料、包装和部门经费；直接、辅助人工另计；按保存的核算口径汇总，六位小数明细加总可能存在舍入尾差"));
       if(calc!=null) {

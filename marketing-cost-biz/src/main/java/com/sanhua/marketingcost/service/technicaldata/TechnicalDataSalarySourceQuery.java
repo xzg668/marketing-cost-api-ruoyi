@@ -9,12 +9,12 @@ import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.CmsCostSourceEffectiveMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.TechnicalDataSalaryReferenceMapper;
+import com.sanhua.marketingcost.service.costing.CmsQuoteSalarySources;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 /** 生效工资与整批发布证据分开查询，空结果不能自行证明 CMS 已核实无资料。 */
@@ -22,15 +22,15 @@ import org.springframework.stereotype.Repository;
 public class TechnicalDataSalarySourceQuery {
   public record Source(List<CmsCostSourceEffective> rows, Long confirmedBatchId) {}
   private final CmsCostSourceEffectiveMapper sources;
-  private final JdbcTemplate jdbc;
+  private final CmsQuoteSalarySources quoteSalary;
   private final TechnicalDataSalaryReferenceMapper search;
   private final MaterialMasterRawMapper materials;
   private final OaMessageCodec json;
 
-  public TechnicalDataSalarySourceQuery(CmsCostSourceEffectiveMapper sources, JdbcTemplate jdbc,
+  public TechnicalDataSalarySourceQuery(CmsCostSourceEffectiveMapper sources, CmsQuoteSalarySources quoteSalary,
       TechnicalDataSalaryReferenceMapper search, MaterialMasterRawMapper materials, OaMessageCodec json) {
     this.sources = sources;
-    this.jdbc = jdbc;
+    this.quoteSalary = quoteSalary;
     this.search = search;
     this.materials = materials;
     this.json = json;
@@ -102,37 +102,12 @@ public class TechnicalDataSalarySourceQuery {
   private static boolean blank(String value) { return value == null || value.isBlank(); }
   private static String materialOrg(QuoteTechTask task) { return MaterialOrganization.fromPriceOrgCode(task.getApplicableOrgCode()).getCode(); }
 
+  public Source read(String productCode, int year, String businessUnit, String organization) {
+    var source = quoteSalary.read(productCode, year, businessUnit, organization);
+    return new Source(source.rows(), source.confirmedBatchId());
+  }
+
   public Source read(String productCode, int year, String businessUnit) {
-    var rows = sources.selectSalarySources(year, businessUnit, List.of(productCode));
-    var batches = jdbc.query("""
-        SELECT id,status FROM cms_sync_publish_signal
-         WHERE cost_year=? AND (business_unit_type=? OR business_unit_type IS NULL OR business_unit_type='')
-         ORDER BY id DESC LIMIT 1
-        """, (rs, index) -> "SUCCESS".equals(rs.getString("status")) ? rs.getLong("id") : null,
-        year, businessUnit);
-    Long confirmed = batches.isEmpty() ? null : batches.getFirst();
-    var present = rows.stream().map(CmsCostSourceEffective::getSourceType).toList();
-    if (confirmed != null && !present.contains("SALARY_DIRECT")) {
-      Integer rawCount = jdbc.queryForObject("""
-          SELECT COUNT(*) FROM cms_workshop_labor_raw WHERE parent_code=? AND period LIKE ? AND business_unit_type=?
-          """, Integer.class, productCode, year + "-%", businessUnit);
-      if (rawCount != null && rawCount > 0) confirmed = null;
-    }
-    if (confirmed != null && !present.contains("SALARY_INDIRECT")) {
-      var subjectCodes = jdbc.queryForList("""
-          SELECT DISTINCT TRIM(second_subject_code) FROM cms_subject_setting_raw
-           WHERE TRIM(first_subject_name)='工资' AND TRIM(second_subject_name)='辅助人员工资'
-             AND business_unit_type=? AND NULLIF(TRIM(second_subject_code),'') IS NOT NULL
-          """, String.class, businessUnit);
-      if (subjectCodes.size() != 1) confirmed = null;
-      else {
-        Integer rawCount = jdbc.queryForObject("""
-            SELECT COUNT(*) FROM cms_product_subject_cost_raw
-             WHERE parent_code=? AND period LIKE ? AND business_unit_type=? AND TRIM(second_subject_code)=?
-            """, Integer.class, productCode, year + "-%", businessUnit, subjectCodes.getFirst());
-        if (rawCount != null && rawCount > 0) confirmed = null;
-      }
-    }
-    return new Source(rows, confirmed);
+    return read(productCode, year, businessUnit, null);
   }
 }

@@ -18,6 +18,8 @@ public interface CmsAuxSubjectSourceEffectiveService {
   CmsCostSourceEffective refreshSource(
       CmsEffectiveSourceRefreshRequest request, String operator, String businessUnitType);
 
+  CmsCostSourceEffective previewSource(CmsEffectiveSourceRefreshRequest request, String businessUnitType);
+
   CmsEffectiveSourceGenerateResponse refreshParentPeriod(
       CmsEffectiveSourceRefreshRequest request, String operator, String businessUnitType);
 }

@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
+import com.sanhua.marketingcost.service.QuoteMonthCloseLocks;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunBatchProgressSnapshot;
 import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
@@ -23,6 +24,8 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
   private final QuotePricingPeriod pricingPeriods;
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private QuoteMonthCloseLocks monthCloseLocks;
 
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
   @org.springframework.beans.factory.annotation.Autowired
@@ -84,8 +87,13 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
     CostRunBatchProgressSnapshot progress =
         progressService.refreshBatchProgress(submitted.getBatchNo());
     CostRunBatch batch = loadBatch(submitted.getBatchNo());
-    return response(
+    var result = response(
         normalizedOaNo, periodMonth, batch, progress, submitted.isExistingBatch());
+    if (monthCloseLocks != null) {
+      int closed = monthCloseLocks.forOrder(batch.getBusinessUnitType(), periodMonth, normalizedOaNo).size();
+      if (closed > 0) result.setMessage("已跳过 " + closed + " 条已结账产品");
+    }
+    return result;
   }
 
   @Override

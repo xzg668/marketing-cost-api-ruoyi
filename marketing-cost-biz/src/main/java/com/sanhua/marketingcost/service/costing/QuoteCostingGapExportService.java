@@ -10,6 +10,9 @@ import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
+import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceReview;
 import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioWorkbook;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -26,6 +29,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /** 从已检查的缺口导出待补清单；料号去重、供应商整组保留，不重新核算或采用月价。 */
@@ -39,6 +43,7 @@ public class QuoteCostingGapExportService {
   private static final Pattern SUMMARY = Pattern.compile(
       "(缺少供货比率|供货比率不足|缺少原料价格|缺少废料价格|缺少可用价格|原料价格待核对|废料价格待核对|价格待核对|计价资料待完善|取价异常|价格待就绪)：([^；]+)");
   private static final Pattern ERROR_MATERIAL = Pattern.compile("(?:物料|料号|父件)[=:：]([^，；,\\s]+)");
+  private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(QuoteCostingGapExportService.class);
   public static final List<String> RATIO_HEADERS = SupplierSupplyRatioWorkbook.HEADERS;
   private final QuoteRequestQueryService quotes;
   private final MaterialMasterRawMapper materials;
@@ -61,19 +66,22 @@ public class QuoteCostingGapExportService {
   static final class Gap {
     final String code;
     final Set<String> reasons = new LinkedHashSet<>(), products = new LinkedHashSet<>();
+    final Map<Long, String> affectedItems = new LinkedHashMap<>();
     final QuoteRequestItemResponse product;
     boolean priceProblem;
     List<CostingPriceSourceReview.Check> sourceChecks = List.of();
     Gap(String code, QuoteRequestItemResponse product) { this.code = code; this.product = product; }
   }
 
-  @Transactional(readOnly = true)
+  // Each product preview owns its read transaction. One unavailable legacy product must
+  // not roll back the export or make the other products' prices unavailable.
+  @Transactional(readOnly = true, propagation = Propagation.NOT_SUPPORTED)
   public byte[] export(String oaNo, Category category) throws IOException {
     var data = collect(oaNo, category);
     try (var book = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
-      if (category == Category.RATIO) ratioSheet(book, data.gaps(), data.masters(), data.unit(), data.month());
+      if (category == Category.RATIO) ratioSheet(book, data, supplierOffers(oaNo, data));
       detailSheet(book, category.label + "明细", data.gaps(), data.masters());
-      if (category == Category.RATIO) SupplierSupplyRatioWorkbook.addInstructions(book);
+      if (category == Category.RATIO) SupplierSupplyRatioWorkbook.addInstructions(book, true);
       book.write(output); return output.toByteArray();
     }
   }
@@ -82,7 +90,10 @@ public class QuoteCostingGapExportService {
       String unit, String reason, List<String> affectedProducts, Long firstItemId,
       List<CostingPriceSourceReview.Check> sourceChecks) {}
   public record Details(String category, int materialCount, List<Issue> records) {}
-  private record Data(Map<String, Gap> gaps, Map<String, MaterialMasterRaw> masters, String unit, String month) {}
+  private record Data(Map<String, Gap> gaps, Map<String, MaterialMasterRaw> masters, String unit, String month,
+      Map<Long, List<SupplierPriceReview>> checkedReviews) {}
+
+  private record SupplierOffer(SupplierPriceCandidate price, String context) {}
 
   @Transactional(readOnly = true)
   public Details details(String oaNo, Category category) throws IOException {
@@ -108,6 +119,7 @@ public class QuoteCostingGapExportService {
       throw new IllegalArgumentException("报价单不存在或不属于当前可见范围");
     String unit = quote.getBusinessUnitType(), month = periods.currentMonth(unit);
     Map<String, Gap> gaps = new LinkedHashMap<>();
+    Map<Long, List<SupplierPriceReview>> checkedReviews = new HashMap<>();
     var tasks = sql.queryForList("""
         SELECT t.oa_form_item_id,t.result_summary_json FROM lp_cost_run_task t
         JOIN (SELECT oa_form_item_id,MAX(id) id FROM lp_cost_run_task
@@ -127,6 +139,7 @@ public class QuoteCostingGapExportService {
         var request = new QuotePricePrepareGenerateRequest(); request.setPeriodMonth(month); request.setRefreshCandidates(true);
         try {
           var response = prices.checkPriceSources(oaNo, item.getId(), request);
+          if (category == Category.RATIO) checkedReviews.put(item.getId(), response.getSupplierPriceReviews());
           PricePrepareGapPresentation.enrich(response);
           var rows = response.getGaps() == null ? List.<PricePrepareGap>of() : response.getGaps().getRecords();
           if (rows == null || rows.isEmpty()) collectSummary(gaps, item, category, message);
@@ -163,7 +176,7 @@ public class QuoteCostingGapExportService {
     Map<String, MaterialMasterRaw> masters = new HashMap<>();
     if (!gaps.isEmpty()) for (var row : materials.selectByLatestBatchAndCodes(gaps.keySet(), null, unit))
       masters.put(key(row.getMaterialCode()), row);
-    return new Data(gaps, masters, unit, month);
+    return new Data(gaps, masters, unit, month, checkedReviews);
   }
 
   private void enrichManufacturingGaps(String oaNo, String unit, String month, Map<String, Gap> gaps) {
@@ -243,13 +256,68 @@ public class QuoteCostingGapExportService {
     if (text(code).isBlank()) return;
     var gap = result.computeIfAbsent(key(code), ignored -> new Gap(code.trim(), item));
     gap.reasons.add(reason); gap.products.add(productCode(item));
+    if (item.getId() != null) gap.affectedItems.put(item.getId(), productCode(item));
     gap.priceProblem |= Set.of("缺少原料价格", "缺少废料价格", "缺少可用价格", "原料价格待核对", "废料价格待核对", "价格待核对", "取价异常", "价格待就绪").contains(reason)
         || reason.contains("缺少行情档位");
   }
 
-  private void ratioSheet(XSSFWorkbook book, Map<String, Gap> gaps, Map<String, MaterialMasterRaw> masters,
-      String unit, String month) {
-    var sheet = new SupplierSupplyRatioWorkbook(book);
+  private Map<String, List<SupplierOffer>> supplierOffers(String oaNo, Data data) {
+    Map<Long, Set<String>> codesByItem = new LinkedHashMap<>();
+    data.gaps().forEach((code, gap) -> gap.affectedItems.keySet().forEach(id ->
+        codesByItem.computeIfAbsent(id, ignored -> new LinkedHashSet<>()).add(code)));
+    Map<String, List<SupplierOffer>> offers = new HashMap<>();
+    for (var item : codesByItem.entrySet()) {
+      Long id = item.getKey();
+      var reviews = data.checkedReviews().containsKey(id) ? data.checkedReviews().get(id)
+          : checkSupplierReviews(oaNo, id, data.month());
+      if (reviews == null) continue;
+      for (var review : reviews) {
+        var scope = review.scope();
+        if (scope == null || review.candidates() == null || !Objects.equals(oaNo, scope.oaNo()) || !Objects.equals(id, scope.oaFormItemId())
+            || !Objects.equals(data.unit(), scope.businessUnitType()) || !Objects.equals(data.month(), scope.periodMonth())) continue;
+        String code = key(scope.materialCode());
+        if (!item.getValue().contains(code)) continue;
+        String context = data.gaps().get(code).affectedItems.get(id) + " / " + text(scope.orgCode())
+            + " / " + priceTypeLabel(scope.priceType());
+        for (var candidate : review.candidates()) {
+          var price = candidate.price();
+          if (price == null || price.unitPrice() == null || supplierKey(price.supplierCode(), price.supplierName()).isBlank()) continue;
+          offers.computeIfAbsent(code, ignored -> new ArrayList<>()).add(new SupplierOffer(price, context));
+        }
+      }
+    }
+    return offers;
+  }
+
+  private List<SupplierPriceReview> checkSupplierReviews(String oaNo, Long itemId, String month) {
+    var request = new QuotePricePrepareGenerateRequest();
+    request.setPeriodMonth(month);
+    request.setRefreshCandidates(true);
+    try {
+      return prices.checkPriceSources(oaNo, itemId, request).getSupplierPriceReviews();
+    } catch (QuoteIngestException | IllegalArgumentException unavailable) {
+      // A legacy gap may outlive its prepared BOM. The import sheet remains usable with blank prices.
+      LOG.warn("整单供货比率导出未取得候选价，报价单={}，明细行={}，原因={}", oaNo, itemId,
+          unavailable.getClass().getSimpleName());
+      return List.of();
+    }
+  }
+
+  private static String priceTypeLabel(String type) {
+    return switch (text(type)) {
+      case "FIXED", "PURCHASE_FIXED" -> "固定价";
+      case "LINKED" -> "联动价";
+      case "RANGE" -> "区间价";
+      case "ORDER", "ODS_ORDER" -> "订单价";
+      case "TIER", "ODS_TIER" -> "阶梯价";
+      default -> text(type);
+    };
+  }
+
+  private void ratioSheet(XSSFWorkbook book, Data data, Map<String, List<SupplierOffer>> offers) {
+    var gaps = data.gaps(); var masters = data.masters();
+    String unit = data.unit(), month = data.month();
+    var sheet = new SupplierSupplyRatioWorkbook(book, true);
     if (gaps.isEmpty()) { sheet.finish(); return; }
     var params = new HashMap<String, Object>(); params.put("unit", unit); params.put("codes", gaps.values().stream().map(g -> g.code).toList());
     params.put("date", LocalDate.now(CostPricingPeriodUtils.BUSINESS_ZONE)); params.put("month", month);
@@ -266,6 +334,14 @@ public class QuoteCostingGapExportService {
         if (group != null && !supplierKey(row).isBlank()) group.putIfAbsent(supplierKey(row), new HashMap<>(row));
       }
     }
+    offers.forEach((code, rows) -> {
+      var group = suppliers.get(code);
+      for (var offer : rows) {
+        var price = offer.price();
+        var row = Map.<String, Object>of("supplier_code", text(price.supplierCode()), "supplier_name", text(price.supplierName()));
+        group.putIfAbsent(supplierKey(row), new HashMap<>(row));
+      }
+    });
     // 回导按料号整组替换，必须同时保留已有的0%、空比例和非本次候选的关系。
     for (var relation : ratios.currentRelations(unit, null, gaps.values().stream().map(g -> g.code).toList())) {
       var row = new HashMap<String, Object>(); row.put("supplier_code", relation.getSupplierCode());
@@ -295,6 +371,11 @@ public class QuoteCostingGapExportService {
       }
       if (group.isEmpty()) group.put("", Map.of());
       for (var supplier : group.values()) {
+        var values = offerAmounts(supplier, group.values(), offers.getOrDefault(key(gap.code), List.of()));
+        BigDecimal unitPrice = values.size() == 1 ? values.keySet().iterator().next() : null;
+        String detail = values.size() > 1 ? values.entrySet().stream()
+            .map(price -> price.getKey().toPlainString() + "（" + String.join("、", price.getValue()) + "）")
+            .collect(java.util.stream.Collectors.joining("\n")) : null;
         // 规格和型号分别写入；有档案但型号缺失时保持空白，不用规格冒充型号。
         sheet.append(new SupplierSupplyRatioWorkbook.Entry(gap.code,
             first(master == null ? null : master.getMaterialName(), text(supplier.get("material_name"))),
@@ -304,10 +385,27 @@ public class QuoteCostingGapExportService {
             first(master == null ? null : master.getShapeAttr(), text(supplier.get("shape"))),
             text(supplier.get("supplier_code")), text(supplier.get("supplier_name")),
             supplier.get("ratio") instanceof BigDecimal ratio ? ratio : null,
-            String.join("；", gap.reasons), text(supplier.get("rule"))));
+            String.join("；", gap.reasons), text(supplier.get("rule"))), unitPrice, detail);
       }
     }
     sheet.finish();
+  }
+
+  private static Map<BigDecimal, Set<String>> offerAmounts(Map<String, Object> supplier,
+      Collection<Map<String, Object>> group, List<SupplierOffer> offers) {
+    String code = text(supplier.get("supplier_code")), name = key(text(supplier.get("supplier_name")));
+    String identity = supplierKey(supplier);
+    boolean uniqueName = !code.isBlank() && !name.isBlank() && group.stream()
+        .filter(row -> name.equals(key(text(row.get("supplier_name"))))).count() == 1;
+    Map<BigDecimal, Set<String>> values = new LinkedHashMap<>();
+    for (var offer : offers) {
+      var price = offer.price();
+      if (identity.equals(supplierKey(price.supplierCode(), price.supplierName()))
+          || uniqueName && text(price.supplierCode()).isBlank() && name.equals(key(price.supplierName()))) {
+        values.computeIfAbsent(price.unitPrice().stripTrailingZeros(), ignored -> new LinkedHashSet<>()).add(offer.context());
+      }
+    }
+    return values;
   }
 
   private void detailSheet(XSSFWorkbook book, String title, Map<String, Gap> gaps, Map<String, MaterialMasterRaw> masters) {
@@ -339,7 +437,10 @@ public class QuoteCostingGapExportService {
     for (int i=0;i<values.length;i++) row.createCell(i, CellType.STRING).setCellValue(text(values[i]));
   }
   private static String supplierKey(Map<String, Object> row) {
-    String code = key(text(row.get("supplier_code"))), name = key(text(row.get("supplier_name")));
+    return supplierKey(text(row.get("supplier_code")), text(row.get("supplier_name")));
+  }
+  private static String supplierKey(String supplierCode, String supplierName) {
+    String code = key(supplierCode), name = key(supplierName);
     return !code.isBlank() ? "CODE:"+code : name.isBlank() ? "" : "NAME:"+name;
   }
   private static String productCode(QuoteRequestItemResponse item) { return first(item.getMaterialNo(), item.getSunlModel(), String.valueOf(item.getId())); }

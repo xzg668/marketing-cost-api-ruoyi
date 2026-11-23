@@ -28,6 +28,10 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.MountableFile;
 
@@ -269,6 +273,66 @@ class OriginalLinkedImportIntegrationTest {
       assertThat(current).hasSize(2);
       assertThat(current).extracting(PriceLinkedItem::getSourceRowNumber).containsExactlyInAnyOrder(2, 3);
     }
+  }
+
+  @Test
+  void voidsOnlyTheSelectedUploadAndAllowsTheSameWorkbookToBeReimported() throws Exception {
+    authenticateUploadOwner("alice", "COMMERCIAL", "price:linked-item:import");
+    try {
+      var original = command(workbook("因素!E2", "因素!E3"));
+      long originalId = service.confirm(confirmed(original, service.preview(original))).getSourceUploadBatchIds().getFirst();
+      var corrected = command(workbook("因素!E2+2", "因素!E3+1"));
+      var beforeVoid = service.preview(corrected);
+      long voidId = service.confirm(confirmed(corrected, beforeVoid)).getSourceUploadBatchIds().getFirst();
+      long historicalPriceCount = count("lp_finance_effective_price");
+      var carriedSource = items.selectList(null).stream()
+          .filter(row -> row.getSourceUploadBatchId().equals(voidId)).findFirst().orElseThrow();
+      var carried = new PriceLinkedItem();
+      org.springframework.beans.BeanUtils.copyProperties(carriedSource, carried);
+      carried.setId(null);
+      carried.setPricingMonth("2026-11");
+      items.insert(carried);
+      assertThat(service.previewVoid(voidId, "2026-10", "COMMERCIAL")).isEqualTo(3);
+      assertThatThrownBy(() -> service.previewVoid(voidId, "2026-11", "COMMERCIAL"))
+          .isInstanceOf(AccessDeniedException.class);
+
+      authenticateUploadOwner("bob", "COMMERCIAL", "price:linked-item:import", "price:linked-item:import-history:all");
+      assertThatThrownBy(() -> service.voidUpload(voidId, "2026-10", "COMMERCIAL", 3))
+          .isInstanceOf(AccessDeniedException.class);
+      assertThat(batches.selectById(voidId).getStatus()).isEqualTo("PUBLISHED");
+
+      authenticateUploadOwner("alice", "HOUSEHOLD", "*:*:*");
+      assertThatThrownBy(() -> service.voidUpload(voidId, "2026-10", "COMMERCIAL", 3))
+          .isInstanceOf(AccessDeniedException.class);
+
+      authenticateUploadOwner("alice", "COMMERCIAL", "price:linked-item:import");
+      byte[] savedWorkbook = batches.findSourceWorkbook(voidId).getSourceWorkbook();
+      assertThatThrownBy(() -> service.voidUpload(voidId, "2026-10", "COMMERCIAL", 2))
+          .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("条数已变化");
+      assertThat(service.previewVoid(voidId, "2026-10", "COMMERCIAL")).isEqualTo(3);
+      service.voidUpload(voidId, "2026-10", "COMMERCIAL", 3);
+      service.voidUpload(voidId, "2026-10", "COMMERCIAL", 3);
+      assertThat(batches.selectById(voidId).getStatus()).isEqualTo("VOIDED");
+      assertThat(batches.findSourceWorkbook(voidId).getSourceWorkbook()).isEqualTo(savedWorkbook);
+      assertThat(items.selectList(null)).hasSize(5).filteredOn(row -> "PUBLISHED".equals(row.getRuleStatus()))
+          .extracting(PriceLinkedItem::getSourceUploadBatchId).containsExactly(originalId, originalId);
+      assertThat(count("lp_finance_effective_price")).isEqualTo(historicalPriceCount);
+
+      var reimport = service.confirm(confirmed(corrected, service.preview(corrected)));
+      assertThat(reimport.getSourceUploadBatchIds()).singleElement().isNotEqualTo(voidId);
+      assertThat(reimport.getEffectivePriceGeneratedCount()).isEqualTo(2);
+      assertThat(items.selectList(null)).filteredOn(row -> reimport.getSourceUploadBatchIds().contains(row.getSourceUploadBatchId()))
+          .extracting(PriceLinkedItem::getRuleRevision).containsExactly(3, 3);
+    } finally {
+      SecurityContextHolder.clearContext();
+    }
+  }
+
+  private static void authenticateUploadOwner(String user, String unit, String... permissions) {
+    var auth = new UsernamePasswordAuthenticationToken(user, "n/a",
+        java.util.Arrays.stream(permissions).map(SimpleGrantedAuthority::new).toList());
+    auth.setDetails(java.util.Map.of("businessUnitType", unit));
+    SecurityContextHolder.getContext().setAuthentication(auth);
   }
 
   @Test

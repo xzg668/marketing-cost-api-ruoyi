@@ -66,6 +66,7 @@ public final class OriginalLinkedWorkbookParser {
       var layouts = LinkedApprovalTable.layouts(workbook);
       Map<SourceRow, String> factorProblems = new LinkedHashMap<>();
       Map<Address, FactorCell> candidates = factorCells(workbook, factorProblems);
+      addInlineMarketFactors(layouts, candidates);
       addApprovalFactors(layouts, candidates, catalog, context);
       Map<String, Bindings> byOrganization = new LinkedHashMap<>();
       for (var layout : layouts) {
@@ -221,7 +222,7 @@ public final class OriginalLinkedWorkbookParser {
       FactorCell factor = entry.getValue();
       if (!publicKeys.contains(factor.canonicalKey())
           && !(board && BoardStainlessGrade.fromFactorKey(factor.canonicalKey()) != null)
-          && !Set.of("APPROVAL_PUBLIC_FACTOR", "FINANCE_FACTOR_TABLE").contains(factor.bindingBasis())) continue;
+          && !Set.of("APPROVAL_PUBLIC_FACTOR", "FINANCE_FACTOR_TABLE", "INLINE_MARKET_FACTOR").contains(factor.bindingBasis())) continue;
       // 每个源格独立保留原输入；多个Cu源格在运行时指向同一个财务身份。
       String variable = "factor_" + variables.size();
       variables.put(entry.getKey(), variable);
@@ -371,6 +372,32 @@ public final class OriginalLinkedWorkbookParser {
       case "克", "G", "元/克", "元/G" -> FactorPriceUnit.CNY_G;
       default -> throw new IllegalArgumentException("因素单位无法识别：" + sourceUnit);
     };
+  }
+
+  /** The combined price sheet can carry a two-column market block below its material rows. */
+  private void addInlineMarketFactors(List<LinkedApprovalTable.Layout> layouts,
+      Map<Address, FactorCell> factors) {
+    for (var layout : layouts) {
+      if (layout.approval()) continue;
+      Header main = layout.header();
+      int labelColumn = main.columns().get("单价");
+      int valueColumn = main.columns().get("是否含税");
+      if (valueColumn != labelColumn + 1) continue;
+      int lastMaterial = main.row();
+      for (Row row : main.sheet()) {
+        if (row.getRowNum() > main.row() && !text(at(row, main, "物料代码")).isBlank())
+          lastMaterial = row.getRowNum();
+      }
+      for (Row row : main.sheet()) {
+        if (row.getRowNum() <= lastMaterial) continue;
+        String key = canonicalKeys.build("平均价", text(row.getCell(labelColumn)));
+        if (!Set.of("AVG|1#CU", "AVG|1#ZN", "AVG|1#AG", "AVG|1#SN",
+            "AVG|美国柜装黄铜", "AVG|H65黄铜边料").contains(key)) continue;
+        var address = new Address(main.sheet().getSheetName(),
+            new CellReference(row.getRowNum(), valueColumn).formatAsString());
+        factors.putIfAbsent(address, new FactorCell(address, key, "元/公斤", key, "INLINE_MARKET_FACTOR"));
+      }
+    }
   }
 
   /** 只在明确的加工费审批物料区右侧识别行情块，行加工费始终沿实际公式读取。 */

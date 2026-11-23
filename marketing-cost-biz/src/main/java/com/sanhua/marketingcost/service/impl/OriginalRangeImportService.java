@@ -9,6 +9,7 @@ import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader;
 import com.sanhua.marketingcost.service.impl.OriginalRangeWorkbookParser.Rule;
 import com.sanhua.marketingcost.service.pricing.FactorPriceScope;
+import com.sanhua.marketingcost.service.pricing.OriginalRuleGroups;
 import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -72,6 +73,67 @@ public class OriginalRangeImportService {
   }
 
   public PublishedRule detail(Long id) {
+    var item = requireOriginal(id);
+    var saved = snapshots.read(item);
+    return new PublishedRule(
+        item.getId(),
+        item.getPricingMonth(),
+        item.getSourceFile(),
+        saved,
+        calculator.extrapolation(saved.rule()));
+  }
+
+  public TemplateFile supplementTemplate(Long id) {
+    return currentWorkbook(requireOriginal(id));
+  }
+
+  public List<RuleOption> options(String pricingMonth, String materialCode) {
+    String month = FactorPriceScope.month(pricingMonth);
+    String code = materialCode == null ? "" : materialCode.trim();
+    if (code.isEmpty() || code.length() > 64) throw new IllegalArgumentException("请填写有效料号");
+    String businessUnit = BusinessUnitContext.getCurrentBusinessUnitType();
+    if (businessUnit == null) throw new IllegalArgumentException("请先选择业务单元");
+    var candidates = rules.selectList(Wrappers.lambdaQuery(PriceRangeFactorRule.class)
+        .eq(PriceRangeFactorRule::getBusinessUnitType, businessUnit)
+        .eq(PriceRangeFactorRule::getPricingMonth, month)
+        .eq(PriceRangeFactorRule::getMaterialCode, code)
+        .eq(PriceRangeFactorRule::getRuleStatus, "PUBLISHED")
+        .isNotNull(PriceRangeFactorRule::getSourceUploadBatchId)
+        .orderByDesc(PriceRangeFactorRule::getId));
+    return OriginalRuleGroups.ranges(candidates).stream()
+        .map(row -> new RuleOption(row.getId(), row.getMaterialCode(), row.getMaterialName(),
+            row.getSupplierCode(), row.getSupplierName(), row.getSpecModel(), row.getOrgCode(),
+            row.getSourceFile()))
+        .toList();
+  }
+
+  public Publication addBand(Long id, BandAddition request) {
+    var reference = requireOriginal(id);
+    if (request == null) throw new IllegalArgumentException("请填写新增档位及单价");
+    var bounds = OriginalRangeBandWorkbook.bounds(
+        request.low(), request.high(), request.includeLow(), request.includeHigh());
+    var file = currentWorkbook(reference);
+    var bytes = OriginalRangeBandWorkbook.append(
+        file.bytes(), snapshots.read(reference).rule(), bounds, request.price());
+    var command = new Command(bytes, file.name(), reference.getBusinessUnitType(),
+        reference.getPricingMonth(), null, null, id);
+    var preview = preview(command);
+    return confirm(new Command(bytes, file.name(), command.businessUnitType(), command.pricingMonth(),
+        preview.fileSha256(), preview.previewFingerprint(), id));
+  }
+
+  private TemplateFile currentWorkbook(PriceRangeFactorRule item) {
+    var current = OriginalRuleGroups.ranges(publishedVersions(item));
+    if (!containsRule(current, item.getId()))
+      throw new IllegalArgumentException("区间价已有新版本，请从列表中最新原稿补充");
+    requireOneWorkbook(current);
+    var file = batches.findSourceWorkbook(item.getSourceUploadBatchId());
+    if (file == null || file.getSourceWorkbook() == null || file.getSourceWorkbook().length == 0)
+      throw new IllegalArgumentException("此区间原稿未留存 Excel，请使用原始采购价表补充档位");
+    return new TemplateFile(file.getFileName(), file.getSourceWorkbook());
+  }
+
+  private PriceRangeFactorRule requireOriginal(Long id) {
     var item = rules.selectById(id);
     if (!OriginalRangeRuleSnapshot.isOriginal(item))
       throw new IllegalArgumentException("区间原稿规则不存在");
@@ -80,13 +142,7 @@ public class OriginalRangeImportService {
         && !BusinessUnitContext.isAdmin()
         && !current.equals(item.getBusinessUnitType()))
       throw new IllegalArgumentException("不能读取其他业务单元的区间原稿");
-    var saved = snapshots.read(item);
-    return new PublishedRule(
-        item.getId(),
-        item.getPricingMonth(),
-        item.getSourceFile(),
-        saved,
-        calculator.extrapolation(saved.rule()));
+    return item;
   }
 
   public Publication confirm(Command command) {
@@ -180,10 +236,24 @@ public class OriginalRangeImportService {
   }
 
   private Prepared prepare(Command command, Scope scope, Set<String> selectedRows) {
+    var reference = command.supplementRuleId() == null ? null : requireOriginal(command.supplementRuleId());
+    if (reference != null && (!scope.businessUnit().equals(reference.getBusinessUnitType())
+        || !scope.month().equals(reference.getPricingMonth())))
+      throw new IllegalArgumentException("补充档位的业务单元和月份必须与所选规则一致");
     var parsed = parser.parse(command.bytes(), command.fileName(), scope.businessUnit());
-    if (selectedRows != null) parsed = new OriginalRangeWorkbookParser.ParsedWorkbook(
+    String fileHash = PriceLinkedImportFileDigest.sha256(command.bytes());
+    String inputFingerprint;
+    if (reference != null) {
+      inputFingerprint = hash(List.of(fileHash, command.fileName(), scope, OriginalRangeRuleSnapshot.VERSION,
+          reference.getId()));
+      parsed = prepareSupplement(parsed, reference, inputFingerprint);
+    } else {
+      inputFingerprint = hash(List.of(fileHash, command.fileName(), scope, OriginalRangeRuleSnapshot.VERSION,
+          selectedRows == null ? List.of() : selectedRows.stream().sorted().toList()));
+      if (selectedRows != null) parsed = new OriginalRangeWorkbookParser.ParsedWorkbook(
         parsed.rules().stream().filter(r -> selectedRows.contains(r.sheet() + "!" + r.row())).toList(),
         parsed.errors().stream().filter(e -> e.row() == null || selectedRows.contains(e.sheet() + "!" + e.row())).toList());
+    }
     List<OriginalRangeWorkbookParser.RowError> errors = new ArrayList<>(parsed.errors());
     List<PreviewRow> rows = new ArrayList<>();
     Map<String, PriceFactorContext> financial = new TreeMap<>();
@@ -251,7 +321,6 @@ public class OriginalRangeImportService {
               previous.containsKey(key) ? "REVISION" : "NEW",
               issue));
     }
-    String fileHash = PriceLinkedImportFileDigest.sha256(command.bytes());
     Map<String, Object> financeVersions = new TreeMap<>();
     financial.forEach(
         (org, context) ->
@@ -261,9 +330,6 @@ public class OriginalRangeImportService {
                     context.financial().batchId(),
                     context.financial().revision(),
                     context.financial().scope())));
-    String inputFingerprint =
-        hash(List.of(fileHash, command.fileName(), scope, OriginalRangeRuleSnapshot.VERSION,
-            selectedRows == null ? List.of() : selectedRows.stream().sorted().toList()));
     boolean replay = unchangedImport(sources, previous, fileHash);
     var preview =
         new Preview(
@@ -286,6 +352,44 @@ public class OriginalRangeImportService {
             List.copyOf(errors),
             Collections.unmodifiableMap(financial), parsed.notices());
     return new Prepared(preview, sources, previous, financial, inputFingerprint);
+  }
+
+  private OriginalRangeWorkbookParser.ParsedWorkbook prepareSupplement(
+      OriginalRangeWorkbookParser.ParsedWorkbook parsed, PriceRangeFactorRule reference, String inputFingerprint) {
+    var versions = publishedVersions(reference);
+    var current = OriginalRuleGroups.ranges(versions);
+    if (!containsRule(current, reference.getId())) {
+      boolean replay = !current.isEmpty()
+          && current.stream().allMatch(item -> inputFingerprint.equals(snapshots.read(item).inputFingerprint()));
+      if (!replay)
+        throw new IllegalArgumentException("区间价已有新版本，请刷新列表后从最新原稿补充");
+    }
+    int revision = OriginalRuleGroups.revision(reference);
+    var referenced = versions.stream()
+        .filter(item -> OriginalRuleGroups.revision(item) == revision)
+        .toList();
+    requireOneWorkbook(referenced);
+    var originalRows = referenced.stream()
+        .flatMap(item -> snapshots.read(item).sources().stream())
+        .toList();
+    return OriginalRangeSupplement.prepare(parsed, originalRows);
+  }
+
+  private List<PriceRangeFactorRule> publishedVersions(PriceRangeFactorRule reference) {
+    return rules.selectList(Wrappers.lambdaQuery(PriceRangeFactorRule.class)
+        .eq(PriceRangeFactorRule::getBusinessUnitType, reference.getBusinessUnitType())
+        .eq(PriceRangeFactorRule::getPricingMonth, reference.getPricingMonth())
+        .eq(PriceRangeFactorRule::getRuleIdentityKey, reference.getRuleIdentityKey())
+        .eq(PriceRangeFactorRule::getRuleStatus, "PUBLISHED"));
+  }
+
+  private static boolean containsRule(List<PriceRangeFactorRule> candidates, Long id) {
+    return candidates.stream().anyMatch(item -> Objects.equals(item.getId(), id));
+  }
+
+  private static void requireOneWorkbook(List<PriceRangeFactorRule> rules) {
+    if (rules.stream().map(PriceRangeFactorRule::getSourceUploadBatchId).distinct().count() > 1)
+      throw new IllegalArgumentException("所选规则有多份原稿并行生效，请在月度价格文件夹中补充");
   }
 
   private boolean unchangedImport(
@@ -506,7 +610,21 @@ public class OriginalRangeImportService {
       String businessUnitType,
       String pricingMonth,
       String expectedSha256,
-      String previewFingerprint) {}
+      String previewFingerprint,
+      Long supplementRuleId) {
+    public Command(byte[] bytes, String fileName, String businessUnitType, String pricingMonth,
+        String expectedSha256, String previewFingerprint) {
+      this(bytes, fileName, businessUnitType, pricingMonth, expectedSha256, previewFingerprint, null);
+    }
+  }
+
+  public record TemplateFile(String name, byte[] bytes) {}
+
+  public record BandAddition(BigDecimal low, BigDecimal high, boolean includeLow, boolean includeHigh,
+      BigDecimal price) {}
+
+  public record RuleOption(Long id, String materialCode, String materialName, String supplierCode,
+      String supplierName, String specModel, String orgCode, String sourceFile) {}
 
   public record Preview(
       String fileSha256,

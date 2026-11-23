@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.jjb.JjbReadModel;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.service.costing.MonthlyProductCost.AdoptedPrice;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
+import java.math.BigDecimal;
+import java.time.YearMonth;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -69,6 +73,29 @@ class JjbPricePresentationTest {
     for(var kind:List.of("SETTLE_LINKED","SETTLE_FIXED","LINKED","PURCHASE_FIXED"))
       assertThat(new JjbPricePresentation(json).apply(List.of(row),null,List.of(preparation(kind,"只","M",1)))
           .getFirst().settlementCopperWeightG()).isNull();
+  }
+
+  @Test void recoveredMarketFactorsShowTheActuallySubstitutedPrices() {
+    var request = new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.parse("2026-11"),
+        "COMMERCIAL", "301070047", "", "千克", "CNY", TaxBasis.EXCLUDED, null),
+        "220", NonCuConditions.empty(), BigDecimal.ONE);
+    var coverage = new MonthlyPriceCoverage(Set.of("220"), QuantityInterval.all(), ConditionDomain.any());
+    BigDecimal base = new BigDecimal("87.16814159"), customer = new BigDecimal("113.71681416");
+    var source = new MonthlyAdoptionPlan.SourceEvidence("""
+        {"sourceKind":"LINKED","source":{"selected":{"formulaExpr":"(90+8.5)/1.13"}}}
+        """);
+    var selection = new MonthlyAdoptionPlan.Selection(9L, coverage,
+        MonthlyAdoptionPlan.PriceFact.normal(base, source, Set.of()));
+    var pair = new MonthlyPriceScenarios.Pair(9L, source.sha256(), base, customer, """
+        {"recoveredLinkedCalculation":{"expression":"([factor_0]+8.5)/1.13",
+        "sourceTaxIncluded":false,"factorBindings":{"factor_0":{"canonicalKey":"AVG|1#CU","unit":"CNY_KG"}},
+        "inputs":{"factor_0":90},"customerInputs":{"factor_0":120}}}
+        """);
+    var result = new JjbPriceCalculation(json).describe(new AdoptedPrice(request, selection), pair);
+    assertThat(result.baseFactors()).contains("铜 90 元/公斤");
+    assertThat(result.customerFactors()).contains("铜 120 元/公斤");
+    assertThat(result.formula()).contains("基准：((90)+8.5)/1.13=87.16814159",
+        "客户：((120)+8.5)/1.13=113.71681416");
   }
 
   private PricePrepareItem preparation(String kind, String unit, String code, int multiplier) throws Exception {

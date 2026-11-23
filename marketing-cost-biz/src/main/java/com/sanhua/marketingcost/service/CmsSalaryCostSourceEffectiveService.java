@@ -18,6 +18,11 @@ public interface CmsSalaryCostSourceEffectiveService {
   CmsCostSourceEffective refreshSource(
       CmsEffectiveSourceRefreshRequest request, String operator, String businessUnitType);
 
+  CmsCostSourceEffective previewDirectSource(
+      String parentCode, String period, String businessUnitType);
+
+  CmsCostSourceEffective previewIndirectSource(String parentCode, String period, String businessUnitType);
+
   CmsEffectiveSourceGenerateResponse refreshParentPeriod(
       CmsEffectiveSourceRefreshRequest request, String operator, String businessUnitType);
 }

@@ -71,7 +71,7 @@ public class OaQuotationRequestMapper {
     request.setSourceSystem(peer.sourceSystem());
     request.setExternalFormNo(requestId);
     request.setOaNo(formNo);
-    // 正式需求仅接收一次；内部基线供核算与审批快照关联，不由 OA 传入或递增。
+    // 新推送和修订均属于同一 OA 流程，内部报文与接入流水分别保存各次需求。
     request.setVersion("1");
     request.setHeader(header(main, process, sr, sc5, sc6));
     request.setExtraFields(extras(main, headers, "mainData"));

@@ -23,6 +23,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 检查整单资料、采用当前提交版本，再发起核算；此入口不调用 OA 提交流程。 */
 @Service
 public class QuoteCostingPreparationService {
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private com.sanhua.marketingcost.service.QuoteMonthCloseLocks monthCloseLocks;
+
   private final QuotePricingPeriod pricingPeriods;
 
   public record Request(Long itemId, String periodMonth, boolean force) {}
@@ -132,6 +135,9 @@ public class QuoteCostingPreparationService {
       var batchRequest = new QuoteBatchCostRunRequest();
       batchRequest.setPeriodMonth(month);
       return new Outcome(state(oaNo), List.of(), batches.submitForPreparation(oaNo, batchRequest, operatorName), null);
+    }
+    if (monthCloseLocks != null) {
+      monthCloseLocks.requireOpen(BusinessUnitContext.getCurrentBusinessUnitType(), month, itemId);
     }
     technicalSubmissions.requireSubmitted(formId, itemId);
     repriceLock.assertCostRunAllowed(oaNo);

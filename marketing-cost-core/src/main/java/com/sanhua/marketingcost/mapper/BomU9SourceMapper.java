@@ -26,4 +26,18 @@ public interface BomU9SourceMapper extends BaseMapper<BomU9Source> {
       """)
   List<BomU9Source> selectAlternativeMetadata(
       @Param("priceOrgCode") String priceOrgCode, @Param("parents") List<String> parents);
+
+  @Select("""
+      <script>
+      SELECT price_org_code,parent_material_no,child_material_no,bom_purpose,bom_version,
+             child_seq,effective_from,effective_to,qty_per_parent,parent_base_qty
+      FROM lp_bom_u9_source
+      WHERE price_org_code=#{priceOrgCode}
+        AND parent_base_qty &gt; 0
+        AND parent_material_no IN
+      <foreach collection="parents" item="parent" open="(" separator="," close=")">#{parent}</foreach>
+      </script>
+      """)
+  List<BomU9Source> selectParentBases(@Param("priceOrgCode") String priceOrgCode,
+      @Param("parents") List<String> parents);
 }

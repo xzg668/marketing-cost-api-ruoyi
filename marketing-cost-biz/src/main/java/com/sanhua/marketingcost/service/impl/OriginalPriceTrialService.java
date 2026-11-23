@@ -61,15 +61,16 @@ public class OriginalPriceTrialService {
     var source = FinanceEffectivePriceService.SourceRule.linked(item);
     var context = context(source.key(), item.getPricingMonth(), request);
     var saved = effectivePrices.calculation(effectivePrices.require(item, context.financial()));
-    var rule = saved.linkedRule();
-    if (rule == null || saved.linked() == null) throw new IllegalArgumentException("财务有效价缺少联动计算依据");
-    context = savedContext(saved.context(), request.pricingMonth(), request.customerCopperPerTon() != null
+    if (saved.linkedRule() == null || saved.linked() == null) throw new IllegalArgumentException("财务有效价缺少联动计算依据");
+    var inputs = OriginalLinkedRuleCalculator.quotationInputs(linkedCalculator, item, saved.linkedRule(), saved.context());
+    var rule = inputs.rule();
+    context = savedContext(inputs.context(), request.pricingMonth(), request.customerCopperPerTon() != null
         && rule.factors().values().stream().anyMatch(factor -> com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(factor.canonicalKey())));
     var customerContext =
         request.customerCopperPerTon() == null
             ? context
             : context.withCustomerCopperPerTon(request.customerCopperPerTon());
-    var p0 = saved.linked();
+    var p0 = rule == saved.linkedRule() ? saved.linked() : linkedCalculator.calculate(rule, context.financialOnly());
     var p1 =
         OriginalLinkedPriceRuntime.changedInputs(rule, p0, customerContext)
             ? linkedCalculator.calculate(rule, customerContext)

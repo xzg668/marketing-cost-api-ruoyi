@@ -87,6 +87,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private final CostInputRevisionService inputRevisionService;
   private final com.sanhua.marketingcost.service.jjb.JjbReadService sheetReader;
   private final com.sanhua.marketingcost.service.JjbExportService sheetExporter;
+  @Autowired(required = false)
+  private com.sanhua.marketingcost.service.QuoteMonthCloseLocks monthCloseLocks;
 
   @Autowired
   public QuoteCostRunWorkbenchServiceImpl(
@@ -135,6 +137,9 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       return getHistoricalCostRun(oaNo, oaFormItemId, versionId);
     }
     Scope scope = requireScope(oaNo, oaFormItemId, periodMonth);
+    Long lockedVersion = monthCloseLocks == null ? null
+        : monthCloseLocks.version(scope.businessUnitType(), scope.periodMonth(), scope.oaFormItemId());
+    if (lockedVersion != null) return getHistoricalCostRun(oaNo, oaFormItemId, lockedVersion);
     QuoteCostRunSummaryResponse latestTrial = latestInProgressVersion(scope);
     QuoteCostRunSummaryResponse latestConfirmed = latestSuccessfulVersion(scope);
     QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed);
@@ -181,6 +186,9 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     oaFormItemMapper.selectForCostingWrite(oaFormItemId);
     request = request == null ? new QuoteCostRunTrialRequest() : request;
     Scope scope = requireScope(oaNo, oaFormItemId, request.getPeriodMonth());
+    if (monthCloseLocks != null) {
+      monthCloseLocks.requireOpen(scope.businessUnitType(), scope.periodMonth(), scope.oaFormItemId());
+    }
     QuoteCuAdjustmentCalcResult calculation = calculate(scope, request, true);
     QuoteCostRunVersion version = calculation.version();
     completeVersion(
@@ -324,6 +332,10 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         || !scope.oaFormItemId().equals(previous.getOaFormItemId())
         || !QuoteCostRunStatus.isCurrentSuccess(previous.getStatus())) {
       throw new QuoteIngestException("原当前成功版本状态异常，本次核算未切换");
+    }
+    if (monthCloseLocks != null && previousVersionId.equals(
+        monthCloseLocks.version(scope.businessUnitType(), previous.getPricingMonth(), scope.oaFormItemId()))) {
+      return;
     }
     QuoteCostRunVersion historyPatch = new QuoteCostRunVersion();
     historyPatch.setStatus(STATUS_HISTORY);

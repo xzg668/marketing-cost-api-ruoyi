@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
 import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -308,14 +309,16 @@ public class TechnicalDataPublicSourceCheck {
           salary.read(
               context.productCode(),
               YearMonth.parse(context.accountingMonth()).getYear(),
-              context.businessUnitType());
+              context.businessUnitType(),
+              context.materialOrganizationCode());
       var rows = source.rows();
+      var modelMatch = rows.isEmpty() ? null : rows.getFirst().getSalaryModelMatch();
       boolean invalid =
           rows.stream()
                   .anyMatch(row -> row.getAmountYuan() == null || row.getAmountYuan().signum() < 0)
               || rows.stream().map(row -> row.getSourceType()).distinct().count() != rows.size();
-      String reference =
-          codec.write(
+      var evidence =
+          new LinkedHashMap<String, Object>(
               Map.of(
                   "source",
                   "cms_cost_source_effective",
@@ -335,6 +338,11 @@ public class TechnicalDataPublicSourceCheck {
                                   "period",
                                   Objects.toString(row.getPeriod(), "")))
                       .toList()));
+      if (modelMatch != null) {
+        evidence.put("modelMatch", modelMatch);
+        evidence.put("sourceMaterialCode", rows.getFirst().getParentCode());
+      }
+      String reference = codec.write(evidence);
       if (invalid)
         return fact(
             context,
@@ -349,7 +357,8 @@ public class TechnicalDataPublicSourceCheck {
             TechnicalDataModuleType.SALARY,
             TechnicalDataAvailability.AVAILABLE,
             "SALARY_SOURCE_AVAILABLE",
-            rows.size() == 1 ? "沿用已有单项工资，CMS 已确认另一项不存在" : "沿用本产品已有直接、辅助人工工资",
+            modelMatch != null ? "采用同型号料号 " + rows.getFirst().getParentCode() + " 的 CMS 生效工资"
+                : rows.size() == 1 ? "沿用已有单项工资，CMS 已确认另一项不存在" : "沿用本产品已有直接、辅助人工工资",
             reference);
       }
       if (source.confirmedBatchId() == null)

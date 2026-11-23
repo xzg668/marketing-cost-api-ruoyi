@@ -110,7 +110,8 @@ public final class CostRunPublicInputPreparation {
           CostBusinessRuleProvider.PACKAGE_COMPONENT_COEFFICIENT)) rules.add(new CostRunFeeQuery.Rule(rule, ruleMonth, scope.unit()));
       var approved = context.getEffectiveTechnicalData();
       wages.add(new CostRunManufacturingSources.Demand(scope.year(), scope.unit(), context.getPricingMonth(),
-          request.materialCodes(), approved == null || !approved.salaryRequired(), approved == null || !approved.auxiliaryRequired()));
+          request.materialCodes(), approved == null || !approved.salaryRequired(),
+          approved == null || !approved.auxiliaryRequired(), scope.organization()));
       losses.add(new NetLossRateQuery.Lookup(product, scope.model(), scope.organization(), scope.year(), scope.unit()));
     }
     load(facts, departments, fees::readDepartment);

@@ -20,7 +20,10 @@ class MonthlyQuotationInputRevisionTest {
   final QuoteCostingWorkspaceService workspaces = mock(QuoteCostingWorkspaceService.class);
   final MonthlyMaterialPrices prices = mock(MonthlyMaterialPrices.class);
   final MonthlyPriceDocumentCodec codec = new MonthlyPriceDocumentCodec(new ObjectMapper());
-  final MonthlyQuotationInputRevision service = new MonthlyQuotationInputRevision(prepared, nodes, workspaces, prices, codec, mock(com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper.class));
+  final MonthlyQuotationInputRevision service = new MonthlyQuotationInputRevision(prepared, nodes,
+      workspaces, prices, codec, mock(com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper.class),
+      mock(com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis.class),
+      mock(com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService.class));
   final OaForm form = new OaForm();
   final OaFormItem item = new OaFormItem();
   final MonthlyPriceRequest request = new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.of(2026, 10),

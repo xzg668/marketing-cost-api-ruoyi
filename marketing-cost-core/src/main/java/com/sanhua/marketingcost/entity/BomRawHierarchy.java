@@ -74,6 +74,19 @@ public class BomRawHierarchy {
   /** 累计到顶层用量（EasyData 计算） */
   private BigDecimal qtyPerTop;
 
+  /** 月度 BOM JSON 保存的 U9 原行底数。存量快照没有此字段。 */
+  @TableField(exist = false)
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private BigDecimal frozenU9ParentBaseQty;
+
+  public BigDecimal getFrozenU9ParentBaseQty() {
+    return frozenU9ParentBaseQty;
+  }
+
+  public void setFrozenU9ParentBaseQty(BigDecimal value) {
+    frozenU9ParentBaseQty = value;
+  }
+
   // ============================ 业务属性（从 u9_source 直接映射） ============================
 
   /** 料品品名 */
