@@ -42,7 +42,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
-/** Four ETL-owned formal inputs plus the sole scrap tmp publication, through actual MySQL services. */
+/** CMS effective-source refresh with ETL-owned raw inputs and scrap mappings. */
 @Tag("integration")
 class CmsSyncDirectEtlMysqlTest {
   private static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0.36")
@@ -121,7 +121,9 @@ class CmsSyncDirectEtlMysqlTest {
         VALUES (7,'03','工资','0302','辅助人员工资','','COMMERCIAL'),
                (7,'02','辅助材料','0201','辅助焊料类','','COMMERCIAL')
         """);
-    scrap("tmp_lp_material_scrap_ref", "A", "SCRAP-A", "2026-10", "COMMERCIAL");
+    scrap("tmp_lp_material_scrap_ref", "A", "SCRAP-OLDER-VERSION", "2026-10", "COMMERCIAL");
+    scrap("lp_material_scrap_ref", "A", "SCRAP-ETL-WINNER", "2026-09", "COMMERCIAL");
+    scrap("lp_material_scrap_ref", "A", "SCRAP-HOUSEHOLD", "2026-10", "HOUSEHOLD");
     var eligibility = new CmsPlanEligibilityServiceImpl(session.getMapper(CmsPlanCostRawMapper.class));
     var effective = session.getMapper(CmsCostSourceEffectiveMapper.class);
     var logs = session.getMapper(CmsCostSourceEffectiveLogMapper.class);
@@ -155,16 +157,17 @@ class CmsSyncDirectEtlMysqlTest {
   }
 
   @Test
-  void fourDirectFormalInputsStayIntactWhileScrapPublishesFromTmp() {
-    var before = snapshot(RAW);
+  void refreshesBothSourcesWithoutOverwritingEasyDataScrapMappings() {
+    var tables = new java.util.ArrayList<>(RAW);
+    tables.addAll(List.of("lp_material_scrap_ref", "tmp_lp_material_scrap_ref"));
+    var before = snapshot(tables);
     var result = run();
     assertThat(result.getStatus()).isEqualTo("SUCCESS");
     assertThat(result.getEffectiveInsertedCount()).isEqualTo(3);
-    assertThat(result.getTmpCounts()).containsOnlyKeys("tmp_lp_material_scrap_ref");
-    assertThat(result.getTmpCounts().get("tmp_lp_material_scrap_ref")).isEqualTo(1L);
-    assertThat(result.getPublishedCounts()).containsEntry("lp_material_scrap_ref", 1).hasSize(1);
-    assertThat(result.getMessage()).contains("ETL", "生效来源").doesNotContain("正式表覆盖完成");
-    assertThat(snapshot(RAW)).isEqualTo(before);
+    assertThat(result.getTmpCounts()).isEmpty();
+    assertThat(result.getPublishedCounts()).isEmpty();
+    assertThat(result.getMessage()).contains("ETL", "工资及辅料", "生效来源").doesNotContain("废料映射");
+    assertThat(snapshot(tables)).isEqualTo(before);
     assertThat(jdbc.queryForList("SELECT amount_yuan FROM cms_cost_source_effective ORDER BY source_type", java.math.BigDecimal.class))
         .extracting(java.math.BigDecimal::stripTrailingZeros)
         .containsExactly(new java.math.BigDecimal("3"), new java.math.BigDecimal("1"), new java.math.BigDecimal("2"));
@@ -252,53 +255,33 @@ class CmsSyncDirectEtlMysqlTest {
   }
 
   @Test
-  void duplicateScrapRowsSelectOnlyLatestMappingPerMaterial() {
+  void emptyScrapStagingAllowsSalaryAndAuxiliaryRefresh() {
     jdbc.update("DELETE FROM tmp_lp_material_scrap_ref");
-    scrap("tmp_lp_material_scrap_ref","A","OLD","2026-01","COMMERCIAL");
-    scrap("tmp_lp_material_scrap_ref","A","OLD","2026-02","COMMERCIAL");
-    scrap("tmp_lp_material_scrap_ref","A","NEW","2026-10","COMMERCIAL");
-    scrap("tmp_lp_material_scrap_ref","A","NEW","2026-10","COMMERCIAL");
-    scrap("tmp_lp_material_scrap_ref"," ","IGNORED","2026-11","COMMERCIAL");
-    var before=snapshot(RAW);
-    var result=run();
+    var before = snapshot(List.of("lp_material_scrap_ref", "tmp_lp_material_scrap_ref"));
+
+    var result = run();
+
     assertThat(result.getStatus()).isEqualTo("SUCCESS");
-    assertThat(result.getPublishedCounts()).containsEntry("lp_material_scrap_ref",1);
-    assertThat(jdbc.queryForList("SELECT scrap_code FROM lp_material_scrap_ref",String.class)).containsExactly("NEW");
-    assertThat(snapshot(RAW)).isEqualTo(before);
+    assertThat(result.getEffectiveInsertedCount()).isEqualTo(3);
+    assertThat(snapshot(List.of("lp_material_scrap_ref", "tmp_lp_material_scrap_ref"))).isEqualTo(before);
   }
 
   @Test
-  void newerFormalMappingIsCarriedBackWithoutChangingOtherBusinessUnit() {
-    scrap("lp_material_scrap_ref","A","NEWER","2026-11","COMMERCIAL");
-    scrap("lp_material_scrap_ref","A","HOUSEHOLD-KEEP","2026-12","HOUSEHOLD");
-    var household=jdbc.queryForMap("SELECT * FROM lp_material_scrap_ref WHERE business_unit_type='HOUSEHOLD'");
-    assertThat(run().getStatus()).isEqualTo("SUCCESS");
-    assertThat(jdbc.queryForObject("SELECT scrap_code FROM lp_material_scrap_ref WHERE business_unit_type='COMMERCIAL'",String.class))
-        .isEqualTo("NEWER");
-    assertThat(jdbc.queryForMap("SELECT * FROM lp_material_scrap_ref WHERE business_unit_type='HOUSEHOLD'")).isEqualTo(household);
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM tmp_lp_material_scrap_ref",Integer.class)).isEqualTo(2);
-    assertThat(run().getStatus()).isEqualTo("SUCCESS");
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM tmp_lp_material_scrap_ref",Integer.class)).isEqualTo(2);
-  }
+  void refreshCanRunWithBothScrapTablesUnavailable() {
+    jdbc.execute("""
+        RENAME TABLE lp_material_scrap_ref TO owned_scrap_ref,
+                     tmp_lp_material_scrap_ref TO owned_tmp_scrap_ref
+        """);
+    try {
+      var result = run();
 
-  @Test
-  void emptyScrapTmpPreventsReplacementAndEffectiveRefresh() {
-    scrap("lp_material_scrap_ref","A","KEEP","2026-10","COMMERCIAL");
-    jdbc.update("DELETE FROM tmp_lp_material_scrap_ref");
-    var before=snapshot(List.of("lp_material_scrap_ref"));
-    var result=run();
-    assertThat(result.getStatus()).isEqualTo("FAILED");
-    assertThat(result.getMessage()).contains("tmp_lp_material_scrap_ref");
-    assertThat(snapshot(List.of("lp_material_scrap_ref"))).isEqualTo(before);
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM cms_cost_source_effective",Integer.class)).isZero();
-  }
-
-  @Test
-  void anotherBusinessUnitsScrapTmpDoesNotReplaceSelectedUnit() {
-    scrap("lp_material_scrap_ref","A","KEEP","2026-10","COMMERCIAL");
-    jdbc.update("UPDATE tmp_lp_material_scrap_ref SET business_unit_type='HOUSEHOLD'");
-    var before=snapshot(List.of("lp_material_scrap_ref","tmp_lp_material_scrap_ref"));
-    assertThat(run().getStatus()).isEqualTo("FAILED");
-    assertThat(snapshot(List.of("lp_material_scrap_ref","tmp_lp_material_scrap_ref"))).isEqualTo(before);
+      assertThat(result.getStatus()).isEqualTo("SUCCESS");
+      assertThat(result.getEffectiveInsertedCount()).isEqualTo(3);
+    } finally {
+      jdbc.execute("""
+          RENAME TABLE owned_scrap_ref TO lp_material_scrap_ref,
+                       owned_tmp_scrap_ref TO tmp_lp_material_scrap_ref
+          """);
+    }
   }
 }

@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
 import com.sanhua.marketingcost.entity.CmsProductSubjectCostRaw;
 import com.sanhua.marketingcost.entity.CmsWorkshopLaborRaw;
+import com.sanhua.marketingcost.service.costing.CmsSourcePeriod;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,6 +61,8 @@ class CmsEffectiveSourceStreamingMapperIntegrationTest {
         + "('A','2026-01','0201',100,'COMMERCIAL'),"
         + "('B','2026-02','0202',250,'COMMERCIAL'),"
         + "('C','2026-01','0302',300,'COMMERCIAL'),"
+        + "('E','2025-12','0201',500,'COMMERCIAL'),"
+        + "('F','2025-11','0201',600,'COMMERCIAL'),"
         + "('D','2026-01','0201',400,'HOUSEHOLD')");
 
     var configuration = new MybatisConfiguration();
@@ -82,10 +85,10 @@ class CmsEffectiveSourceStreamingMapperIntegrationTest {
   @Test
   void streamsOnlyMatchingWorkshopRowsAndMapsSelectedColumns() {
     List<CmsWorkshopLaborRaw> rows = new ArrayList<>();
-    workshopMapper.forEachDirectLaborSource(2026, "COMMERCIAL",
+    workshopMapper.forEachDirectLaborSource(CmsSourcePeriod.months(2026), "COMMERCIAL",
         context -> rows.add(context.getResultObject()));
 
-    assertThat(rows).extracting(CmsWorkshopLaborRaw::getParentCode).containsExactly("A", "B");
+    assertThat(rows).extracting(CmsWorkshopLaborRaw::getParentCode).containsExactly("A", "B", "C");
     assertThat(rows.get(0).getParentName()).isEqualTo("Product A");
     assertThat(rows.get(1).getWorkingCostCent()).isEqualByComparingTo(new BigDecimal("250"));
   }
@@ -93,12 +96,12 @@ class CmsEffectiveSourceStreamingMapperIntegrationTest {
   @Test
   void streamsOnlyConfiguredAuxiliarySubjects() {
     List<CmsProductSubjectCostRaw> rows = new ArrayList<>();
-    subjectMapper.forEachAuxiliarySource(2026, List.of("0201", "0202"), "COMMERCIAL",
+    subjectMapper.forEachAuxiliarySource(CmsSourcePeriod.months(2026), List.of("0201", "0202"), "COMMERCIAL",
         context -> rows.add(context.getResultObject()));
 
-    assertThat(rows).extracting(CmsProductSubjectCostRaw::getParentCode).containsExactly("A", "B");
+    assertThat(rows).extracting(CmsProductSubjectCostRaw::getParentCode).containsExactly("A", "B", "E");
     assertThat(rows).extracting(CmsProductSubjectCostRaw::getSecondSubjectCode)
-        .containsExactly("0201", "0202");
+        .containsExactly("0201", "0202", "0201");
     assertThat(rows.get(1).getMaterialPrice()).isEqualByComparingTo(new BigDecimal("250"));
   }
 }

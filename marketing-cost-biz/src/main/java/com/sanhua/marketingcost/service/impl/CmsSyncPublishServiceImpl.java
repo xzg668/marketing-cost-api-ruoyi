@@ -136,7 +136,6 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
                 CmsSyncPublishRunResponse current = baseResponse(signal);
                 current.setExecuted(true);
                 validateFormalInputs(signal);
-                publishMaterialScrap(signal, current);
                 refreshEffectiveSources(signal, current);
                 if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(java.util.Set.of("SALARY","PRICE"),normalizeBusinessUnit(signal.getBusinessUnitType()),java.util.Set.of(),java.util.Set.of()));
                 current.setStatus(STATUS_SUCCESS);
@@ -182,7 +181,7 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
             .set("finished_at", LocalDateTime.now()));
   }
 
-  /** ETL owns four raw tables; only scrap mappings retain their staged publication. */
+  /** These four ETL inputs are required for salary and auxiliary source refresh. */
   private void validateFormalInputs(CmsSyncPublishSignal signal) {
     String businessUnitType = normalizeBusinessUnit(signal.getBusinessUnitType());
     for (String table : List.of("cms_plan_cost_raw", "cms_workshop_labor_raw",
@@ -233,7 +232,7 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
   }
 
   private String successMessage(CmsSyncPublishRunResponse response) {
-    return "四张ETL直写表校验通过，废料映射已从tmp发布，CMS 公共生效来源已刷新：inserted="
+    return "四张ETL直写表校验通过，CMS 工资及辅料公共生效来源已刷新：inserted="
         + response.getEffectiveInsertedCount()
         + ", updated="
         + response.getEffectiveUpdatedCount()
@@ -256,171 +255,4 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
     return businessUnitType == null ? "" : businessUnitType.trim();
   }
 
-  private void publishMaterialScrap(CmsSyncPublishSignal signal, CmsSyncPublishRunResponse response) {
-    String businessUnitType = normalizeBusinessUnit(signal.getBusinessUnitType());
-    long count = countTmpTable("tmp_lp_material_scrap_ref", businessUnitType);
-    response.getTmpCounts().put("tmp_lp_material_scrap_ref", count);
-    if (count <= 0) {
-      throw new IllegalStateException("tmp_lp_material_scrap_ref 没有数据，请确认废料映射 ETL 抽取完成后再发送 READY 信号");
-    }
-    preserveNewerMaterialScrapMappings(businessUnitType);
-    deleteByBusinessUnit("lp_material_scrap_ref", businessUnitType, "COMMERCIAL");
-    response.getPublishedCounts().put("lp_material_scrap_ref",
-        updateWithBusinessUnit(insertMaterialScrapSql(businessUnitType), businessUnitType));
-  }
-
-  private long countTmpTable(String tableName, String businessUnitType) {
-    if (!StringUtils.hasText(businessUnitType)) {
-      Long count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + tableName, Long.class);
-      return count == null ? 0L : count;
-    }
-    String defaultBusinessUnit = "tmp_lp_material_scrap_ref".equals(tableName) ? "COMMERCIAL" : "";
-    Long count =
-        jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM "
-                + tableName
-                + " WHERE COALESCE(business_unit_type, ?) = ?",
-            Long.class,
-            defaultBusinessUnit,
-            businessUnitType);
-    return count == null ? 0L : count;
-  }
-
-  private void deleteByBusinessUnit(
-      String tableName, String businessUnitType, String defaultBusinessUnit) {
-    if (!StringUtils.hasText(businessUnitType)) {
-      jdbcTemplate.update("DELETE FROM " + tableName);
-      return;
-    }
-    jdbcTemplate.update(
-        "DELETE FROM " + tableName + " WHERE COALESCE(business_unit_type, ?) = ?",
-        defaultBusinessUnit,
-        businessUnitType);
-  }
-
-  private int updateWithBusinessUnit(String sql, String businessUnitType) {
-    if (!StringUtils.hasText(businessUnitType)) {
-      return jdbcTemplate.update(sql);
-    }
-    return jdbcTemplate.update(sql, businessUnitType);
-  }
-
-  private void preserveNewerMaterialScrapMappings(String businessUnitType) {
-    String sql = preserveNewerMaterialScrapSql(businessUnitType);
-    if (!StringUtils.hasText(businessUnitType)) {
-      jdbcTemplate.update(sql);
-      return;
-    }
-    jdbcTemplate.update(sql, businessUnitType);
-  }
-
-  String preserveNewerMaterialScrapSql(String businessUnitType) {
-    // EasyData's temporary table can use a different collation from the formal table.
-    // Compare cross-table business keys using the formal table's collation so publication
-    // remains stable when EasyData refreshes the temporary table.
-    return """
-        INSERT INTO tmp_lp_material_scrap_ref (
-          material_code, material_name, material_spec, material_unit, scrap_code, scrap_name,
-          scrap_spec, scrap_unit, ratio, effective_from, effective_to, business_unit_type,
-          source_type, source_doc_no, cms_record_id, link_detail_id, cms_posting_period,
-          cms_effective_date, approval_time, sync_time, remark, created_at, updated_at
-        )
-        SELECT
-          live.material_code, live.material_name, live.material_spec, live.material_unit,
-          live.scrap_code, live.scrap_name, live.scrap_spec, live.scrap_unit, live.ratio,
-          live.effective_from, live.effective_to, live.business_unit_type, live.source_type,
-          live.source_doc_no, live.cms_record_id, live.link_detail_id, live.cms_posting_period,
-          live.cms_effective_date, live.approval_time, live.sync_time, live.remark,
-          live.created_at, live.updated_at
-        FROM lp_material_scrap_ref live
-        WHERE live.material_code IS NOT NULL
-          AND TRIM(live.material_code) <> ''
-          AND live.scrap_code IS NOT NULL
-          AND TRIM(live.scrap_code) <> ''
-          AND EXISTS (
-            SELECT 1
-            FROM tmp_lp_material_scrap_ref incoming
-            WHERE COALESCE(incoming.business_unit_type, 'COMMERCIAL')
-                    COLLATE utf8mb4_0900_ai_ci =
-                    COALESCE(live.business_unit_type, 'COMMERCIAL')
-              AND incoming.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code
-          )
-          AND COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '') >
-              COALESCE((
-                SELECT MAX(NULLIF(TRIM(candidate.cms_posting_period), ''))
-                FROM tmp_lp_material_scrap_ref candidate
-                WHERE COALESCE(candidate.business_unit_type, 'COMMERCIAL')
-                        COLLATE utf8mb4_0900_ai_ci =
-                        COALESCE(live.business_unit_type, 'COMMERCIAL')
-                  AND candidate.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code
-              ), '') COLLATE utf8mb4_0900_ai_ci
-          AND NOT EXISTS (
-            SELECT 1
-            FROM tmp_lp_material_scrap_ref duplicate_row
-            WHERE COALESCE(duplicate_row.business_unit_type, 'COMMERCIAL')
-                    COLLATE utf8mb4_0900_ai_ci =
-                    COALESCE(live.business_unit_type, 'COMMERCIAL')
-              AND duplicate_row.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code
-              AND duplicate_row.scrap_code COLLATE utf8mb4_0900_ai_ci = live.scrap_code
-              AND COALESCE(NULLIF(TRIM(duplicate_row.cms_posting_period), ''), '') =
-                  COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '')
-                      COLLATE utf8mb4_0900_ai_ci
-          )
-        """
-        + businessUnitLiveFilter(businessUnitType, "COMMERCIAL");
-  }
-
-  String insertMaterialScrapSql(String businessUnitType) {
-    return """
-        INSERT INTO lp_material_scrap_ref (
-          material_code, material_name, material_spec, material_unit, scrap_code, scrap_name,
-          scrap_spec, scrap_unit, ratio, effective_from, effective_to, business_unit_type,
-          source_type, source_doc_no, cms_record_id, link_detail_id, cms_posting_period,
-          cms_effective_date, approval_time, sync_time, remark, created_at, updated_at
-        )
-        SELECT
-          material_code, material_name, material_spec, material_unit, scrap_code, scrap_name,
-          scrap_spec, scrap_unit, COALESCE(ratio, 1.0), effective_from, effective_to,
-          COALESCE(business_unit_type, 'COMMERCIAL'), source_type, source_doc_no, cms_record_id,
-          link_detail_id, cms_posting_period, cms_effective_date, approval_time, sync_time,
-          remark, created_at, updated_at
-        FROM (
-          SELECT
-            t.*,
-            ROW_NUMBER() OVER (
-              PARTITION BY COALESCE(t.business_unit_type, 'COMMERCIAL'), t.material_code
-              ORDER BY
-                t.cms_posting_period DESC,
-                t.cms_effective_date DESC,
-                t.approval_time DESC,
-                t.sync_time DESC,
-                t.updated_at DESC,
-                t.source_doc_no DESC,
-                t.cms_record_id DESC,
-                t.scrap_code DESC
-            ) AS row_rank
-          FROM tmp_lp_material_scrap_ref t
-          WHERE t.material_code IS NOT NULL
-            AND TRIM(t.material_code) <> ''
-            AND t.scrap_code IS NOT NULL
-            AND TRIM(t.scrap_code) <> ''
-        ) ranked
-        WHERE ranked.row_rank = 1
-        """
-        + businessUnitRankedFilter(businessUnitType, "COMMERCIAL");
-  }
-
-  private String businessUnitRankedFilter(String businessUnitType, String defaultBusinessUnit) {
-    if (!StringUtils.hasText(businessUnitType)) {
-      return "";
-    }
-    return " AND COALESCE(ranked.business_unit_type, '" + defaultBusinessUnit + "') = ?";
-  }
-
-  private String businessUnitLiveFilter(String businessUnitType, String defaultBusinessUnit) {
-    if (!StringUtils.hasText(businessUnitType)) {
-      return "";
-    }
-    return " AND COALESCE(live.business_unit_type, '" + defaultBusinessUnit + "') = ?";
-  }
 }

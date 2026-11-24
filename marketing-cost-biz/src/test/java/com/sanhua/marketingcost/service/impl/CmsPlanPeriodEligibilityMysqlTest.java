@@ -242,10 +242,68 @@ class CmsPlanPeriodEligibilityMysqlTest {
         .isEqualTo(2);
   }
 
+  @Test
+  void rebuildAdoptsThePreviousDecemberWhileApprovalAndManualSelectionRemainIndependent() {
+    raw("A", "2026-01", 100);
+    plan("A", "2026-01", "2026-01", null, "COMMERCIAL");
+    sync();
+    var directId = source("A", "SALARY_DIRECT").get("id");
+    transaction.execute(ignored -> auxiliary.refreshSource(request("AUX_SUBJECT"), "tester", "COMMERCIAL"));
+    var manual = source("A", "AUX_SUBJECT");
+
+    raw("A", "2025-11", 1100);
+    plan("A", "2025-11", "2026-01", null, "COMMERCIAL");
+    raw("A", "2025-12", 1200);
+    plan("A", "2025-12", "2026-01", "辅料", "COMMERCIAL");
+    raw("B", "2025-12", 1300);
+    plan("B", "2025-12", "2026-01", null, "HOUSEHOLD");
+
+    sync();
+
+    assertSource("A", "SALARY_DIRECT", "2025-12", "12");
+    assertThat(source("A", "SALARY_DIRECT")).containsEntry("id", directId);
+    assertSource("A", "SALARY_INDIRECT", "2026-01", "2");
+    assertThat(source("A", "AUX_SUBJECT")).isEqualTo(manual);
+    assertThat(effectiveCount()).isEqualTo(3);
+  }
+
+  @Test
+  void followingYearUsesItsOwnPreviousDecemberAndSupportsManualPeriodChanges() {
+    raw("A", "2025-12", 500);
+    plan("A", "2025-12", "2026-01", null, "COMMERCIAL");
+    raw("A", "2026-11", 1100);
+    plan("A", "2026-11", "2026-11", null, "COMMERCIAL");
+    raw("A", "2026-12", 1200);
+    plan("A", "2026-12", "2027-01", "工时", "COMMERCIAL");
+    raw("A", "2027-01", 100);
+    plan("A", "2027-01", "2027-01", null, "COMMERCIAL");
+
+    sync(2027);
+
+    assertSource("A", "SALARY_DIRECT", "2027-01", "1");
+    assertSource("A", "SALARY_INDIRECT", "2026-12", "24");
+    assertSource("A", "AUX_SUBJECT", "2026-12", "36");
+    assertThat(jdbc.queryForList("SELECT cost_year FROM cms_cost_source_effective", Integer.class))
+        .containsOnly(2027);
+
+    var request = request("SALARY_INDIRECT");
+    request.setCostYear(2027);
+    request.setNewPeriod("2026-12");
+    transaction.execute(ignored -> salary.refreshSource(request, "tester", "COMMERCIAL"));
+    assertThat(((Number) source("A", "SALARY_INDIRECT").get("default_flag")).intValue()).isZero();
+    request.setNewPeriod("2026-11");
+    assertThatThrownBy(() -> transaction.execute(
+        ignored -> salary.refreshSource(request, "tester", "COMMERCIAL"))).hasMessageContaining("上年 12 月");
+  }
+
   private void sync() {
+    sync(2026);
+  }
+
+  private void sync(int costYear) {
     transaction.executeWithoutResult(ignored -> {
-      salary.synchronizeDefaultSources(2026, "SYSTEM_CMS_SYNC", "COMMERCIAL");
-      auxiliary.synchronizeDefaultSources(2026, "SYSTEM_CMS_SYNC", "COMMERCIAL");
+      salary.synchronizeDefaultSources(costYear, "SYSTEM_CMS_SYNC", "COMMERCIAL");
+      auxiliary.synchronizeDefaultSources(costYear, "SYSTEM_CMS_SYNC", "COMMERCIAL");
     });
   }
 

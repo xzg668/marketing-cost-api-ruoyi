@@ -176,6 +176,22 @@ class TechnicalDataCostingSourcesTest {
         .isInstanceOf(EffectiveTechnicalDataException.class).hasMessageContaining("公共来源异常");
   }
 
+  @Test void pricePreparationPreservesFinanceWaitingAndActualLookupFailuresSeparately() {
+    when(publicSources.checkDataSources(any())).thenReturn(List.of(new TechnicalDataSourceFact(
+        TechnicalDataModuleType.MANUFACTURING, TechnicalDataAvailability.UNCONFIRMED,
+        "MANUFACTURING_WAIT_FINANCE", "图库料号待财务确认", "source", LocalDateTime.now())));
+    assertThatThrownBy(() -> service.preparationSources(10L, "2026-09"))
+        .isInstanceOfSatisfying(TechnicalDataCostingSources.PreparationWaitingForFinance.class, failure -> {
+          assertThat(failure.errorCode()).isEqualTo("TECH_DATA_SOURCE_NOT_CONFIRMED");
+          assertThat(failure.modules()).containsExactly("MANUFACTURING");
+        });
+
+    fact("MANUFACTURING", TechnicalDataAvailability.ERROR);
+    assertThatThrownBy(() -> service.preparationSources(10L, "2026-09"))
+        .isExactlyInstanceOf(EffectiveTechnicalDataException.class);
+    verifyNoInteractions(shared, repository);
+  }
+
   private void assertBlocked(String code) {
     var selected = service.select(10L,"2026-09");
     assertThat(selected.sources()).isEmpty();

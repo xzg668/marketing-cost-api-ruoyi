@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.entity.CmsWorkshopLaborRaw;
+import java.util.Collection;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
@@ -14,17 +15,22 @@ import org.apache.ibatis.session.ResultHandler;
 @Mapper
 public interface CmsWorkshopLaborRawMapper extends BaseMapper<CmsWorkshopLaborRaw> {
   @Select({
+    "<script>",
     "SELECT id, period, parent_code, parent_name, parent_spec, parent_type,",
     "       first_unit_name, working_cost_cent",
     "FROM cms_workshop_labor_raw",
-    "WHERE period LIKE CONCAT(#{costYear}, '-%')",
+    "WHERE period IN",
+    "  <foreach collection='periods' item='period' open='(' separator=',' close=')'>",
+    "    #{period}",
+    "  </foreach>",
     "  AND (COALESCE(#{businessUnitType}, '') = '' OR business_unit_type = #{businessUnitType})",
-    "ORDER BY id"
+    "ORDER BY id",
+    "</script>"
   })
   @ResultType(CmsWorkshopLaborRaw.class)
   @Options(resultSetType = ResultSetType.FORWARD_ONLY, fetchSize = Integer.MIN_VALUE)
   void forEachDirectLaborSource(
-      @Param("costYear") int costYear,
+      @Param("periods") Collection<String> periods,
       @Param("businessUnitType") String businessUnitType,
       ResultHandler<CmsWorkshopLaborRaw> handler);
 

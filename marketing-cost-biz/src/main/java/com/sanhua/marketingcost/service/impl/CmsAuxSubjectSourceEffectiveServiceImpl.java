@@ -14,6 +14,7 @@ import com.sanhua.marketingcost.entity.CmsSubjectSettingRaw;
 import com.sanhua.marketingcost.mapper.CmsSubjectSettingRawMapper;
 import com.sanhua.marketingcost.service.CmsAuxSubjectSourceEffectiveService;
 import com.sanhua.marketingcost.service.CmsPlanEligibilityService;
+import com.sanhua.marketingcost.service.costing.CmsSourcePeriod;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -94,8 +95,7 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
       byParentSubject.computeIfAbsent(aggregate.parentCode + "|" + aggregate.subjectCode, ignored -> new ArrayList<>()).add(aggregate);
     }
     for (List<Aggregate> candidates : byParentSubject.values()) {
-      candidates.sort(Comparator.comparing((Aggregate aggregate) -> preferredPeriodOrder(costYear, aggregate.period))
-          .thenComparing(aggregate -> aggregate.period));
+      candidates.sort(Comparator.comparing(aggregate -> aggregate.period));
       Aggregate selected = null;
       PlanEligibility selectedEligibility = null;
       for (Aggregate candidate : candidates) {
@@ -261,7 +261,7 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
     Map<String, Aggregate> result = new LinkedHashMap<>();
     // Stream the CMS source rows so the subject calculation cannot exhaust the API heap.
     productSubjectCostRawMapper.forEachAuxiliarySource(
-        costYear, subjectDefinitions.keySet(), businessUnitType, context -> {
+        CmsSourcePeriod.months(costYear), subjectDefinitions.keySet(), businessUnitType, context -> {
         CmsProductSubjectCostRaw row = context.getResultObject();
         String parentCode = trim(row.getParentCode());
         String period = trim(row.getPeriod());
@@ -416,13 +416,9 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
     if (!StringUtils.hasText(request.getNewPeriod())) {
       throw new IllegalArgumentException("newPeriod 不能为空");
     }
-    if (!request.getNewPeriod().startsWith(request.getCostYear() + "-")) {
-      throw new IllegalArgumentException("newPeriod 必须属于 costYear");
+    if (!CmsSourcePeriod.months(request.getCostYear()).contains(request.getNewPeriod())) {
+      throw new IllegalArgumentException("新来源期间必须在上年 12 月至本年度 12 月之间");
     }
-  }
-
-  private int preferredPeriodOrder(int costYear, String period) {
-    return (costYear + "-01").equals(period) ? 0 : 1;
   }
 
   private BigDecimal toYuan(BigDecimal cent) {

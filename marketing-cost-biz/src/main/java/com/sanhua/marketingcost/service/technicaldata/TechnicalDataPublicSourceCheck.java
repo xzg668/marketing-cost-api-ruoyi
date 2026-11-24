@@ -8,7 +8,6 @@ import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
 import java.time.YearMonth;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -17,6 +16,7 @@ import org.springframework.stereotype.Service;
 /** 只查公共 BOM、工资、包装和制造资料；不依赖价格生成，组树阶段可安全复用。 */
 @Service
 public class TechnicalDataPublicSourceCheck {
+  static final String MANUFACTURING_WAIT_FINANCE = "MANUFACTURING_WAIT_FINANCE";
   private final TechnicalBomSavedSourceQuery completeBoms;
   private final TechnicalBomAbsenceQuery completeBomEntry;
   private final TechnicalDataSharedModules shared;
@@ -277,14 +277,18 @@ public class TechnicalDataPublicSourceCheck {
             "MANUFACTURING_RAW_MISSING",
             "存在明确缺少原材料关系的制造件，请按缺失节点补录",
             reference);
-      if (result.hasUnresolved())
+      if (result.hasUnresolved()) {
+        boolean waitingForFinanceOnly = result.unavailableReason() == null && result.nodes().stream()
+            .noneMatch(node -> node.state() == TechnicalDataManufacturingSourceQuery.State.ERROR);
         return fact(
             context,
             TechnicalDataModuleType.MANUFACTURING,
             TechnicalDataAvailability.UNCONFIRMED,
-            "MANUFACTURING_WAIT_SOURCE",
-            "仍有料号待财务确认或下级查询未成功，暂不判定为缺原材料",
+            waitingForFinanceOnly ? MANUFACTURING_WAIT_FINANCE : "MANUFACTURING_WAIT_SOURCE",
+            waitingForFinanceOnly ? "仍有图库节点待财务确认 U9 料号，暂不判定为缺原材料"
+                : "仍有料号待财务确认或下级查询未成功，暂不判定为缺原材料",
             reference);
+      }
       return fact(
           context,
           TechnicalDataModuleType.MANUFACTURING,
@@ -309,16 +313,14 @@ public class TechnicalDataPublicSourceCheck {
           salary.read(
               context.productCode(),
               YearMonth.parse(context.accountingMonth()).getYear(),
-              context.businessUnitType(),
-              context.materialOrganizationCode());
+              context.businessUnitType());
       var rows = source.rows();
-      var modelMatch = rows.isEmpty() ? null : rows.getFirst().getSalaryModelMatch();
       boolean invalid =
           rows.stream()
                   .anyMatch(row -> row.getAmountYuan() == null || row.getAmountYuan().signum() < 0)
               || rows.stream().map(row -> row.getSourceType()).distinct().count() != rows.size();
-      var evidence =
-          new LinkedHashMap<String, Object>(
+      String reference =
+          codec.write(
               Map.of(
                   "source",
                   "cms_cost_source_effective",
@@ -338,11 +340,6 @@ public class TechnicalDataPublicSourceCheck {
                                   "period",
                                   Objects.toString(row.getPeriod(), "")))
                       .toList()));
-      if (modelMatch != null) {
-        evidence.put("modelMatch", modelMatch);
-        evidence.put("sourceMaterialCode", rows.getFirst().getParentCode());
-      }
-      String reference = codec.write(evidence);
       if (invalid)
         return fact(
             context,
@@ -357,8 +354,7 @@ public class TechnicalDataPublicSourceCheck {
             TechnicalDataModuleType.SALARY,
             TechnicalDataAvailability.AVAILABLE,
             "SALARY_SOURCE_AVAILABLE",
-            modelMatch != null ? "采用同型号料号 " + rows.getFirst().getParentCode() + " 的 CMS 生效工资"
-                : rows.size() == 1 ? "沿用已有单项工资，CMS 已确认另一项不存在" : "沿用本产品已有直接、辅助人工工资",
+            rows.size() == 1 ? "沿用已有单项工资，CMS 已确认另一项不存在" : "沿用本产品已有直接、辅助人工工资",
             reference);
       }
       if (source.confirmedBatchId() == null)

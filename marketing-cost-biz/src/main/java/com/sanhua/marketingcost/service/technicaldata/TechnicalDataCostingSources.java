@@ -158,6 +158,10 @@ public class TechnicalDataCostingSources {
       if (!requiredTypes.contains(type)
           || fact.availability() == TechnicalDataAvailability.AVAILABLE) continue;
       if (fact.availability() != TechnicalDataAvailability.MISSING) {
+        if (fact.availability() == TechnicalDataAvailability.UNCONFIRMED
+            && TechnicalDataPublicSourceCheck.MANUFACTURING_WAIT_FINANCE.equals(fact.reasonCode())) {
+          throw new PreparationWaitingForFinance(context, type, fact.reason());
+        }
         throw error(context, type, "TECH_DATA_SOURCE_NOT_CONFIRMED", fact.reason());
       }
       var owner = shared.find(item.getMaterialNo(), itemId, type);
@@ -305,5 +309,11 @@ public class TechnicalDataCostingSources {
 
   private EffectiveTechnicalDataException error(QuoteBomReadContext context, String module, String code, String message) {
     return new EffectiveTechnicalDataException(code, context.oaFormItemId(), context.accountingMonth(), List.of(module), message);
+  }
+
+  static final class PreparationWaitingForFinance extends EffectiveTechnicalDataException {
+    PreparationWaitingForFinance(QuoteBomReadContext context, String module, String message) {
+      super("TECH_DATA_SOURCE_NOT_CONFIRMED", context.oaFormItemId(), context.accountingMonth(), List.of(module), message);
+    }
   }
 }

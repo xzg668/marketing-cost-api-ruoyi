@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.mapper.CmsSubjectSettingRawMapper;
 import com.sanhua.marketingcost.mapper.CmsWorkshopLaborRawMapper;
 import com.sanhua.marketingcost.service.CmsPlanEligibilityService;
 import com.sanhua.marketingcost.service.CmsSalaryCostSourceEffectiveService;
+import com.sanhua.marketingcost.service.costing.CmsSourcePeriod;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -269,8 +270,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     Map<String, PlanEligibility> eligibilityByKey = eligibilityMap(aggregates.values(), businessUnitType);
     for (Map.Entry<String, List<Aggregate>> entry : byParent.entrySet()) {
       List<Aggregate> candidates = entry.getValue();
-      candidates.sort(Comparator.comparing((Aggregate aggregate) -> preferredPeriodOrder(costYear, aggregate.period))
-          .thenComparing(aggregate -> aggregate.period));
+      candidates.sort(Comparator.comparing(aggregate -> aggregate.period));
       Aggregate selected = null;
       PlanEligibility selectedEligibility = null;
       for (Aggregate candidate : candidates) {
@@ -340,7 +340,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     Map<String, Aggregate> result = new LinkedHashMap<>();
     // Process each row as it arrives; retaining millions of raw entities exhausts the API heap.
     workshopLaborRawMapper.forEachDirectLaborSource(
-        costYear, businessUnitType, context -> {
+        CmsSourcePeriod.months(costYear), businessUnitType, context -> {
         CmsWorkshopLaborRaw row = context.getResultObject();
         if (!StringUtils.hasText(row.getParentCode()) || !StringUtils.hasText(row.getPeriod())) {
           return;
@@ -368,7 +368,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     List<CmsProductSubjectCostRaw> rows =
         productSubjectCostRawMapper.selectList(
             new QueryWrapper<CmsProductSubjectCostRaw>()
-                .likeRight("period", costYear + "-")
+                .in("period", CmsSourcePeriod.months(costYear))
                 .eq("second_subject_code", indirectSubject.subjectCode)
                 .eq(StringUtils.hasText(businessUnitType), "business_unit_type", businessUnitType));
     Map<String, Aggregate> result = new LinkedHashMap<>();
@@ -525,13 +525,9 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     if (!StringUtils.hasText(request.getNewPeriod())) {
       throw new IllegalArgumentException("newPeriod 不能为空");
     }
-    if (!request.getNewPeriod().startsWith(request.getCostYear() + "-")) {
-      throw new IllegalArgumentException("newPeriod 必须属于 costYear");
+    if (!CmsSourcePeriod.months(request.getCostYear()).contains(request.getNewPeriod())) {
+      throw new IllegalArgumentException("新来源期间必须在上年 12 月至本年度 12 月之间");
     }
-  }
-
-  private int preferredPeriodOrder(int costYear, String period) {
-    return (costYear + "-01").equals(period) ? 0 : 1;
   }
 
   private BigDecimal toYuan(BigDecimal cent) {

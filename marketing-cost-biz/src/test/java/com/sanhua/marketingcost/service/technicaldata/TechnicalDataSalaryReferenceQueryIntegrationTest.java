@@ -73,8 +73,14 @@ class TechnicalDataSalaryReferenceQueryIntegrationTest extends BomMapperTestBase
     assertThatThrownBy(() -> query.requireReference(task, target, chosen.materialNo(), chosen.fingerprint(), "REFERENCE"))
         .isInstanceOf(TechnicalDataTaskException.class).hasMessageContaining("已变化");
     direct.setPeriod("2025-12"); cms.updateById(direct);
+    var december = query.searchReferences(task, target, key, "REFERENCE").getFirst();
+    assertThat(december.issues()).isEmpty();
+    assertThat(december.direct().sourcePeriod()).isEqualTo("2025-12");
+    assertThat(query.requireReference(task, target, december.materialNo(), december.fingerprint(), "REFERENCE"))
+        .isEqualTo(december);
+    direct.setPeriod("2025-11"); cms.updateById(direct);
     assertThat(query.searchReferences(task, target, key, "REFERENCE").getFirst().issues())
-        .contains("直接人工工资来源期间不属于本核算年度");
+        .contains("直接人工工资来源期间超出本核算年度的 CMS 取数范围");
     target.setAccountingMonth("2027-01");
     assertThat(query.searchReferences(task, target, key, "REFERENCE")).isEmpty();
     assertThatThrownBy(() -> query.requireReference(task, target, chosen.materialNo(), chosen.fingerprint(), "REFERENCE"))

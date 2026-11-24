@@ -26,25 +26,12 @@ public final class CmsCostCompositions {
         .reduce(BigDecimal.ZERO, BigDecimal::add);
     var excluded=selected.stream().map(CmsCostSourceEffective::getShapeExcludedAmount).filter(Objects::nonNull)
         .reduce(BigDecimal.ZERO,BigDecimal::add);
-    String note = laborModelReferences(selected);
-    if (excluded.signum() != 0) {
-      String exclusion = "形态切换按改动料号剔除自身CMS工资，路径已含实际用量";
-      note = note == null ? exclusion : note + "；" + exclusion;
-    }
     return new CostAmountComposition("SAVED", "按本次采用的CMS年度生效工资来源，原始明细逐行由分÷100转元、保留6位小数后相加；直接人工和辅助人工分别汇总，不乘辅料上浮系数。",
-        number(amount), number(excluded), note, selected.stream().map(row -> new CostAmountComposition.Source(
+        number(amount), number(excluded), excluded.signum()==0 ? null : "形态切换按改动料号剔除自身CMS工资，路径已含实际用量", selected.stream().map(row -> new CostAmountComposition.Source(
             row.getSourceTable(), row.getSourceRowIds(), row.getParentCode(), row.getPeriod(),
             row.getSubjectCode(), number(row.getAmountYuan()==null ? null : row.getAmountYuan()
                 .add(row.getShapeExcludedAmount()==null ? BigDecimal.ZERO : row.getShapeExcludedAmount())))).toList(),
         selected.stream().filter(row -> row.getShapeExclusionRows()!=null).flatMap(row -> row.getShapeExclusionRows().stream()).toList());
-  }
-
-  public static String laborModelReferences(List<CmsCostSourceEffective> selected) {
-    String references = selected.stream().filter(row -> row.getSalaryModelMatch() != null)
-        .map(row -> "同型号工资：原料号 " + row.getSalaryModelMatch().productCode()
-            + "，型号 " + row.getSalaryModelMatch().model() + "，来源料号 " + row.getParentCode())
-        .distinct().collect(java.util.stream.Collectors.joining("；"));
-    return references.isEmpty() ? null : references;
   }
   public static CostAmountComposition department(DepartmentFundRate rate, BigDecimal laborTotal) {
     var row = new LinkedHashMap<String,String>();

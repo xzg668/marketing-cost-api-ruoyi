@@ -99,15 +99,20 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     assertThat(repeated.getCostVersionId()).isEqualTo(success.getCostVersionId());
   }
 
-  @Test void sameModelSalaryFeedsSavedCostAndTheOriginalCodeTakesOverWhenItHasWages() {
+  @Test void costingWaitsForTheFinishedCodeSalaryAndThenUsesItsOwnSalaryAndAuxiliary() {
     approvePackaging();
     String model = product + "-MODEL";
-    String reference = product + "-REF";
-    jdbc.update("UPDATE lp_material_master_raw SET material_model=? WHERE material_code=?", model, product);
+    String specification = product + "-SPEC";
+    String bare = product + "-BARE";
     jdbc.update("""
-        INSERT INTO lp_material_master_raw(material_code,material_name,material_model,unit,organization_code,
-          import_batch_id,active_flag) VALUES(?,'参考料号',?,'件','COMMERCIAL',?,1)
-        """, reference, model, product);
+        UPDATE lp_material_master_raw SET material_model=?,material_spec=?,drawing_no=?,bare_code=?
+        WHERE material_code=?
+        """, model, specification, specification, bare, product);
+    jdbc.update("""
+        INSERT INTO lp_material_master_raw(material_code,material_name,material_model,material_spec,drawing_no,
+          unit,organization_code,import_batch_id,active_flag)
+        VALUES(?,'裸品',?,?,?,'件','COMMERCIAL',?,1)
+        """, bare, model, specification, specification, product);
     jdbc.update("DELETE FROM cms_cost_source_effective WHERE parent_code=?", product);
     String subject = product + "-SALARY";
     seededSalarySubject = subject;
@@ -118,33 +123,34 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
         """, subject);
     jdbc.update("INSERT INTO cms_sync_publish_signal(batch_no,cost_year,business_unit_type,status) VALUES(?,?,'COMMERCIAL','SUCCESS')",
         product, date.getYear());
-    addCmsSalary(reference, subject, 4, 1);
+    addCmsSalary(bare, subject, 4, 1);
+    addCmsAuxiliary(bare, 11);
 
-    var result = pipeline.execute(new ProductCostingRequest(product,item,month,"same-model-salary",true));
-    assertThat(result.getPipelineStatus()).as(result.getMessage()).isEqualTo("SUCCESS");
-    long version = result.getCostVersionId();
-    assertThat(savedSalary(version, "DIRECT_LABOR")).isEqualByComparingTo("4");
-    assertThat(savedSalary(version, "INDIRECT_LABOR")).isEqualByComparingTo("1");
-    assertThat(jdbc.queryForObject("SELECT remark FROM lp_cost_run_cost_item WHERE cost_run_version_id=? AND cost_code='DIRECT_LABOR'",
-        String.class, version)).contains("同型号工资", reference);
-    String snapshot = wageSnapshot(version);
-    assertThat(snapshot).contains(reference, model, "cms_workshop_labor_raw");
-    var repeated = pipeline.execute(new ProductCostingRequest(product,item,month,"same-model-salary",false));
-    assertThat(repeated.getCostVersionId()).isEqualTo(version);
-
-    String revision = revisions.currentRevision(forms.selectById(form), items.selectById(item), month);
-    jdbc.update("UPDATE lp_material_master_raw SET material_model=? WHERE material_code=?", model + "-OTHER", reference);
-    assertThat(revisions.currentRevision(forms.selectById(form), items.selectById(item), month)).isNotEqualTo(revision);
-    jdbc.update("UPDATE lp_material_master_raw SET material_model=? WHERE material_code=?", model, reference);
-    assertThat(revisions.currentRevision(forms.selectById(form), items.selectById(item), month)).isEqualTo(revision);
+    var missing = pipeline.execute(new ProductCostingRequest(product,item,month,"finished-code-cms",true));
+    assertThat(missing.getBlockingStatus()).isEqualTo("WAIT_TECH_DATA");
+    assertThat(missing.getTechnicalDataCheck().modules().stream().filter(m -> m.required()).map(m -> m.moduleType()))
+        .contains("SALARY");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?",
+        Integer.class, item)).isZero();
 
     addCmsSalary(product, subject, 7, 2);
-    var exact = pipeline.execute(new ProductCostingRequest(product,item,month,"same-model-salary",false));
+    addCmsAuxiliary(product, 3);
+    var exact = pipeline.execute(new ProductCostingRequest(product,item,month,"finished-code-cms",true));
     assertThat(exact.getPipelineStatus()).as(exact.getMessage()).isEqualTo("SUCCESS");
-    assertThat(exact.getCostVersionId()).isNotEqualTo(version);
-    assertThat(savedSalary(exact.getCostVersionId(), "DIRECT_LABOR")).isEqualByComparingTo("7");
-    assertThat(savedSalary(exact.getCostVersionId(), "INDIRECT_LABOR")).isEqualByComparingTo("2");
-    assertThat(wageSnapshot(version)).isEqualTo(snapshot);
+    long version = exact.getCostVersionId();
+    assertThat(savedAmount(version, "DIRECT_LABOR")).isEqualByComparingTo("7");
+    assertThat(savedAmount(version, "INDIRECT_LABOR")).isEqualByComparingTo("2");
+    assertThat(savedAmount(version, "AUX_0201")).isEqualByComparingTo("3.15");
+    String snapshot = snapshot(version);
+    assertThat(snapshot).contains(product, "cms_workshop_labor_raw", "cms_product_subject_cost_raw");
+
+    String revision = revisions.currentRevision(forms.selectById(form), items.selectById(item), month);
+    jdbc.update("UPDATE lp_material_master_raw SET material_spec=?,drawing_no=? WHERE material_code=?",
+        specification + "-OTHER", specification + "-OTHER", bare);
+    assertThat(revisions.currentRevision(forms.selectById(form), items.selectById(item), month)).isEqualTo(revision);
+    var repeated = pipeline.execute(new ProductCostingRequest(product,item,month,"finished-code-cms",false));
+    assertThat(repeated.getCostVersionId()).isEqualTo(version);
+    assertThat(snapshot(version)).isEqualTo(snapshot);
   }
 
   private void addCmsSalary(String code, String subject, int direct, int indirect) {
@@ -169,12 +175,27 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     }
   }
 
-  private BigDecimal savedSalary(long version, String type) {
+  private void addCmsAuxiliary(String code, int amount) {
+    jdbc.update("""
+        INSERT INTO cms_product_subject_cost_raw(import_batch_id,row_no,period,parent_code,source_row_id,
+          second_subject_code,material_price,material_price_yuan,business_unit_type)
+        VALUES(1,2,?,?,?,'0201',?,?,'COMMERCIAL')
+        """, month, code, code + "-AUX", amount * 100, amount);
+    long id = jdbc.queryForObject("SELECT id FROM cms_product_subject_cost_raw WHERE source_row_id=?",
+        Long.class, code + "-AUX");
+    jdbc.update("""
+        INSERT INTO cms_cost_source_effective(cost_year,source_type,parent_code,period,subject_code,subject_name,
+          source_table,source_row_ids,amount_yuan,business_unit_type)
+        VALUES(?,'AUX_SUBJECT',?,?,'0201','工艺辅料','cms_product_subject_cost_raw',?,?,'COMMERCIAL')
+        """, date.getYear(), code, month, Long.toString(id), amount);
+  }
+
+  private BigDecimal savedAmount(long version, String type) {
     return jdbc.queryForObject("SELECT amount FROM lp_cost_run_cost_item WHERE cost_run_version_id=? AND cost_code=?",
         BigDecimal.class, version, type);
   }
 
-  private String wageSnapshot(long version) {
+  private String snapshot(long version) {
     return jdbc.queryForObject("SELECT jianji_snapshot_json FROM lp_quote_cost_run_version WHERE id=?", String.class, version);
   }
 
@@ -211,7 +232,7 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     jdbc.update("DELETE FROM lp_quality_loss_rate WHERE bare_product_code=?",product);
     jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",material);
     org.mockito.Mockito.doReturn(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalarySourceQuery.Source(List.of(),51L))
-        .when(salarySources).read(product,date.getYear(),"COMMERCIAL","COMMERCIAL");
+        .when(salarySources).read(product,date.getYear(),"COMMERCIAL");
     var result=pipeline.prepare(new ProductCostingRequest(product,item,month,"bare-package-test",true));
     assertThat(trees.getEffectiveBom(product,item).nodes()).hasSize(2);
     assertThat(result.getTechnicalDataCheck().modules().stream().filter(m -> m.required()).map(m -> m.moduleType()))

@@ -173,15 +173,6 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("materialCode") String materialCode, @Param("model") String model,
       @Param("specification") String specification, @Param("organizationCode") String organizationCode);
 
-  @Select("""
-      SELECT material_code FROM lp_material_master_raw
-      WHERE active_flag=1 AND organization_code=#{organizationCode}
-        AND BINARY UPPER(TRIM(material_model))=BINARY UPPER(#{model})
-      ORDER BY material_code
-      """)
-  List<String> selectActiveCodesByExactModel(
-      @Param("model") String model, @Param("organizationCode") String organizationCode);
-
   /** 明细代号就是图号；不跨字段降级，不截断结果后判断唯一性。 */
   @Select({
       "<script>",

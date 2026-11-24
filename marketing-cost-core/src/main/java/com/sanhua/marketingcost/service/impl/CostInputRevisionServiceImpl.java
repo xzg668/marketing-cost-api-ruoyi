@@ -1,18 +1,14 @@
 package com.sanhua.marketingcost.service.impl;
 
-import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
 import com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs;
-import com.sanhua.marketingcost.service.costing.CmsQuoteSalarySources;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -125,8 +121,6 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
   private com.sanhua.marketingcost.service.QuotationMaterialShapeInputs materialShapes;
   @Autowired(required=false)
   private com.sanhua.marketingcost.service.costing.OemProductConfigStore oemProducts;
-  @Autowired(required=false)
-  private CmsQuoteSalarySources quoteSalary;
 
   @Autowired
   public CostInputRevisionServiceImpl(
@@ -236,7 +230,6 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
         com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);
     String productCode = com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(item);
-    appendSalaryModelSource(canonical, form, item, pricingMonth, productCode);
     if (oemProducts != null) {
       String unit = item.getBusinessUnitType() == null || item.getBusinessUnitType().isBlank()
           ? form.getBusinessUnitType() : item.getBusinessUnitType();
@@ -285,28 +278,6 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     appendForm(canonical, form);
     appendItem(canonical, item);
     return sha256(canonical.toString());
-  }
-
-  private void appendSalaryModelSource(
-      StringBuilder canonical, OaForm form, OaFormItem item, String month, String productCode) {
-    if (quoteSalary == null || month == null || month.isBlank() || productCode == null || productCode.isBlank()) return;
-    String unit = item.getBusinessUnitType();
-    if (unit == null || unit.isBlank()) unit = form.getBusinessUnitType();
-    String organization;
-    int year;
-    try {
-      organization = MaterialOrganization.quoteDataForQuoteProduct(form.getProcessCode(), form.getOaNo(),
-          item.getBusinessUnitType(), item.getProductName(), item.getSunlModel(), productCode).materialOrganizationCode();
-      year = YearMonth.parse(month.trim()).getYear();
-    } catch (IllegalArgumentException | java.time.format.DateTimeParseException invalidScope) {
-      return;
-    }
-    var rows = quoteSalary.modelFallback(productCode, year, unit, organization);
-    if (!rows.isEmpty()) {
-      var first = rows.getFirst();
-      append(canonical, "sameModelSalary", List.of(first.getSalaryModelMatch().model(), first.getParentCode(),
-          rows.stream().map(CmsCostSourceEffective::getId).toList()));
-    }
   }
 
   private String priorityRevision(OaFormItem item, String month, QuotationMonthlyPriceInputs.Scope monthly) {

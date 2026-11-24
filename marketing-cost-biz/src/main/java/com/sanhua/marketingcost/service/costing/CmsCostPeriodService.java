@@ -225,8 +225,8 @@ public class CmsCostPeriodService {
     } catch (DateTimeParseException ignored) {
       // The same validation message covers malformed values and other years.
     }
-    if (period == null || period.getYear() != year) {
-      throw new IllegalArgumentException("请选择" + year + "年度内的有效月份");
+    if (period == null || !CmsSourcePeriod.contains(year, period)) {
+      throw new IllegalArgumentException("请选择 " + (year - 1) + "-12 至 " + year + "-12 的有效月份");
     }
     if (scope.expense().auxiliary() && period.isAfter(scope.pricingMonth())) {
       throw new IllegalArgumentException("CMS 辅料来源期间不能晚于本单核算月 " + scope.pricingMonth());

@@ -43,6 +43,10 @@ public class TechnicalDataPendingRefresh {
         var projected=new TechnicalDataSourceCheckResponse(merged.oaFormItemId(),merged.accountingMonth(),merged.fingerprint(),
             merged.checkedAt(),TechnicalDataSharedModuleQuery.applySharedSources(merged.modules(),sharedNow),merged.taskUpdateMessage(),sharedNow);
         if(state.complete(work,projected)) updated++;
+      } catch (TechnicalDataCostingSources.PreparationWaitingForFinance waiting) {
+        state.retry(work);
+        log.debug("待办资料等待财务确认，保留已保存状态：item={}, month={}, reason={}",
+            work.itemId(), work.month(), waiting.getMessage());
       } catch(RuntimeException failure) {
         state.retry(work);log.warn("待办资料更新暂未完成，保留已保存状态：item={}, month={}",work.itemId(),work.month(),failure);
       } finally {SecurityContextHolder.setContext(previous);}

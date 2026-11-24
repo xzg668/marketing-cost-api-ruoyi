@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.fasterxml.jackson.annotation.JsonInclude;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import lombok.Getter;
@@ -14,8 +13,6 @@ import lombok.Setter;
 @Setter
 @TableName("cms_cost_source_effective")
 public class CmsCostSourceEffective {
-  public record SalaryModelMatch(String productCode, String model) {}
-
   @TableId(type = IdType.AUTO)
   private Long id;
   private Integer costYear;
@@ -41,7 +38,4 @@ public class CmsCostSourceEffective {
   private BigDecimal shapeExcludedAmount;
   @TableField(exist = false)
   private java.util.List<java.util.Map<String,String>> shapeExclusionRows;
-  @JsonInclude(JsonInclude.Include.NON_NULL)
-  @TableField(exist = false)
-  private SalaryModelMatch salaryModelMatch;
 }

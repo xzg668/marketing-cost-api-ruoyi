@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
-import com.sanhua.marketingcost.service.costing.CmsCostCompositions;
 import com.sanhua.marketingcost.service.costing.CostRunManufacturingSources;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
 import java.time.LocalDate;
@@ -49,7 +48,12 @@ class TechnicalDataSalarySourceIntegrationTest extends BomMapperTestBase {
     assertThat(query.read(product, 2026, "COMMERCIAL").confirmedBatchId()).isNotNull();
     jdbc.update("""
         INSERT INTO cms_workshop_labor_raw(import_batch_id,row_no,period,parent_code,source_row_id,business_unit_type)
-        VALUES(1,1,'2026-08',?,?,'COMMERCIAL')
+        VALUES(1,1,'2025-11',?,?,'COMMERCIAL')
+        """, product, product + "-nov");
+    assertThat(query.read(product, 2026, "COMMERCIAL").confirmedBatchId()).isNotNull();
+    jdbc.update("""
+        INSERT INTO cms_workshop_labor_raw(import_batch_id,row_no,period,parent_code,source_row_id,business_unit_type)
+        VALUES(1,1,'2025-12',?,?,'COMMERCIAL')
         """, product, product);
     assertThat(query.read(product, 2026, "COMMERCIAL").confirmedBatchId()).isNull();
   }
@@ -59,92 +63,62 @@ class TechnicalDataSalarySourceIntegrationTest extends BomMapperTestBase {
     publish("COMMERCIAL", 2026, "SUCCESS");
     jdbc.update("""
         INSERT INTO cms_product_subject_cost_raw(import_batch_id,row_no,period,parent_code,source_row_id,second_subject_code,business_unit_type)
-        VALUES(1,1,'2026-08',?,?,'TW05-INDIRECT','COMMERCIAL')
+        VALUES(1,1,'2025-12',?,?,'TW05-INDIRECT','COMMERCIAL')
         """, product, product);
     assertThat(query.read(product, 2026, "COMMERCIAL").confirmedBatchId()).isNull();
   }
 
-  @Test void confirmedAbsenceLooksUpTheExactModelAndUsesTheOtherCodesEffectiveSalary() {
-    dictionary();
-    publish("COMMERCIAL", 2026, "SUCCESS");
-    material(product, product + "-MODEL", "COMMERCIAL", true);
-    String reference = product + "-REF";
-    material(reference, product + "-MODEL", "COMMERCIAL", true);
-    material(product + "-NEAR", product + "-MODELA", "COMMERCIAL", true);
-    material(product + "-OTHER", product + "-MODEL", "PLATE", true);
-    material(product + "-OFF", product + "-MODEL", "COMMERCIAL", false);
-    for (String code : List.of(reference, product + "-NEAR", product + "-OTHER", product + "-OFF")) {
-      salary(code, "DIRECT", "4.050877");
-      salary(code, "INDIRECT", "0.099600");
+  @Test void confirmedAbsenceStaysMissingWhenTheBareAndSameSpecificationCodesHaveCmsCosts() {
+    String bare = availableReference();
+    String sameSpecification = product + "-SPEC";
+    material(sameSpecification, product + "-OTHER-MODEL");
+    salary(sameSpecification, "DIRECT", "9");
+    salary(sameSpecification, "INDIRECT", "1");
+    jdbc.update("UPDATE lp_material_master_raw SET bare_code=? WHERE material_code=?", bare, product);
+    for (String code : List.of(bare, sameSpecification)) {
+      jdbc.update("""
+          INSERT INTO cms_cost_source_effective(cost_year,source_type,parent_code,period,subject_code,subject_name,
+            source_table,source_row_ids,amount_yuan,business_unit_type)
+          VALUES(2026,'AUX_SUBJECT',?,'2026-01','0201','工艺辅料','cms_product_subject_cost_raw','1',3,'COMMERCIAL')
+          """, code);
     }
 
-    var result = query.read(product, 2026, "COMMERCIAL", "COMMERCIAL");
-    assertThat(result.rows()).hasSize(2)
-        .extracting(CmsCostSourceEffective::getParentCode).containsOnly(reference);
+    var result = query.read(product, 2026, "COMMERCIAL");
+    assertThat(result.confirmedBatchId()).isNotNull();
+    assertThat(result.rows()).isEmpty();
     var fact = publicSources.checkDataSources(context(), Set.of(TechnicalDataModuleType.SALARY)).getFirst();
-    assertThat(fact.availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
-    assertThat(fact.sourceReference()).contains(reference, product + "-MODEL");
-    assertThat(fact.reason()).contains("同型号", reference);
+    assertThat(fact.availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    assertThat(fact.reasonCode()).isEqualTo("SALARY_SOURCE_MISSING");
+
     var prepared = manufacturing.readBatch(List.of(
-        new CostRunManufacturingSources.Demand(2026, "COMMERCIAL", "2026-08",
-            Set.of(product, reference), true, false, "COMMERCIAL"),
-        new CostRunManufacturingSources.Demand(2026, "COMMERCIAL", "2026-08",
-            Set.of(product), true, false, "PLATE"))).getFirst().salary();
-    assertThat(prepared).hasSize(4);
-    var fallbackRows = prepared.stream().filter(row -> row.getSalaryModelMatch() != null).toList();
-    assertThat(fallbackRows).hasSize(2).allSatisfy(row -> {
-      assertThat(row.getSalaryModelMatch().productCode()).isEqualTo(product);
-      assertThat(row.getParentCode()).isEqualTo(reference);
-    });
-    var evidence = CmsCostCompositions.labor(fallbackRows);
-    assertThat(evidence.sourceAmount()).isEqualTo("4.150477");
-    assertThat(evidence.note()).contains("同型号", reference);
-    assertThat(evidence.sources()).extracting(com.sanhua.marketingcost.dto.CostAmountComposition.Source::parentCode)
-        .containsOnly(reference);
+        new CostRunManufacturingSources.Demand(2026, "COMMERCIAL", "2026-08", Set.of(product), true, true),
+        new CostRunManufacturingSources.Demand(2026, "COMMERCIAL", "2026-08", Set.of(bare), true, true)));
+    assertThat(prepared.getFirst().salary()).isEmpty();
+    assertThat(prepared.getFirst().auxiliary()).isEmpty();
+    assertThat(prepared.getLast().salary()).hasSize(2)
+        .extracting(CmsCostSourceEffective::getParentCode).containsOnly(bare);
+    assertThat(prepared.getLast().auxiliary()).singleElement()
+        .satisfies(row -> assertThat(row.getMaterialCode()).isEqualTo(bare));
   }
 
   @Test void anyOriginalEffectiveSalaryWinsIncludingAZeroAndAConfirmedSingleItem() {
     String reference = availableReference();
     salary(product, "DIRECT", "0");
-    var original = query.read(product, 2026, "COMMERCIAL", "COMMERCIAL").rows();
+    var original = query.read(product, 2026, "COMMERCIAL").rows();
     assertThat(original).singleElement().satisfies(row -> {
       assertThat(row.getParentCode()).isEqualTo(product);
       assertThat(row.getAmountYuan()).isZero();
-      assertThat(row.getSalaryModelMatch()).isNull();
     });
     assertThat(publicSources.checkDataSources(context(), Set.of(TechnicalDataModuleType.SALARY)).getFirst().reason())
         .contains("已有单项").doesNotContain(reference);
   }
 
-  @Test void originalRawSalaryAndUnconfirmedPublicationBothPreventFallback() {
-    availableReference();
-    jdbc.update("""
-        INSERT INTO cms_workshop_labor_raw(import_batch_id,row_no,period,parent_code,source_row_id,business_unit_type)
-        VALUES(1,1,'2026-08',?,?,'COMMERCIAL')
-        """, product, product);
-    assertThat(query.read(product, 2026, "COMMERCIAL", "COMMERCIAL").rows()).isEmpty();
-    assertThat(publicSources.checkDataSources(context(), Set.of(TechnicalDataModuleType.SALARY)).getFirst().reasonCode())
-        .isEqualTo("SALARY_SOURCE_UNCONFIRMED");
-    jdbc.update("DELETE FROM cms_workshop_labor_raw WHERE parent_code=?", product);
-    publish("COMMERCIAL", 2026, "RUNNING");
-    assertThat(query.read(product, 2026, "COMMERCIAL", "COMMERCIAL").rows()).isEmpty();
-  }
-
-  @Test void twoUsableSameModelCodesRemainMissingInsteadOfMixingOrChoosingArbitrarily() {
-    availableReference();
-    String other = product + "-OTHER";
-    material(other, product + "-MODEL", "COMMERCIAL", true);
-    salary(other, "DIRECT", "9");
-    salary(other, "INDIRECT", "1");
-    assertThat(query.read(product, 2026, "COMMERCIAL", "COMMERCIAL").rows()).isEmpty();
-  }
-
   private String availableReference() {
     dictionary();
     publish("COMMERCIAL", 2026, "SUCCESS");
-    material(product, product + "-MODEL", "COMMERCIAL", true);
+    material(product, product + "-MODEL");
     String reference = product + "-REF";
-    material(reference, product + "-MODEL", "COMMERCIAL", true);
+    material(reference, product + "-MODEL");
     salary(reference, "DIRECT", "4.050877");
     salary(reference, "INDIRECT", "0.099600");
     return reference;
@@ -156,11 +130,12 @@ class TechnicalDataSalarySourceIntegrationTest extends BomMapperTestBase {
         LocalDateTime.of(2026, 8, 1, 0, 0));
   }
 
-  private void material(String code, String model, String organization, boolean active) {
+  private void material(String code, String model) {
     jdbc.update("""
-        INSERT INTO lp_material_master_raw(import_batch_id,source_type,material_code,material_model,organization_code,active_flag)
-        VALUES('salary-model-test','EXCEL',?,?,?,?)
-        """, code, model, organization, active ? 1 : 0);
+        INSERT INTO lp_material_master_raw(import_batch_id,source_type,material_code,material_model,
+          material_spec,drawing_no,organization_code,active_flag)
+        VALUES('salary-finished-code-test','EXCEL',?,?,?,?,'COMMERCIAL',1)
+        """, code, model, product + "-SPEC", product + "-DRAWING");
   }
 
   private void salary(String code, String type, String amount) {

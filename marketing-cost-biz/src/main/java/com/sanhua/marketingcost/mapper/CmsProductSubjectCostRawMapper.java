@@ -18,7 +18,10 @@ public interface CmsProductSubjectCostRawMapper extends BaseMapper<CmsProductSub
     "<script>",
     "SELECT id, parent_code, period, second_subject_code, material_price",
     "FROM cms_product_subject_cost_raw",
-    "WHERE period LIKE CONCAT(#{costYear}, '-%')",
+    "WHERE period IN",
+    "  <foreach collection='periods' item='period' open='(' separator=',' close=')'>",
+    "    #{period}",
+    "  </foreach>",
     "  AND second_subject_code IN",
     "  <foreach collection='subjectCodes' item='code' open='(' separator=',' close=')'>",
     "    #{code}",
@@ -30,7 +33,7 @@ public interface CmsProductSubjectCostRawMapper extends BaseMapper<CmsProductSub
   @ResultType(CmsProductSubjectCostRaw.class)
   @Options(resultSetType = ResultSetType.FORWARD_ONLY, fetchSize = Integer.MIN_VALUE)
   void forEachAuxiliarySource(
-      @Param("costYear") int costYear,
+      @Param("periods") Collection<String> periods,
       @Param("subjectCodes") Collection<String> subjectCodes,
       @Param("businessUnitType") String businessUnitType,
       ResultHandler<CmsProductSubjectCostRaw> handler);

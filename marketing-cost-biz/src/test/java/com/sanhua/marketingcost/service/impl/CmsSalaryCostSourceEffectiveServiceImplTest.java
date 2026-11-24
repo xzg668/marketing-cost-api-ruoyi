@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -30,6 +29,7 @@ import com.sanhua.marketingcost.mapper.CmsWorkshopLaborRawMapper;
 import com.sanhua.marketingcost.service.CmsPlanEligibilityService;
 import org.apache.ibatis.executor.result.DefaultResultContext;
 import org.apache.ibatis.session.ResultHandler;
+import com.sanhua.marketingcost.service.costing.CmsSourcePeriod;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -78,7 +78,7 @@ class CmsSalaryCostSourceEffectiveServiceImplTest {
           return null;
         })
         .when(workshopMapper)
-        .forEachDirectLaborSource(anyInt(), anyString(), any());
+        .forEachDirectLaborSource(anyCollection(), anyString(), any());
     doAnswer(invocation -> {
           CmsCostSourceEffective row = invocation.getArgument(0);
           row.setId(1000L + insertedEffective.size());
@@ -154,7 +154,7 @@ class CmsSalaryCostSourceEffectiveServiceImplTest {
 
     assertThat(response.getInsertedCount()).isEqualTo(50);
     assertThat(source("SALARY_DIRECT", "P1").getAmountYuan()).isEqualByComparingTo("101.000000");
-    verify(workshopMapper).forEachDirectLaborSource(eq(2026), eq("COMMERCIAL"), any());
+    verify(workshopMapper).forEachDirectLaborSource(eq(CmsSourcePeriod.months(2026)), eq("COMMERCIAL"), any());
   }
 
   @Test

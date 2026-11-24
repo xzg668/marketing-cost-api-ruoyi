@@ -4,10 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse;
+import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -72,6 +75,32 @@ class TechnicalDataPendingRefreshTest {
       assertThat(event.getThrowableProxy()).isNotNull();
       assertThat(event.getThrowableProxy().getMessage()).isEqualTo("实际数据库错误");
     });
+  }
+
+  @Test void financeWaitingRetriesWithoutWarningOrRewritingTheSavedCheck() {
+    var time = LocalDateTime.of(2026, 11, 23, 17, 36);
+    var context = new QuoteBomReadContext(5L, 5L, "OA-5", "2026-10", "COMMERCIAL", "PRODUCT",
+        "产品", "规格", "型号", "210", "COMMERCIAL", LocalDate.from(time), time);
+    var original = response(5L, TechnicalDataAvailability.MISSING, true, "PRICE_SOURCE_MISSING", "原检查缺价格");
+    var work = new TechnicalDataPendingState.Work(4L, 5L, "2026-10", "COMMERCIAL", "saved", "token", original);
+    when(state.waiting(16)).thenReturn(List.of(work));
+    when(sources.preview(5L, "2026-10")).thenThrow(new TechnicalDataCostingSources.PreparationWaitingForFinance(
+        context, "MANUFACTURING", "图库料号待财务确认"));
+    var previousLevel = logger.getLevel();
+    try {
+      logger.setLevel(Level.DEBUG);
+      assertThat(refresh.runBatch()).isZero();
+      assertThat(logs.list).singleElement().satisfies(event -> {
+        assertThat(event.getLevel()).isEqualTo(Level.DEBUG);
+        assertThat(event.getFormattedMessage()).contains("item=5", "2026-10", "图库料号待财务确认");
+        assertThat(event.getThrowableProxy()).isNull();
+      });
+    } finally {
+      logger.setLevel(previousLevel);
+    }
+    verify(state).retry(work);
+    verify(state, never()).complete(any(), any());
+    verifyNoInteractions(shared);
   }
 
   private TechnicalDataSourceCheckResponse response(long item, TechnicalDataAvailability availability,

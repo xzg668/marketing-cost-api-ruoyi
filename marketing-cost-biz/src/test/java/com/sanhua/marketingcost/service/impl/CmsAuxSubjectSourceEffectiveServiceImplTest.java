@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -68,7 +67,7 @@ class CmsAuxSubjectSourceEffectiveServiceImplTest {
           return null;
         })
         .when(subjectMapper)
-        .forEachAuxiliarySource(anyInt(), anyCollection(), anyString(), any());
+        .forEachAuxiliarySource(anyCollection(), anyCollection(), anyString(), any());
     doAnswer(invocation -> {
           CmsCostSourceEffective row = invocation.getArgument(0);
           row.setId(2000L + insertedEffective.size());
@@ -163,7 +162,7 @@ class CmsAuxSubjectSourceEffectiveServiceImplTest {
 
     assertThat(response.getInsertedCount()).isEqualTo(1);
     assertThat(source("0201").getAmountYuan()).isEqualByComparingTo("5001.000000");
-    verify(subjectMapper).forEachAuxiliarySource(anyInt(), anyCollection(), anyString(), any());
+    verify(subjectMapper).forEachAuxiliarySource(anyCollection(), anyCollection(), anyString(), any());
   }
 
   @Test
