@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataProfileUpdateRequest;
 import com.sanhua.marketingcost.entity.*;
@@ -50,6 +51,7 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
 
   @Autowired TechnicalDataReturnService returns;
   @Autowired OaTechnicalBatchRepository batches;
+  @Autowired OaTechnicalBatchDelivery delivery;
   @Autowired TechnicalDataGapStatusQuery gapStatus;
   @Autowired TechnicalDataOaSubmissionLifecycle lifecycle;
   @Autowired TechnicalDataNetLossApplicationService netLoss;
@@ -85,6 +87,32 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
   }
 
   record Fixture(long formId,List<Long> taskIds,String dispatchId) {}
+
+  @Test void dispatchSendsAnOpenSupplementLinkWithTheExistingTechnicianField() {
+    var fixture = dispatched(1, false);
+    var request = batches.find(fixture.dispatchId(), false).request();
+    assertThat(request.path("remark").asText()).endsWith(
+        "\n补录地址：<a href=\"http://localhost:5173/collaboration/technical-data/forms/"
+            + fixture.formId() + "\">打开补录</a>");
+    assertThat(request.path("userid").asText()).isEqualTo("11101516");
+    assertThat(request.path("requestId").asText()).isEqualTo("FLOW-" + fixture.formId());
+    assertThat(request.at("/otherParams/src").asText()).isEqualTo("submit");
+    assertThat(request.at("/formData/dataDetails/0/dataKey").asText()).isEqualTo("jsy");
+    assertThat(request.at("/formData/dataDetails/0/dataOptions/0/type").asText()).isEqualTo("resource");
+    assertThat(request.at("/formData/dataDetails/0/dataOptions/0/optionId").asText()).isEqualTo("12211470");
+    verify(oa).submit(eq(request));
+  }
+
+  @Test void dispatchKeepsTheLinkWhenManyProductsShareTheSameAssignee() {
+    var fixture = dispatched(14, false);
+    var request = batches.find(fixture.dispatchId(), false).request();
+    assertThat(request.path("remark").asText()).isEqualTo(
+        "技术补录：14个产品。\n<a href=\"http://localhost:5173/collaboration/technical-data/forms/"
+            + fixture.formId() + "\">打开补录</a>");
+    assertThat(request.at("/formData/dataDetails/0/dataKey").asText()).isEqualTo("jsy");
+    assertThat(request.at("/formData/dataDetails/0/dataOptions/0/optionId").asText()).isEqualTo("12211470");
+    verify(oa).submit(eq(request));
+  }
 
   @BeforeEach void setup() {
     properties.getOutbound().setFrontendBaseUrl("http://localhost:5173");
@@ -260,9 +288,12 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     var result=documents.submit(f.formId(),req,DING);
     assertThat(result.status()).isEqualTo("SUCCESS");
     assertThat(documents.submit(f.formId(),req,DING).batchId()).isEqualTo(result.batchId());
+    var emptyDetails = JsonNodeFactory.instance.arrayNode();
     verify(oa,times(1)).submit(argThat(body -> body.path("userid").asText().equals("12211470")
         && body.path("remark").asText().contains("2.5") && body.path("remark").asText().contains("3.5")
-        && body.at("/formData/dataDetails/0/content").asText().equals("http://localhost:5173/collaboration/technical-data/forms/"+f.formId())));
+        && body.at("/formData/module").asText().equals("workflow")
+        && body.at("/formData/dataDetails").equals(emptyDetails)));
+    assertThat(batches.find(result.batchId(), false).request().at("/formData/dataDetails")).isEqualTo(emptyDetails);
     assertThat(documents.workbench(f.formId(),PAN).tasks()).hasSize(1);
     assertThat(documents.workbench(f.formId(),PAN).canSubmit()).isFalse();
     assertThat(views.detail(f.taskIds().getFirst(),ADMIN).products().getFirst().profile().unitToolingFee()).isEqualTo("2.5");
@@ -272,6 +303,31 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     assertThat(documents.submit(f.formId(),request(f.formId(),PAN),PAN).status()).isEqualTo("SUCCESS");
     verify(oa,times(2)).submit(any());
     assertThat(documents.submitted(f.formId(),result.batchId(),ADMIN).tasks()).hasSize(2);
+  }
+
+  @Test void legacyPreparedI03SendsAnEmptyDataDetailsArrayAndPreservesTheSavedRequest() {
+    var fixture = dispatched(1, false);
+    clearInvocations(oa);
+    String batchId = UUID.randomUUID().toString();
+    String flowId = "FLOW-" + fixture.formId();
+    var previous = JsonNodeFactory.instance.objectNode()
+        .put("requestId", flowId).put("userid", "12211470").put("remark", "补录工资资料");
+    previous.putObject("otherParams").put("src", "submit");
+    previous.putObject("formData").put("module", "workflow").putArray("dataDetails").addObject()
+        .put("dataKey", "bjxtdz").put("content", "https://quote.example.test/forms/52");
+    new TransactionTemplate(manager).executeWithoutResult(status -> {
+      batches.insert(batchId, "I03", fixture.formId(), DING.userId(), batchId, "0".repeat(64));
+      batches.prepared(batchId, previous);
+    });
+
+    assertThat(delivery.send(batchId).status()).isEqualTo("OA_ACCEPTED");
+    var expected = previous.deepCopy();
+    expected.withObject("/formData").putArray("dataDetails");
+    verify(oa, times(1)).submit(expected);
+    assertThat(batches.find(batchId, false).request()).isEqualTo(previous);
+
+    assertThat(delivery.send(batchId).status()).isEqualTo("OA_ACCEPTED");
+    verifyNoMoreInteractions(oa);
   }
 
   @org.junit.jupiter.params.ParameterizedTest

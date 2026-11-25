@@ -65,8 +65,7 @@ class OaTechnicalSubmissionLiveTest {
 
     String suffix = UUID.randomUUID().toString().replace("-", "");
     var input = new OaTechnicalSubmissionClient.Request("I03_NO_SUCH_FLOW_" + suffix, employeeNo,
-        "接口联调样例：" + OaTechnicalSubmissionFixtures.remark(json),
-        "https://quote.example.invalid/technical-data/submissions/I03-" + suffix);
+        "接口联调样例：" + OaTechnicalSubmissionFixtures.remark(json));
     var client = new OaTechnicalSubmissionClient(json,
         new OaWorkflowClient(new OaWorkflowProperties(), auth, tokens, json));
     System.out.println("OA_I03_REAL_REQUEST=" + client.preview(input));

@@ -215,8 +215,9 @@ class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost
     assertThat(remark).contains("引用");
     var client = new com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalSubmissionClient(mapper, null);
     var payload = client.preview(new com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalSubmissionClient.Request(
-        "FLOW-TEST", "101", remark, "http://localhost/technical-data/forms/7"));
+        "FLOW-TEST", "101", remark));
     assertThat(payload.path("remark").asText()).isEqualTo(remark);
+    assertThat(payload.at("/formData/dataDetails")).isEqualTo(mapper.createArrayNode());
   }
 
   @Test void returnedManufacturingRebuildsBomFromLatestSavedDataAndResubmitsOnlyTheNewInputs() {

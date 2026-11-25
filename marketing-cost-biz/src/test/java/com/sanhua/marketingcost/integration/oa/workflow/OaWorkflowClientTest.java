@@ -167,8 +167,7 @@ class OaWorkflowClientTest {
 
   @Test void technicalSubmissionSendsTheFlagAlongsideTheOriginalRequestId() throws Exception {
     var adapter = new OaTechnicalSubmissionClient(json, client);
-    var request = new OaTechnicalSubmissionClient.Request("00123", "0001", "补录工资资料",
-        "https://quote.example.test/review/123");
+    var request = new OaTechnicalSubmissionClient.Request("00123", "0001", "补录工资资料");
     var original = adapter.preview(request);
     assertThat(adapter.submit(request).status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
     assertThat(json.readTree(requestBody)).isEqualTo(original.deepCopy().put("formSaveFailInterdictFlow", true));

@@ -11,6 +11,7 @@ import java.util.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.util.HtmlUtils;
 
 /** 一张原 OA 单据的一次分派：本地准备、单次原生 I02、确认后开放填写。 */
 @Service
@@ -179,10 +180,22 @@ public class TechnicalDataOaDispatchService {
       new OaTechnicalDispatchRequest(document.requestId(), document.processCode(), null, productCommands),
       operator
     );
-    body.put("remark", body.path("remark").asText() + "\n补录地址：" + url);
-    OaWorkflowClient.validateRemark(body.path("remark").asText());
+    body.put("remark", dispatchRemark(body.path("remark").asText(), url, productCommands.size()));
     batches.prepared(batchId, body);
     return batchId;
+  }
+
+  static String dispatchRemark(String description, String url, int productCount) {
+    String label = "\n补录地址：";
+    String link = "<a href=\"" + HtmlUtils.htmlEscape(url, "UTF-8") + "\">打开补录</a>";
+    String full = HtmlUtils.htmlEscape(description, "UTF-8") + label + link;
+    String concise = "技术补录：" + productCount + "个产品。\n" + link;
+    for (String html : List.of(full, concise, link)) {
+      if (html.codePointCount(0, html.length()) <= OaWorkflowClient.REMARK_MAX_LENGTH) return html;
+    }
+    String remark = description + label + url;
+    OaWorkflowClient.validateRemark(remark);
+    return remark;
   }
 
   public List<Long> taskIds(String batchId) {

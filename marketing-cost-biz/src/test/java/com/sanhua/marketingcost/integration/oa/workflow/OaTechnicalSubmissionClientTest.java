@@ -87,8 +87,8 @@ class OaTechnicalSubmissionClientTest {
         "产品I03测试产品A：工资[直接人工1.25元/只，辅助人工0.3元/只]。产品I03测试产品B：净损失率[2%]。");
     assertThat(body.path("userid").asText()).isEqualTo("0012211470");
     assertThat(body.path("requestId").asText()).isEqualTo("0000123");
-    assertThat(body.at("/formData/dataDetails/0/dataKey").asText()).isEqualTo("bjxtdz");
-    assertThat(body.at("/formData/dataDetails/0/content").asText()).isEqualTo(request().reviewUrl());
+    assertThat(body.at("/formData/module").asText()).isEqualTo("workflow");
+    assertThat(body.at("/formData/dataDetails")).isEqualTo(json.createArrayNode());
     assertThat(authorizeCalls.get() + tokenCalls.get() + submitCalls.get()).isZero();
   }
 
@@ -101,7 +101,7 @@ class OaTechnicalSubmissionClientTest {
     assertThat(received.size()).isEqualTo(6);
     assertThat(received.at("/otherParams/src").asText()).isEqualTo("submit");
     assertThat(received.at("/formData/module").asText()).isEqualTo("workflow");
-    assertThat(received.at("/formData/dataDetails").size()).isEqualTo(1);
+    assertThat(received.at("/formData/dataDetails")).isEqualTo(json.createArrayNode());
     assertThat(method).isEqualTo("POST");
     assertThat(caller).isEqualTo("LOCAL_QUOTE");
     assertThat(contentType).contains("application/json", "UTF-8");
@@ -150,9 +150,9 @@ class OaTechnicalSubmissionClientTest {
   @Test void acceptsFullTwoHundredCharacterRemarkAndRejectsOverflowBeforeAuth() {
     String full = "补".repeat(200);
     var input = request();
-    var atLimit = new OaTechnicalSubmissionClient.Request(input.requestId(), input.technicianEmployeeNo(), full, input.reviewUrl());
+    var atLimit = new OaTechnicalSubmissionClient.Request(input.requestId(), input.technicianEmployeeNo(), full);
     assertThat(client.preview(atLimit).path("remark").asText()).isEqualTo(full);
-    var overflow = new OaTechnicalSubmissionClient.Request(input.requestId(), input.technicianEmployeeNo(), full + "录", input.reviewUrl());
+    var overflow = new OaTechnicalSubmissionClient.Request(input.requestId(), input.technicianEmployeeNo(), full + "录");
     assertThatThrownBy(() -> client.submit(overflow)).isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("201").hasMessageContaining("不能截断");
     assertThat(authorizeCalls.get() + tokenCalls.get() + submitCalls.get()).isZero();
@@ -163,28 +163,17 @@ class OaTechnicalSubmissionClientTest {
     assertThat(authorizeCalls.get() + submitCalls.get()).isZero();
   }
 
-  @ParameterizedTest @ValueSource(strings = {"requestId", "technician", "remark", "url"})
+  @ParameterizedTest @ValueSource(strings = {"requestId", "technician", "remark"})
   void missingRequiredFieldsNeverReachOa(String field) {
     for (String missing : new String[] {null, "", "  "}) {
       var input = request();
       var invalid = new OaTechnicalSubmissionClient.Request(
           "requestId".equals(field) ? missing : input.requestId(),
           "technician".equals(field) ? missing : input.technicianEmployeeNo(),
-          "remark".equals(field) ? missing : input.remark(),
-          "url".equals(field) ? missing : input.reviewUrl());
+          "remark".equals(field) ? missing : input.remark());
       assertThatThrownBy(() -> client.submit(invalid)).isInstanceOf(IllegalArgumentException.class);
     }
     assertThat(authorizeCalls.get() + tokenCalls.get() + submitCalls.get()).isZero();
-  }
-
-  @ParameterizedTest @ValueSource(strings = {"/submissions/1", "javascript:alert(1)", "https://user:password@quote.example.test/view",
-      "https://quote.example.test/view#code=ONE_TIME", "https://quote.example.test/has space", "http:///missing-host"})
-  void invalidReviewAddressNeverReachesOa(String address) {
-    var input = request();
-    assertThatThrownBy(() -> client.submit(new OaTechnicalSubmissionClient.Request(
-        input.requestId(), input.technicianEmployeeNo(), input.remark(), address)))
-        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("查看地址");
-    assertThat(authorizeCalls.get() + submitCalls.get()).isZero();
   }
 
   @ParameterizedTest @ValueSource(strings = {"requestId", "technician"})
@@ -193,15 +182,14 @@ class OaTechnicalSubmissionClientTest {
     for (String bad : new String[] {"bad value", "bad\nvalue", "1".repeat(101)}) {
       assertThatThrownBy(() -> client.submit(new OaTechnicalSubmissionClient.Request(
           "requestId".equals(field) ? bad : input.requestId(),
-          "technician".equals(field) ? bad : input.technicianEmployeeNo(), input.remark(), input.reviewUrl())))
+          "technician".equals(field) ? bad : input.technicianEmployeeNo(), input.remark())))
           .isInstanceOf(IllegalArgumentException.class);
     }
     assertThat(authorizeCalls.get() + submitCalls.get()).isZero();
   }
 
   private OaTechnicalSubmissionClient.Request request() {
-    return new OaTechnicalSubmissionClient.Request("0000123", "0012211470", OaTechnicalSubmissionFixtures.remark(json),
-        "https://quote.example.test/submissions/TS-001?document=0000123");
+    return new OaTechnicalSubmissionClient.Request("0000123", "0012211470", OaTechnicalSubmissionFixtures.remark(json));
   }
 
   private static void respond(HttpExchange exchange, String body) throws IOException {

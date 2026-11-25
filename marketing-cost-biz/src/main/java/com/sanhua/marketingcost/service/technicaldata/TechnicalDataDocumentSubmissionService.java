@@ -313,8 +313,7 @@ public class TechnicalDataDocumentSubmissionService {
       new OaTechnicalSubmissionClient.Request(
         document.requestId(),
         employee,
-        remarks.generateDocument(submittedProducts),
-        context.workbenchUrl(formId)
+        remarks.generateDocument(submittedProducts)
       )
     );
     batches.prepared(batchId, body);

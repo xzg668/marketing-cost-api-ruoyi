@@ -2,16 +2,12 @@ package com.sanhua.marketingcost.integration.oa.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.net.URI;
 import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
 import org.springframework.stereotype.Component;
 
 /** I03 技术资料提交的 OA 原生协议；任务校验、冻结及人员权限由调用方业务服务负责。 */
 @Component
 public class OaTechnicalSubmissionClient {
-  // 暂按双方讨论使用“报价系统地址”；OA 确认实际字段名后，只修改这一处。
-  private static final String REVIEW_URL_DATA_KEY = "bjxtdz";
-
   private final ObjectMapper json;
   private final OaWorkflowClient workflow;
 
@@ -21,7 +17,7 @@ public class OaTechnicalSubmissionClient {
   }
 
   /** requestId 为 OA 推送的原流程编号；remark 接收既有生成器产出的本次实际补录说明。 */
-  public record Request(String requestId, String technicianEmployeeNo, String remark, String reviewUrl) {}
+  public record Request(String requestId, String technicianEmployeeNo, String remark) {}
 
   /** 只构造报文，供核对；不申请 token，不发送 OA。 */
   public ObjectNode preview(Request request) {
@@ -36,16 +32,13 @@ public class OaTechnicalSubmissionClient {
     }
     String remark = required(request.remark(), "本次实际补录说明");
     OaWorkflowClient.validateRemark(remark);
-    String reviewUrl = reviewUrl(request.reviewUrl());
 
     ObjectNode body = json.createObjectNode();
     body.put("userid", employeeNo);
     body.put("requestId", requestId);
     body.put("remark", remark);
     body.putObject("otherParams").put("src", "submit");
-    ObjectNode form = body.putObject("formData").put("module", "workflow");
-    form.putArray("dataDetails").addObject()
-        .put("dataKey", REVIEW_URL_DATA_KEY).put("content", reviewUrl);
+    body.putObject("formData").put("module", "workflow").putArray("dataDetails");
     return body;
   }
 
@@ -67,20 +60,5 @@ public class OaTechnicalSubmissionClient {
   private static String required(String value, String label) {
     if (value == null || value.isBlank()) throw new IllegalArgumentException(label + "不能为空");
     return value;
-  }
-
-  private static String reviewUrl(String value) {
-    String address = required(value, "本次资料查看地址").strip();
-    try {
-      URI uri = URI.create(address);
-      // 保存稳定的资料链接；OA 打开链接时的身份凭证不属于表单地址。
-      if (!("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))
-          || uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null) {
-        throw new IllegalArgumentException();
-      }
-      return address;
-    } catch (IllegalArgumentException exception) {
-      throw new IllegalArgumentException("本次资料查看地址须为完整 HTTP(S) 地址，且不含账号密码或片段凭证");
-    }
   }
 }

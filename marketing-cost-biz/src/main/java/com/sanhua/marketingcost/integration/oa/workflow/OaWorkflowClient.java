@@ -28,7 +28,7 @@ import org.springframework.stereotype.Component;
 public class OaWorkflowClient {
   public static final String SUBMIT_PATH = "/openserver/api/workflow/core/paService/v1/submitRequest";
   public static final String REJECT_PATH = "/openserver/api/workflow/core/paService/v1/rejectRequest";
-  private static final int REMARK_MAX_LENGTH = 200;
+  public static final int REMARK_MAX_LENGTH = 200;
 
   /** OA V2.8 的意见字段上限；在准备事务内检查，避免冻结无法发送的资料。 */
   public static void validateRemark(String remark) {

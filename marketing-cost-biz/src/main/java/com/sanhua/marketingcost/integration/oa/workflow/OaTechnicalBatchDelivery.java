@@ -64,8 +64,7 @@ public class OaTechnicalBatchDelivery {
               new OaTechnicalSubmissionClient.Request(
                 body.path("requestId").asText(),
                 body.path("userid").asText(),
-                body.path("remark").asText(),
-                body.at("/formData/dataDetails/0/content").asText()
+                body.path("remark").asText()
               )
             )
           : workflow.submit(body);
