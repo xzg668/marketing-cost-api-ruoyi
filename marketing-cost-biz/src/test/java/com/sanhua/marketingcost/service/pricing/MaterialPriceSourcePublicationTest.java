@@ -1,9 +1,52 @@
 package com.sanhua.marketingcost.service.pricing;
 
 import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class MaterialPriceSourcePublicationTest {
+  @Test void unpricedMakesScanOncePerOrganizationAndKeepOnlyMaterialsWithAnAlternative() {
+    var repository=mock(MaterialPriceSourceRepository.class);
+    var scanner=mock(MaterialPriceSourceScanner.class);
+    var months=mock(MaterialPriceMonthSelector.class);
+    var make = source("A","210","MAKE");
+    var fixed = source("A","210","FIXED");
+    var makeOnly = source("B","210","MAKE");
+    var secondOrganizationMake = source("A","220","MAKE");
+    when(repository.installed()).thenReturn(true);
+    when(repository.manufacturedMaterials("COMMERCIAL","2026-11",42L))
+        .thenReturn(List.of(make.key(),makeOnly.key(),secondOrganizationMake.key()));
+    when(scanner.scan(anyMap())).thenAnswer(call -> {
+      Map<String,Object> params=call.getArgument(0);
+      if ("220".equals(params.get("organization"))) return List.of(secondOrganizationMake);
+      return List.of(make,fixed,makeOnly);
+    });
+    when(repository.quotationRows(anyMap())).thenReturn(List.of(new MaterialPriceSourceCatalog.Entry(
+        1,"A","材料",null,null,"210","商用","FIXED","固定价",List.of(),"PURCHASE",false,1)));
+    when(repository.lock(anyMap())).thenReturn(7L);
+
+    new MaterialPriceSourceService(repository,scanner,months)
+        .includeUnpricedManufactures("COMMERCIAL","2026-11",42L);
+
+    var order = inOrder(scanner,repository);
+    order.verify(scanner).scan(argThat(params -> "210".equals(params.get("organization"))
+        && List.of("A","B").equals(params.get("materialCodes"))));
+    order.verify(scanner).scan(argThat(params -> "220".equals(params.get("organization"))
+        && List.of("A").equals(params.get("materialCodes"))));
+    order.verify(repository).lock(anyMap());
+    order.verify(repository).append(anyMap(),eq(List.of(make)),eq(7L),eq("MAKE_CALCULATED"));
+    verify(scanner,times(2)).scan(anyMap());
+    verify(repository,times(1)).lock(anyMap());
+  }
+
+  private static MaterialPriceSourceCatalog.Candidate source(String code,String org,String type) {
+    return new MaterialPriceSourceCatalog.Candidate(
+        new MaterialPriceSourceCatalog.Key(code,org,type),"材料",null,null,"商用",List.of(),
+        "MAKE".equals(type) ? "MANUFACTURE" : null);
+  }
+
   @Test void anOlderSchemaCanStillCalculateWithoutInstallingOrPublishingCatalogData() {
     var repository=mock(MaterialPriceSourceRepository.class);
     var scanner=mock(MaterialPriceSourceScanner.class);

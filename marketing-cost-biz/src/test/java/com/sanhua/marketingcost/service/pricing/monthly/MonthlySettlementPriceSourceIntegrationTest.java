@@ -36,7 +36,7 @@ class MonthlySettlementPriceSourceIntegrationTest {
     }};jdbc=new JdbcTemplate(ds);assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/settlement-source-schema.sql")).execute(ds);
     jdbc.execute("CREATE TABLE lp_quote_tech_data_version(id BIGINT PRIMARY KEY)");new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/pre-v342-schema.sql")).execute(ds);
-    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql")){
+    for(String migration:List.of("V342__monthly_material_price_storage.sql","V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql","V360__finance_correction_monthly_price.sql","V364__household_inquiry_header_schema.sql","V365__household_monthly_source_revision.sql","V372__monthly_price_disable.sql","V366__household_model_specification_match.sql","V397__settlement_import_batch_void.sql")){
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+migration),"/tmp/scrap-monthly.sql");var result=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_settlement_source_test < /tmp/scrap-monthly.sql");assertThat(result.getExitCode()).withFailMessage(result.getStderr()).isZero();
     }
     var configuration=new com.baomidou.mybatisplus.core.MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);for(var mapper:List.of(com.sanhua.marketingcost.mapper.FactorIdentityMapper.class,com.sanhua.marketingcost.mapper.FactorUploadBatchMapper.class,com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper.class,com.sanhua.marketingcost.mapper.FactorRowRefMapper.class))configuration.addMapper(mapper);configuration.addMapper(MonthlyPriceStorageMapper.class);configuration.addMapper(MonthlyPriceLinkMapper.class);var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(configuration);
@@ -69,6 +69,24 @@ class MonthlySettlementPriceSourceIntegrationTest {
   }
   static Candidates read(Context context,MonthlyPriceRequest... requests){var routes=new LinkedHashMap<MonthlyPriceRequest,SettlementPriceType>();for(var r:requests)routes.put(r,routeTypes.get(r));return source.read(context,routes);}
   static MonthlyAdoptionPlan plan(MonthlyPriceRequest request,MonthlyAdoptionPlan.Selection selection){return new MonthlyAdoptionPlan(Map.of(request,selection),List.of(new MonthlyAdoptionPlan.Use("root/settlement",request,BigDecimal.ONE)),Set.of());}
+  @Test void withdrawalRetiresAnAdoptedPriceAndProtectsItsSavedEvidence() {
+    String month="2026-04";
+    var row=rule(code(),month,SettlementPriceType.SETTLE_FIXED,"44",false);
+    generate(row);
+    var r=request(row.getMaterialCode(),month,"210",SettlementPriceType.SETTLE_FIXED);
+    var c=context(month,"210");
+    var chosen=operation.resolveCandidates(c,Set.of(r)).values().get(r).selection();
+    var adopted=operation.adopt(c,plan(r,chosen)).plan().selections().get(r);
+    var retirement=new VoidedSourceMonthlyPrices(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc),codec);
+    transaction.executeWithoutResult(status->{
+      rules.voidRules("COMMERCIAL",List.of(row.getId()),"finance");
+      retirement.settlement("COMMERCIAL",List.of(row.getId()));
+    });
+    assertThat(operation.lookup(Set.of(r)).missing()).containsExactly(r);
+    assertThat(operation.readByIds("COMMERCIAL",List.of(adopted.monthlyPriceId())).get(adopted.monthlyPriceId())).isEqualTo(adopted);
+    assertThat(operation.resolveCandidates(c,Set.of(r)).values()).isEmpty();
+  }
+
   @Test void actualFixedZeroAndLinkedGivenReuseSavedResultsAndShareBothOrganizations() throws Exception {
     for(var type:SettlementPriceType.values()){
       String code=code();var row=rule(code,"2026-01",type,type==SettlementPriceType.SETTLE_FIXED?"0":"4.841",false);generate(row);var a=request(code,"2026-02","210",type);var b=request(code,"2026-02","220",type);long before=jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_effective_price",Long.class);prepared.set(0);var result=read(context("2026-02","210"),a,b);int count=prepared.get();assertThat(result.problems()).isEmpty();var selected=result.values().get(a).selection();assertThat(selected.fact().price()).isEqualByComparingTo(row.getGivenPrice());assertThat(selected.applicability().matches(b)).isTrue();assertThat(selected.fact()).isEqualTo(result.values().get(b).selection().fact());assertThat(selected.fact().evidence().json()).contains("settlement-original.xls","original-cell-formula","effectivePrice").doesNotContain("consumerOrgCode");assertThat(count).isLessThanOrEqualTo(8);assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_effective_price",Long.class)).isEqualTo(before);

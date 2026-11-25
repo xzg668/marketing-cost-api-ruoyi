@@ -11,6 +11,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** One atomic set of adopted facts; BOM planning and product costing stay outside this module. */
 public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MonthlyMaterialPriceService.class);
   public record Dependency(MonthlyPriceRequest request,long monthlyPriceId) {
     public Dependency {Objects.requireNonNull(request);if(monthlyPriceId<=0)throw new IllegalArgumentException("Saved child ID required");}
   }
@@ -247,6 +248,7 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     } catch(MonthlyPriceProblem expected) {
       throw expected;
     } catch(DataAccessException | org.springframework.transaction.TransactionException error) {
+      logAdoptionError(context, error, started, committing.get());
       if(!committing.get() && concurrencyFailure(error))
         throw new MonthlyPriceProblem(Failure.TRANSIENT_CONCURRENCY_FAILURE,"Monthly price lock conflict; transaction rolled back",error);
       // A lost commit response is recovered from immutable prices, without a separate receipt table.
@@ -262,6 +264,20 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
       throw new MonthlyPriceProblem(committing.get()?Failure.COMMIT_OUTCOME_UNKNOWN:Failure.PERSISTENCE_INCOMPLETE,
           "Monthly price transaction could not be confirmed; retry reads saved prices first",error);
     }
+  }
+
+  private static void logAdoptionError(Context context, RuntimeException error, long started, boolean committing) {
+    java.sql.SQLException sql = null;
+    Throwable root = error;
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      root = cause;
+      if (sql == null && cause instanceof java.sql.SQLException jdbcError) sql = jdbcError;
+    }
+    log.warn("Monthly price adoption database error: oaNo={}, itemId={}, phase={}, elapsedMs={}, exception={}, root={}, sqlState={}, vendorCode={}",
+        context.oaNo(), context.oaFormItemId(), committing ? "COMMIT" : "PRE_COMMIT",
+        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started),
+        error.getClass().getSimpleName(), root.getClass().getSimpleName(),
+        sql == null ? null : sql.getSQLState(), sql == null ? null : sql.getErrorCode());
   }
 
   private AdoptionResult persist(Context context,MonthlyAdoptionPlan planned) {
@@ -287,7 +303,13 @@ public class MonthlyMaterialPriceService implements MonthlyMaterialPrices {
     storage.lockAndCheckFinance(planned);
     var observed=new LinkedHashSet<>(planned.selections().keySet());
     observed.addAll(planned.ordinaryScopeRequests());
-    storage.lockFamilies(observed.stream().map(MonthlyPriceRequest::family).toList());
+    var families = observed.stream().map(MonthlyPriceRequest::family).toList();
+    var selections = planned.selections().values();
+    if (!selections.isEmpty() && selections.stream().allMatch(price -> price.monthlyPriceId() != null)) {
+      storage.lockFamilies(families, true);
+    } else {
+      storage.lockFamilies(families);
+    }
     var scopeWinners=lookup(planned.ordinaryScopeRequests());
     for(var request:planned.ordinaryScopeRequests()) {
       var winner=scopeWinners.values().get(request);

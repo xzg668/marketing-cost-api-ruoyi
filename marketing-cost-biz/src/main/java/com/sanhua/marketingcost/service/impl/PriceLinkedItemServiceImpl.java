@@ -204,7 +204,15 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
     var query =
         Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
-            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED");
+            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED")
+            .apply("""
+                NOT EXISTS (SELECT 1 FROM lp_price_linked_item retired
+                  WHERE retired.business_unit_type=lp_price_linked_item.business_unit_type
+                    AND retired.org_code=lp_price_linked_item.org_code AND retired.source_kind='PUBLIC'
+                    AND retired.pricing_month=lp_price_linked_item.pricing_month
+                    AND retired.rule_identity_key=lp_price_linked_item.rule_identity_key
+                    AND retired.rule_revision>lp_price_linked_item.rule_revision AND retired.rule_status='VOIDED')
+                """);
     if (StringUtils.hasText(resolvedMonth)) {
       query.eq(PriceLinkedItem::getPricingMonth, resolvedMonth);
     }
@@ -232,7 +240,15 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
     var query =
         Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
-            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED");
+            .in(PriceLinkedItem::getRuleStatus, "LEGACY", "PUBLISHED")
+            .apply("""
+                NOT EXISTS (SELECT 1 FROM lp_price_linked_item retired
+                  WHERE retired.business_unit_type=lp_price_linked_item.business_unit_type
+                    AND retired.org_code=lp_price_linked_item.org_code AND retired.source_kind='PUBLIC'
+                    AND retired.pricing_month=lp_price_linked_item.pricing_month
+                    AND retired.rule_identity_key=lp_price_linked_item.rule_identity_key
+                    AND retired.rule_revision>lp_price_linked_item.rule_revision AND retired.rule_status='VOIDED')
+                """);
     if (StringUtils.hasText(resolvedMonth)) {
       query.eq(PriceLinkedItem::getPricingMonth, resolvedMonth);
     }

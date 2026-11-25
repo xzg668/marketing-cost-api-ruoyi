@@ -350,7 +350,9 @@ public final class MonthlyInquiryPriceSource {
     var result = new LinkedHashMap<String, List<SupplierSource>>();
     var batches = new HashMap<String, Long>();
     for (var source : sources) {
-      var match = InquirySupplierNames.resolve(source.rule().supplierName(), local, catalog);
+      var match = source.rule().supplierCode().isBlank()
+          ? InquirySupplierNames.resolve(source.rule().supplierName(), local, catalog)
+          : new InquirySupplierNames.Match(source.rule().supplierCode(), source.rule().supplierName(), "EXPLICIT_CODE");
       if (explicit != null && !explicit.equals(match.code())) continue;
       String key =
           match.code() != null

@@ -12,6 +12,9 @@ public interface MonthlyOriginalLinkedSourceMapper {
     <script>SELECT p.* FROM lp_price_linked_item p
       WHERE p.business_unit_type=#{unit} AND p.org_code=#{org} AND p.deleted=0
       AND p.rule_status IN ('LEGACY','PUBLISHED')
+      AND NOT EXISTS (SELECT 1 FROM lp_price_linked_item n WHERE n.business_unit_type=p.business_unit_type
+        AND n.org_code=p.org_code AND n.source_kind=p.source_kind AND n.pricing_month=p.pricing_month
+        AND n.rule_identity_key=p.rule_identity_key AND n.rule_revision&gt;p.rule_revision AND n.rule_status='VOIDED')
       AND ((p.source_kind='PUBLIC' AND p.pricing_month=#{month})
         OR (p.source_kind='TECH_SUPPLEMENTAL' AND p.technical_publication_status='AVAILABLE'
           AND p.pricing_month &lt;= #{requestedMonth}

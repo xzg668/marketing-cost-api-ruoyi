@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
@@ -46,6 +47,9 @@ public class OriginalLinkedImportService {
 
   @org.springframework.beans.factory.annotation.Autowired(required=false)
   private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.pricing.monthly.VoidedSourceMonthlyPrices withdrawnMonthly;
 
   private static final BigDecimal VAT = new BigDecimal("1.13");
   private final LinkedApprovalImportContext approvalContext;
@@ -163,6 +167,27 @@ public class OriginalLinkedImportService {
     });
   }
 
+  public void voidRow(long id,String businessUnitType) {
+    String unit=voidBusinessUnit(businessUnitType);
+    transaction.executeWithoutResult(status->{
+      identities.lockForFinancePublication(unit);
+      var row=items.selectOne(Wrappers.lambdaQuery(PriceLinkedItem.class)
+          .eq(PriceLinkedItem::getId,id).eq(PriceLinkedItem::getBusinessUnitType,unit)
+          .eq(PriceLinkedItem::getSourceKind,"PUBLIC").eq(PriceLinkedItem::getDeleted,0)
+          .last("FOR UPDATE"));
+      if(row==null)throw new org.springframework.web.server.ResponseStatusException(
+          org.springframework.http.HttpStatus.NOT_FOUND,"联动价格不存在");
+      if(VOIDED.equals(row.getRuleStatus()))return;
+      if(!Set.of("PUBLISHED","LEGACY").contains(row.getRuleStatus()))
+        throw new IllegalArgumentException("这条联动价格当前不参与取价");
+      items.update(null,Wrappers.lambdaUpdate(PriceLinkedItem.class).eq(PriceLinkedItem::getId,id)
+          .set(PriceLinkedItem::getRuleStatus,VOIDED).set(PriceLinkedItem::getUpdatedAt,LocalDateTime.now()));
+      withdrawnMonthly.linkedRow(unit,id);
+      if(pendingState!=null)pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(
+          Set.of("PRICE"),unit,Set.of(row.getMaterialCode()),Set.of()));
+    });
+  }
+
   private String voidBusinessUnit(String requested) {
     String unit = Objects.toString(requested, "").trim().toUpperCase(Locale.ROOT);
     if (!List.of("COMMERCIAL", "HOUSEHOLD").contains(unit)) throw new IllegalArgumentException("请选择业务单元");
@@ -241,7 +266,7 @@ public class OriginalLinkedImportService {
                       .allMatch(
                           rule -> {
                             var prior = checked.previous().get(rule.identity().identityKey());
-                            return prior != null
+                            return prior != null && !VOIDED.equals(prior.getRuleStatus())
                                 && replayIds.contains(prior.getSourceUploadBatchId());
                           }))
                 return complete(
@@ -492,7 +517,7 @@ public class OriginalLinkedImportService {
                 .in(PriceLinkedItem::getOrgCode, scope.orgs())
                 .eq(PriceLinkedItem::getPricingMonth, scope.month())
                 .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
-                .in(PriceLinkedItem::getRuleStatus, includeStaged ? List.of("PUBLISHED", "STAGED") : List.of("PUBLISHED"))
+                .in(PriceLinkedItem::getRuleStatus, includeStaged ? List.of("PUBLISHED", "STAGED","VOIDED") : List.of("PUBLISHED","VOIDED"))
                 .isNotNull(PriceLinkedItem::getRuleIdentityKey)
                 .orderByDesc(PriceLinkedItem::getRuleRevision));
     Map<String, PriceLinkedItem> result = new LinkedHashMap<>();

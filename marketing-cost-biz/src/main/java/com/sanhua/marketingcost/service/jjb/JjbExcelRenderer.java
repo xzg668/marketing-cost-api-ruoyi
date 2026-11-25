@@ -16,7 +16,7 @@ public class JjbExcelRenderer {
       PERCENT = "0.########################%";
   private static final String[] COLUMNS = {
     "子件编码", "部品名", "部品图号／规格", "部品单价", "部品用量", "计量单位", "部品价格", "毛重", "净重",
-    "原材料\n单价", "废料\n单价", "材质", "形态属性", "价格来源", "备注\n（手填）", "备注-CMS\n来源信息"
+    "原材料\n单价", "废料\n单价", "材质", "形态属性", "价格来源", "加工费", "备注-CMS\n来源信息"
   };
 
   public int write(JjbReadModel model, OutputStream output) throws IOException {
@@ -81,7 +81,7 @@ public class JjbExcelRenderer {
       String[][] labels = {
         {"OA单号", null, null, "报价员", null, "申请部门", null, "申请处室", null, "不锈钢-316L\n（元/吨）", null, "电解铜\n（元/吨）", null, "电解铝\n（元/吨）", null},
         {"客户名称", null, null, "客户编号", null, "是否通过海外\n仓库发终端客户", null, "销售价格\n是否联动", null, "不锈钢-304\n（元/吨）", null, "电解锌\n（元/吨）", null, "/", null},
-        {"父件名称", null, null, "父件型号", null, "业务类型", null, "事业部", null, "美国柜装黄铜", null, "H65黄铜边料", null, "/", null},
+        {"父件名称", null, null, "父件型号", null, "业务类型", null, "事业部", null, "美国柜装黄铜\n（元/公斤）", null, "H65黄铜边料\n（元/公斤）", null, "/", null},
         {"一级编码", null, null, "父件规格", null, "裸品码", null, "客户Cu\n（元/公斤）", null, "白银", null, "黄金", null, "/", null}
       };
       var h = m.header();
@@ -110,10 +110,15 @@ public class JjbExcelRenderer {
       numeric(sheet.getRow(1), 14, h.quotation().get("aluminumPrice"), MONEY);
       numeric(sheet.getRow(2), 10, h.quotation().get("sus304Price"), MONEY);
       numeric(sheet.getRow(2), 12, h.quotation().get("zincPrice"), MONEY);
+      numeric(sheet.getRow(3), 10, h.quotation().get("brassPrice"), MONEY);
+      numeric(sheet.getRow(3), 12, h.quotation().get("brassScrapPrice"), MONEY);
       numeric(sheet.getRow(4), 10, h.quotation().get("silverPrice"), MONEY);
       numeric(sheet.getRow(4), 12, h.quotation().get("goldPrice"), MONEY);
       numeric(sheet.getRow(4), 8, h.quotation().get("customerCuPrice"), MONEY);
-      comment(sheet.getRow(1).getCell(col(12)), "报价需求单电解铜；单位：元/吨");
+      comment(sheet.getRow(1).getCell(col(12)), "本版本客户Cu对应的财务影响因素档；单位：元/吨；仅展示，公式实际代入值见保存明细");
+      comment(sheet.getRow(2).getCell(col(12)), "本版本客户Cu对应档的锌价；单位：元/吨；仅展示，不重算成本");
+      comment(sheet.getRow(3).getCell(col(10)), "本版本客户Cu对应档的美国柜装黄铜价；单位：元/公斤；仅展示，不重算成本");
+      comment(sheet.getRow(3).getCell(col(12)), "本版本客户Cu对应档的H65黄铜边料价；单位：元/公斤；仅展示，不重算成本");
       comment(sheet.getRow(4).getCell(col(8)), "报价需求单铜价（元/吨）÷1000；单位：元/公斤；仅展示，不重算成本");
       for (int r = 1; r <= 4; r++)
         for (int c : new int[] {1, 4, 6, 8, 10, 12, 14})
@@ -191,7 +196,14 @@ public class JjbExcelRenderer {
       string(row, 12, "HOUSEHOLD".equals(v.kind()) && v.priceSource() == null ? "询价（家用部件）" : v.priceSource());
       String oemNote = com.sanhua.marketingcost.service.costing.OemProductConfigStore.RATE_NOTE;
       boolean oem = v.rate() != null && "SALES_EXP".equals(v.code()) && text(v.remark()).contains(oemNote);
-      string(row, 13, oem && oemNote.equals(v.remark()) ? "" : compact(v.remark(), 12));
+      var fee = v.processingFee();
+      if (fee != null) {
+        String unit = fee.displayUnit();
+        String format = DECIMAL + "\" " + unit.replace("\"", "\"\\\"\"") + "\"";
+        numeric(row, 13, fee.amount(), format);
+        if (row.getCell(col(13)).getCellType() == CellType.STRING) string(row, 13, fee.amount() + " " + unit);
+        sheet.setColumnWidth(col(13), Math.max(sheet.getColumnWidth(col(13)), 23 * 256));
+      }
       if (oem) numeric(row, 3, v.rate(), PERCENT + "\"" + oemNote + "\"");
       string(row, 14, v.cmsSourceNote());
       comment(row.getCell(col(13)), text(v.remark()));
@@ -336,11 +348,6 @@ public class JjbExcelRenderer {
   // Map the reference A:O positions to A:P after inserting the unit column at F.
   private static int col(int original) { return original >= 5 ? original + 1 : original; }
 
-  private static String compact(String value, int limit) {
-    String text = text(value).replace('\n', ' ');
-    if (text.codePointCount(0, text.length()) <= limit) return text;
-    return text.substring(0, text.offsetByCodePoints(0, limit)) + "…";
-  }
   private static String percent(String value) {
     return value == null ? "" : new BigDecimal(value).movePointRight(2).stripTrailingZeros().toPlainString() + "%";
   }

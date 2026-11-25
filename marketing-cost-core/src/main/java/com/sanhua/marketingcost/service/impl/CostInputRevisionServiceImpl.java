@@ -2,23 +2,28 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
+import com.sanhua.marketingcost.service.NetLossRateQuery;
 import com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 @Service
 public class CostInputRevisionServiceImpl implements CostInputRevisionService {
@@ -121,6 +126,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
   private com.sanhua.marketingcost.service.QuotationMaterialShapeInputs materialShapes;
   @Autowired(required=false)
   private com.sanhua.marketingcost.service.costing.OemProductConfigStore oemProducts;
+  @Autowired(required=false)
+  private NetLossRateQuery netLossRates;
 
   @Autowired
   public CostInputRevisionServiceImpl(
@@ -226,6 +233,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "makePartWeightPolicy", "U9_BOM_WEIGHT_SINGLE_OR_CMS_MATCH_V6");
     append(canonical, "blankQuoteGrossWeightPolicy", "SELECTED_QUOTE_GROSS_MINUS_U9_NET_V1");
     append(canonical, "productPropertyPolicy", "U9_FINISHED_TO_BARE_ANNUAL_PROPERTY_V1");
+    appendBomNetLossRevision(canonical, form, item, pricingMonth);
     append(canonical, "materialDifferencePolicy",
         com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
     append(canonical, "sources", sourceRevision);
@@ -278,6 +286,24 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     appendForm(canonical, form);
     appendItem(canonical, item);
     return sha256(canonical.toString());
+  }
+
+  private void appendBomNetLossRevision(StringBuilder canonical, OaForm form, OaFormItem item, String month) {
+    if (netLossRates == null || !StringUtils.hasText(item.getMaterialNo()) || !StringUtils.hasText(month)) return;
+    String unit = StringUtils.hasText(item.getBusinessUnitType()) ? item.getBusinessUnitType() : form.getBusinessUnitType();
+    if (!StringUtils.hasText(unit)) return;
+    String organization;
+    try {
+      organization = MaterialOrganization.quoteDataForQuoteProduct(form.getProcessCode(), form.getOaNo(),
+          item.getBusinessUnitType(), item.getProductName(), item.getSunlModel(), item.getMaterialNo()).materialOrganizationCode();
+    } catch (IllegalArgumentException missingOrganization) {
+      // The costing entry point owns the quote organization validation.
+      return;
+    }
+    var source = netLossRates.lookup(item.getMaterialNo(), null, organization, YearMonth.parse(month.trim()).getYear(), unit);
+    if (NetLossRateQuery.BOM_SOURCE_AVAILABLE.equals(source.reasonCode())) {
+      append(canonical, "netLossBomBare", List.of(source.bareMaterialNo(), source.configurationId(), source.rate()));
+    }
   }
 
   private String priorityRevision(OaFormItem item, String month, QuotationMonthlyPriceInputs.Scope monthly) {
@@ -446,7 +472,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical,"inquirySources",inputs.inquiries(unit,month,materials.isEmpty()?List.of():scrapCodes));
     if (!dependencies.materialCodes().isEmpty()) append(canonical, "scrapSources", additionalPriceRevision(unit, new ArrayList<>(dependencies.materialCodes())));
     var parameters = new ArrayList<Object>(); parameters.add(unit);
-    String sql = "SELECT id FROM lp_scrap_price WHERE business_unit_type=? AND price_type='LINKED'";
+    String sql = "SELECT id FROM lp_scrap_price WHERE business_unit_type=? AND price_type='LINKED' AND voided=0";
     if (!scrapCodes.isEmpty()) {
       sql += " AND material_code IN (" + String.join(",", Collections.nCopies(scrapCodes.size(), "?")) + ")";
       parameters.addAll(scrapCodes);
@@ -460,6 +486,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     StringBuilder canonical = new StringBuilder();
     for (String table : List.of("lp_supplier_supply_ratio", "lp_scrap_price", "lp_finance_effective_price")) {
       String sql = "SELECT * FROM `" + table + "` WHERE business_unit_type=?";
+      boolean scrap = "lp_scrap_price".equals(table);
+      if (scrap) sql += " AND voided=0";
       var parameters = new ArrayList<Object>();
       parameters.add(businessUnit);
       if (!materials.isEmpty()) {
@@ -469,7 +497,10 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       sql += " ORDER BY id";
       append(canonical, "table", table);
       for (var row : jdbcTemplate.queryForList(sql, parameters.toArray())) {
-        for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
+        for (String column : new TreeSet<>(row.keySet())) {
+          if (scrap && "voided".equalsIgnoreCase(column)) continue;
+          appendPriceValue(canonical, column, row.get(column));
+        }
       }
     }
     append(canonical, "household", householdRevision(businessUnit, new TreeSet<>(materials), materials.isEmpty()));
@@ -483,7 +514,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
   private String householdRevision(String businessUnit, java.util.Set<String> materials, boolean all) {
     if (materials.isEmpty() && !all) return "NO_UNPRICED_STRUCTURE";
     String sql = "SELECT id,material_code,revision_no,pricing_fingerprint,record_fingerprint FROM lp_household_inquiry_price"
-        + " WHERE business_unit_type=? AND current_flag=1";
+        + " WHERE business_unit_type=? AND current_flag=1 AND row_voided=0 AND EXISTS "
+        + "(SELECT 1 FROM lp_household_inquiry_import_batch b WHERE b.id=lp_household_inquiry_price.import_batch_id AND b.status='PUBLISHED')";
     var parameters = new ArrayList<Object>();
     parameters.add(businessUnit);
     if (!all) {
@@ -510,11 +542,14 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     var rows = jdbcTemplate.queryForList(
         "SELECT ranked.* FROM (SELECT p.*,ROW_NUMBER() OVER (PARTITION BY material_code,price_type "
             + "ORDER BY price_month DESC,revision_no DESC) AS ranking FROM lp_settlement_price p WHERE "
-            + filter + ") ranked WHERE ranking=1 ORDER BY material_code,price_type", parameters.toArray());
+            + filter + ") ranked WHERE ranking=1 AND voided_at IS NULL ORDER BY material_code,price_type", parameters.toArray());
     StringBuilder canonical = new StringBuilder();
     boolean requiresBase = false;
     for (var row : rows) {
-      for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
+      for (String column : new TreeSet<>(row.keySet())) {
+        if (Set.of("import_batch_token", "voided_by", "voided_at").contains(column.toLowerCase(java.util.Locale.ROOT))) continue;
+        appendPriceValue(canonical, column, row.get(column));
+      }
       Object confirmed = valueIgnoreCase(row, "weights_confirmed");
       requiresBase |= "SETTLE_LINKED".equals(valueIgnoreCase(row, "price_type"))
           && (Boolean.TRUE.equals(confirmed) || "1".equals(String.valueOf(confirmed)))

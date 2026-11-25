@@ -41,7 +41,7 @@ class CostRunFeeSourcesIntegrationTest {
     jdbc.execute("DROP TABLE lp_material_master_raw");
     for (var type : List.of(DepartmentFundRate.class, ManufactureRate.class, ThreeExpenseRate.class,
         OtherExpenseRate.class, ProductProperty.class, ProductPropertyRule.class, QualityLossRate.class,
-        ThreeExpenseDimensionMapping.class, MaterialMasterRaw.class)) createSyntheticTable(type);
+        ThreeExpenseDimensionMapping.class, MaterialMasterRaw.class, BomRawHierarchy.class)) createSyntheticTable(type);
     jdbc.execute("CREATE TABLE lp_cost_business_rule(id BIGINT PRIMARY KEY AUTO_INCREMENT,rule_code VARCHAR(100),"
         + "business_unit_type VARCHAR(40),enabled INT,effective_from VARCHAR(7),effective_to VARCHAR(7),decimal_value DECIMAL(24,12))");
     var config = new MybatisConfiguration();
@@ -49,7 +49,8 @@ class CostRunFeeSourcesIntegrationTest {
     for (var mapper : List.of(CostRunFeeSourceMapper.class, DepartmentFundRateMapper.class,
         ManufactureRateMapper.class, ThreeExpenseRateMapper.class, OtherExpenseRateMapper.class,
         ProductPropertyMapper.class, ProductPropertyRuleMapper.class, QualityLossRateMapper.class,
-        ThreeExpenseDimensionMappingMapper.class, CostBusinessRuleMapper.class, MaterialMasterRawMapper.class)) config.addMapper(mapper);
+        ThreeExpenseDimensionMappingMapper.class, CostBusinessRuleMapper.class, MaterialMasterRawMapper.class,
+        BomRawHierarchyMapper.class)) config.addMapper(mapper);
     var factory = new MybatisSqlSessionFactoryBean();
     factory.setDataSource(jdbc.getDataSource()); factory.setConfiguration(config);
     session = new SqlSessionTemplate(factory.getObject());
@@ -86,7 +87,8 @@ class CostRunFeeSourcesIntegrationTest {
     insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", bare,
         "business_unit_type", "COMMERCIAL", "loss_rate", "0.023456789"));
     var query = new com.sanhua.marketingcost.service.NetLossRateQuery(
-        session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class));
+        session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class),
+        session.getMapper(BomRawHierarchyMapper.class));
     var requests = List.of(new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(product, "wrong-model", "COMMERCIAL", 2026, "COMMERCIAL"),
         new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup("missing-code", model, "COMMERCIAL", 2026, "COMMERCIAL"),
         new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(bare, null, "COMMERCIAL", 2026, "COMMERCIAL"),
@@ -126,7 +128,8 @@ class CostRunFeeSourcesIntegrationTest {
     insert("lp_quality_loss_rate", Map.of("rate_year", 2025, "bare_product_code", bare,
         "business_unit_type", "COMMERCIAL", "loss_rate", "0.03"));
     var query = new com.sanhua.marketingcost.service.NetLossRateQuery(
-        session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class));
+        session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class),
+        session.getMapper(BomRawHierarchyMapper.class));
     var requests = List.of(new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(product, null, "COMMERCIAL", 2026, "COMMERCIAL"),
         new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(noBare, null, "COMMERCIAL", 2026, "COMMERCIAL"),
         new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup("missing", model, "COMMERCIAL", 2026, "COMMERCIAL"));
@@ -175,7 +178,8 @@ class CostRunFeeSourcesIntegrationTest {
     insert("lp_quality_loss_rate", Map.of("rate_year", 2026, "bare_product_code", zero,
         "business_unit_type", "COMMERCIAL", "loss_rate", "0"));
     var query = new com.sanhua.marketingcost.service.NetLossRateQuery(
-        session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class));
+        session.getMapper(MaterialMasterRawMapper.class), session.getMapper(QualityLossRateMapper.class),
+        session.getMapper(BomRawHierarchyMapper.class));
     var requests = List.of(new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(missingBare, null, "COMMERCIAL", 2026, "COMMERCIAL"),
         new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(zero, null, "COMMERCIAL", 2026, "COMMERCIAL"),
         new com.sanhua.marketingcost.service.NetLossRateQuery.Lookup(invalid, null, "COMMERCIAL", 2026, "COMMERCIAL"));

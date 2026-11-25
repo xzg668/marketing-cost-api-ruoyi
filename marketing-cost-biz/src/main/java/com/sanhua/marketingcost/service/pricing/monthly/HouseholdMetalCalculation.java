@@ -7,6 +7,7 @@ import java.util.Objects;
 /** Captured Cu/Zn inputs reproduce the inquiry W value without changing original E. */
 public final class HouseholdMetalCalculation {
   public static final String FORMULA = "W = E + ((客户Cu - 基价Cu) × 铜重/1000 + (客户Zn - 基价Zn) × 锌重/1000) / 1.13";
+  static final String DEMAND_PRICE_POLICY = "HOUSEHOLD_INQUIRY_DEMAND_METALS_V1";
   private HouseholdMetalCalculation() {}
   public record Inputs(BigDecimal copperGrams,BigDecimal zincGrams,PriceFactorContext financial) {
     public Inputs {
@@ -27,9 +28,22 @@ public final class HouseholdMetalCalculation {
       boolean copperFromCustomer,boolean zincFromCustomer,BigDecimal copperDifference,
       BigDecimal zincDifference,BigDecimal calculatedW,String pricingMonth,String financeMonth) {}
   public static Trace calculate(BigDecimal original,Inputs input,CustomerMaterialPrices customer) {
+    return calculateQuoted(original, input, demandContext(input, customer));
+  }
+
+  static PriceFactorContext demandContext(Inputs input, CustomerMaterialPrices customer) {
+    var base = input.financial();
+    if (base == null) return null;
+    // The inquiry W formula compares demand Cu/Zn against the financial base, independent of finished-product sales mode.
+    var copper = input.copperGrams().signum() == 0 ? null : customer.copper();
+    var zinc = input.zincGrams().signum() == 0 ? null : customer.zinc();
+    return new PriceFactorContext(base.materialCode(), base.months(), base.financial(), copper,
+        base.boardInputs(), zinc, null, null, DEMAND_PRICE_POLICY, base.materialSpecification());
+  }
+
+  static Trace calculateQuoted(BigDecimal original, Inputs input, PriceFactorContext projected) {
     BigDecimal cu=base(input,PriceFactorContext.COPPER,input.copperGrams());
     BigDecimal zn=base(input,PriceFactorContext.ZINC,input.zincGrams());
-    var projected=input.financial()==null?null:input.financial().withCustomerMaterials(customer);
     BigDecimal customerCu=input.copperGrams().signum()==0?cu:projected.requiredPrice(PriceFactorContext.COPPER,FactorPriceUnit.CNY_KG,true);
     BigDecimal customerZn=input.zincGrams().signum()==0?zn:projected.requiredPrice(PriceFactorContext.ZINC,FactorPriceUnit.CNY_KG,true);
     BigDecimal cuDiff=delta(customerCu,cu,input.copperGrams()),znDiff=delta(customerZn,zn,input.zincGrams());
@@ -37,7 +51,8 @@ public final class HouseholdMetalCalculation {
     var result=original.add(cuDiff.add(znDiff).divide(divisor,18,RoundingMode.HALF_UP));
     if(result.signum()<0)throw new IllegalArgumentException("客户铜锌代入后家用询价为负数");
     return new Trace(FORMULA,"CNY/KG","G",divisor,original,input.copperGrams(),input.zincGrams(),
-        cu,zn,customerCu,customerZn,customer.copper()!=null,customer.zinc()!=null,cuDiff,znDiff,result,
+        cu,zn,customerCu,customerZn,projected != null && "OA_LOCKED".equals(projected.inputSource(PriceFactorContext.COPPER)),
+        projected != null && "OA_LOCKED".equals(projected.inputSource(PriceFactorContext.ZINC)),cuDiff,znDiff,result,
         input.financial()==null?null:input.financial().months().requestedMonth(),
         input.financial()==null?null:input.financial().months().sourceMonth());
   }

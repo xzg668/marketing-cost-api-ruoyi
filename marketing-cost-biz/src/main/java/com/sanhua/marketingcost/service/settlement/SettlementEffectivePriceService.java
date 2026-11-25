@@ -39,7 +39,9 @@ public class SettlementEffectivePriceService {
     for (String month : months) {
       while (next < source.size() && source.get(next).getPriceMonth().compareTo(month) <= 0) {
         var rule = source.get(next++);
-        current.put(new SettlementPriceRepository.RuleKey(rule.getMaterialCode(), rule.getPriceType()), rule);
+        var key = new SettlementPriceRepository.RuleKey(rule.getMaterialCode(), rule.getPriceType());
+        if (rule.getVoidedAt() == null) current.put(key, rule);
+        else current.remove(key);
       }
       if (current.isEmpty()) continue;
       boolean needsBase = current.values().stream().anyMatch(row -> calculator.mode(row) == SettlementPriceMode.LINKED_FORMULA);

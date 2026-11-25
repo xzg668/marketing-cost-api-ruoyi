@@ -18,6 +18,9 @@ public class TechnicalDataReadPolicy {
   }
 
   public boolean ownsDraft(QuoteTechModule module, TechnicalDataActor actor) {
+    if (actor != null && actor.admin() && !actor.oaSession() && "SALARY".equals(module.getModuleType())) {
+      return actor.canAccessTask(task(module.getProductId()));
+    }
     if (actor != null && actor.admin() && !actor.oaSession() && module.getAssigneeUserId() == null) {
       var task = task(module.getProductId());
       if (actor.canFillUnassigned(task)) return true;

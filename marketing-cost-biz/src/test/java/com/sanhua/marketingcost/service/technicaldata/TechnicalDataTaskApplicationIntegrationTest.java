@@ -106,7 +106,7 @@ class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegra
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?", Integer.class, item)).isZero();
   }
 
-  @Test void unapprovedSalaryCanBeAssignedAndOpenedByItsTechnician() {
+  @Test void salaryWithoutAnEffectiveRecordCanBeAssignedAndOpenedByItsTechnician() {
     var ids = products(1);
     long item = ids.getFirst();
     String code = jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?", String.class, item);
@@ -117,7 +117,7 @@ class TechnicalDataTaskApplicationIntegrationTest extends OriginalPricingIntegra
         .allSatisfy(m -> {
           assertThat(m.required()).isTrue();
           assertThat(m.availability()).isEqualTo(TechnicalDataAvailability.MISSING);
-          assertThat(m.reasonCode()).isEqualTo("SALARY_SOURCE_UNCONFIRMED");
+          assertThat(m.reasonCode()).isEqualTo("SALARY_SOURCE_MISSING");
         });
     var assigned = service.publish(request(ids,101L),ADMIN).items().getFirst().task();
     var product = assigned.products().getFirst();

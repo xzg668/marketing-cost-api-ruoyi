@@ -26,6 +26,7 @@ public class HouseholdInquiryPriceRow {
   private Integer currentFlag;
   private LocalDateTime createdAt;
   private String sourceMonth;
+  private String batchStatus;
   private String pricingUnit;
   private String currency;
   private String taxBasis;

@@ -51,6 +51,9 @@ class MonthlyInquiryPriceIntegrationTest {
                   + " inquiry_pricing_test < /tmp/inquiry-monthly.sql");
       assertThat(result.getExitCode()).as(result.getStderr()).isZero();
     }
+    // This focused schema has no costing tables for V369's triggers; use its actual identity constraint.
+    db.jdbc.execute(new ClassPathResource("db/V369__bom_specification_price_matching.sql")
+        .getContentAsString(java.nio.charset.StandardCharsets.UTF_8).split("DELIMITER", 2)[0].trim());
     for (var mapper :
         List.of(
             MonthlySupplierInputMapper.class,
@@ -304,10 +307,65 @@ class MonthlyInquiryPriceIntegrationTest {
     var projection = new MonthlyPriceScenarios(codec, null, null, null, null, null, null, null);
     var first = projection.calculate(Map.of(request, stored), new BigDecimal("100000")).get(999L);
     assertThat(first.financialPrice()).isEqualByComparingTo(selected.fact().price());
-    assertThat(first.customerPrice()).isGreaterThan(first.financialPrice());
+    assertThat(first.customerPrice()).isEqualByComparingTo(linkedCustomerPriceFromWorkbook());
     db.publishFinance("2026-10", "CU_100000");
     assertThat(projection.calculate(Map.of(request, stored), new BigDecimal("100000")).get(999L))
         .isEqualTo(first);
     db.publishFinance("2026-10", "CU_90000");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"210", "220"})
+  void modelOnlyLinkedInquiryWithoutSupplierSurvivesAdoptionAndCustomerCalculation(String org)
+      throws Exception {
+    byte[] workbook = InquiryWorkbookParserTest.edit(book -> {
+      var formatter = new org.apache.poi.ss.usermodel.DataFormatter();
+      for (var sheet : book) {
+        for (var row : sheet) {
+          for (var cell : row) {
+            String label = InquiryNames.normalize(formatter.formatCellValue(cell));
+            if (!Set.of("料号", "供方名称").contains(label)) continue;
+            for (int index = row.getRowNum() + 1; index <= sheet.getLastRowNum(); index++) {
+              var line = sheet.getRow(index);
+              if (line != null && line.getCell(cell.getColumnIndex()) != null)
+                line.getCell(cell.getColumnIndex()).setBlank();
+            }
+          }
+        }
+      }
+    });
+    db.importFile("2026-10", workbook);
+    var request = specification("", "SBV-B10-001300(Q259A)", org, "件");
+    var candidate = selected(request);
+    var evidence = db.json.readTree(candidate.fact().evidence().json());
+    var rule = evidence.path("source").path("selected").path("original").path("rule");
+    assertThat(rule.path("materialCode").asText()).isEmpty();
+    assertThat(rule.path("supplierName").asText()).isEmpty();
+    assertThat(evidence.path("source").path("selectionRule").asText()).isEqualTo("SINGLE");
+    var adopted = prices.adopt(context(), new MonthlyAdoptionPlan(Map.of(request, candidate),
+        List.of(new Use("root", request, new BigDecimal("10"))), Set.of()))
+        .plan().selections().get(request);
+    var projection = new MonthlyPriceScenarios(codec, null, null, null, null, null, null, null);
+    var pair = projection.calculate(Map.of(request, adopted), new BigDecimal("100000"))
+        .get(adopted.monthlyPriceId());
+    assertThat(pair.financialPrice()).isEqualByComparingTo(candidate.fact().price());
+    assertThat(pair.customerPrice()).isEqualByComparingTo(linkedCustomerPriceFromWorkbook());
+    assertThat(prices.readByIds("COMMERCIAL", Set.of(adopted.monthlyPriceId()))
+        .get(adopted.monthlyPriceId())).isEqualTo(adopted);
+    assertThat(db.jdbc.queryForObject("SELECT material_code FROM lp_material_monthly_price WHERE id=?",
+        String.class, adopted.monthlyPriceId())).isEmpty();
+    assertThat(prices.resolveCandidates(context(), Set.of(request)).values().get(request).selection())
+        .isEqualTo(adopted);
+  }
+
+  private static BigDecimal linkedCustomerPriceFromWorkbook() {
+    // Original K2=1190.5g/L2=4.5. The fixture's CU_100000 brass row is 47.656...,
+    // lower than its CU_90000 row, so a higher customer Cu does not imply a higher final price.
+    return new BigDecimal("100").multiply(new BigDecimal("0.15"))
+        .add(new BigDecimal("24.0403236023383").multiply(new BigDecimal("0.1")))
+        .add(new BigDecimal("47.6562565130311").multiply(new BigDecimal("0.75")).multiply(new BigDecimal("1.05")))
+        .multiply(new BigDecimal("1.02")).add(new BigDecimal("0.1")).add(new BigDecimal("4.5"))
+        .multiply(new BigDecimal("1190.5")).divide(new BigDecimal("1000"))
+        .divide(new BigDecimal("1.13"), 18, java.math.RoundingMode.HALF_UP);
   }
 }

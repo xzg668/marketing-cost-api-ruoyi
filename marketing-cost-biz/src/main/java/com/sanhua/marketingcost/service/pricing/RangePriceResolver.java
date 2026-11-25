@@ -268,7 +268,7 @@ public class RangePriceResolver implements PriceResolver {
           "行情因素区间价缺少报价单行情值: " + factorRule.getFactorCode() + ", material=" + materialCode);
     }
     var query =
-        Wrappers.lambdaQuery(PriceRangeItem.class)
+        Wrappers.lambdaQuery(PriceRangeItem.class).apply("row_voided=0")
             .eq(PriceRangeItem::getRangeBasis, RANGE_BASIS_FACTOR)
             .eq(PriceRangeItem::getFactorRuleId, factorRule.getId());
     if (priceDate != null && !StringUtils.hasText(factorRule.getPricingMonth())) {
@@ -530,7 +530,7 @@ public class RangePriceResolver implements PriceResolver {
   private PriceResolveResult resolveQtyRange(
       String materialCode, BigDecimal qty, LocalDate priceDate, CostRunContext context) {
     var query =
-        Wrappers.lambdaQuery(PriceRangeItem.class)
+        Wrappers.lambdaQuery(PriceRangeItem.class).apply("row_voided=0")
             .eq(PriceRangeItem::getMaterialCode, materialCode)
             .and(
                 q ->
@@ -643,7 +643,7 @@ public class RangePriceResolver implements PriceResolver {
     var query =
         Wrappers.lambdaQuery(PriceRangeFactorRule.class)
             .in(PriceRangeFactorRule::getMaterialCode, materialCodes)
-            .in(PriceRangeFactorRule::getRuleStatus, List.of("LEGACY", "PUBLISHED"));
+            .in(PriceRangeFactorRule::getRuleStatus, List.of("LEGACY", "PUBLISHED", "VOIDED"));
     String businessUnit = context == null ? null : trimToNull(context.getBusinessUnitType());
     if (businessUnit == null) query.isNull(PriceRangeFactorRule::getBusinessUnitType);
     else query.eq(PriceRangeFactorRule::getBusinessUnitType, businessUnit);
@@ -722,6 +722,8 @@ public class RangePriceResolver implements PriceResolver {
           MaterialPriceMonthSelector.missingMessage(material, org, months));
     }
     var candidates = OriginalRuleGroups.ranges(versions);
+    if (candidates.isEmpty()) return PriceResolveResult.miss(MaterialPriceMonthSelector.MATERIAL_MONTH_PRICE_MISSING,
+        MaterialPriceMonthSelector.missingMessage(material, org, months));
     var first = candidates.getFirst();
     if (!CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())
         && candidates.stream()

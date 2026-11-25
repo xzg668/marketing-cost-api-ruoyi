@@ -32,9 +32,12 @@ public final class MonthlyInvoicePriceSource {
         var rows=jdbc.queryForList("""
             SELECT p.*,b.file_name,b.created_at imported_at,b.created_by imported_by
             FROM lp_invoice_price p JOIN lp_invoice_import_batch b ON b.id=p.batch_id
-            WHERE p.business_unit_type=? AND p.org_code=? AND p.material_code IN (
+            WHERE p.business_unit_type=? AND p.org_code=? AND p.row_voided=0 AND b.voided_at IS NULL AND p.material_code IN (
             """+String.join(",",Collections.nCopies(batch.size(),"?"))+") AND p.batch_id=(SELECT MAX(v.batch_id) FROM lp_invoice_price v WHERE v.business_unit_type=p.business_unit_type AND v.org_code=p.org_code AND v.material_code=p.material_code) ORDER BY p.unit_price DESC,p.document_no,p.supplier_code",args.toArray());
-        rows.forEach(row->byCode.computeIfAbsent(row.get("material_code").toString(),ignored->new ArrayList<>()).add(row));
+        rows.forEach(row->{
+          row.remove("row_voided");
+          byCode.computeIfAbsent(row.get("material_code").toString(),ignored->new ArrayList<>()).add(row);
+        });
       }
       var ratios=new HashMap<String,List<com.sanhua.marketingcost.entity.SupplierSupplyRatio>>();
       for(int start=0;start<codes.size();start+=256) supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),

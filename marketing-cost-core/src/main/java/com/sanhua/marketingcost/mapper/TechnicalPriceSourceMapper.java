@@ -38,9 +38,14 @@ public interface TechnicalPriceSourceMapper {
           AND source_type IN ('PURCHASE','PURCHASE_FIXED') AND effective_from&lt;=#{date} AND effective_to>#{date}
         UNION ALL
         SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,price_type kind
-          FROM lp_settlement_price WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach>
+          FROM lp_settlement_price s WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach>
           AND business_unit_type=#{businessUnit} AND price_month&lt;=#{month} AND active=1
-          AND #{org} IN ('210','220')
+          AND #{org} IN ('210','220') AND voided_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM lp_settlement_price n
+            WHERE n.business_unit_type=s.business_unit_type AND n.material_code=s.material_code
+              AND n.price_type=s.price_type AND n.active=1 AND n.price_month&lt;=#{month}
+              AND n.voided_at IS NOT NULL AND (n.price_month>s.price_month
+                OR (n.price_month=s.price_month AND n.revision_no>s.revision_no)))
       ) p</script>
       """)
   List<MaterialKind> publicKindsBatch(@Param("codes") List<String> codes, @Param("month") String month,

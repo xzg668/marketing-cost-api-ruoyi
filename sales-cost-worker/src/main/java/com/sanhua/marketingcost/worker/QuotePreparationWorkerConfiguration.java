@@ -31,6 +31,7 @@ import org.springframework.context.annotation.Import;
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataAuxiliaryApplicationService.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataSolderApplicationService.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalaryApplicationService.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalaryPdfStore.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataNetLossApplicationService.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataPlateMaterialProfile.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataPlateMaterialPublication.class,

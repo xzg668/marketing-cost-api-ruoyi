@@ -92,7 +92,7 @@ public class ScrapPriceGenerationService {
       // 补供应商代码后，旧身份的自动副本不能成为独立新规则；仅清理已无来源的自动行。
       for (var row : List.copyOf(current.values())) {
         String key = ScrapRuleMonthPolicy.identity(row).materialSupplierKey();
-        if ("CARRY_FORWARD".equals(row.getOriginType()) && !selected.containsKey(key)) {
+        if ("CARRY_FORWARD".equals(row.getOriginType()) && row.getVoided() == 0 && !selected.containsKey(key)) {
           prices.deleteById(row.getId());
           existing.remove(row);
           current.remove(key);
@@ -227,6 +227,7 @@ public class ScrapPriceGenerationService {
         && Objects.equals(row.getSourceRuleRevision(), source.getRuleRevision())
         && Objects.equals(row.getContentHash(), source.getContentHash())) return;
     rules.write(rules.read(source), row);
+    row.setVoided(0);
     row.setOriginType("CARRY_FORWARD");
     row.setSupersededIdentityKeysJson(null);
     row.setRuleSourceMonth(source.getPriceMonth());

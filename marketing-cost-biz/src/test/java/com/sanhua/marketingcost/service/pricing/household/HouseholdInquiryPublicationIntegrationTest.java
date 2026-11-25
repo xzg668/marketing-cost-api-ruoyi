@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.mapper.household.HouseholdInquiryQueryMapper;
 import com.sanhua.marketingcost.service.pricing.monthly.HouseholdInquiryStorage;
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec;
 import com.sanhua.marketingcost.service.pricing.monthly.TaxBasis;
+import com.sanhua.marketingcost.service.pricing.monthly.VoidedSourceMonthlyPrices;
 import java.nio.file.*;
 import java.time.*;
 import java.util.*;
@@ -38,7 +39,10 @@ class HouseholdInquiryPublicationIntegrationTest {
     MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/V342__monthly_material_price_storage.sql"),"/tmp/source-storage.sql");
     assertThat(MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_source_test < /tmp/source-storage.sql").getExitCode()).isZero();
     new ResourceDatabasePopulator(new ClassPathResource("db/V364__household_inquiry_header_schema.sql")).execute(ds);
-    for(String file:List.of("V344__monthly_material_price_single_table.sql","V366__household_model_specification_match.sql")) {
+    for(String file:List.of("V344__monthly_material_price_single_table.sql","V354__invoice_price_import.sql",
+        "V360__finance_correction_monthly_price.sql","V365__household_monthly_source_revision.sql",
+        "V366__household_model_specification_match.sql","V372__monthly_price_disable.sql",
+        "V396__household_inquiry_batch_void.sql")) {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/"+file),"/tmp/identity.sql");
       var applied=MYSQL.execInContainer("sh","-c","MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4 mpp_source_test < /tmp/identity.sql");
       assertThat(applied.getExitCode()).withFailMessage(applied.getStderr()).isZero();
@@ -50,6 +54,8 @@ class HouseholdInquiryPublicationIntegrationTest {
     storage=new HouseholdInquiryStorage(sql.getMapper(HouseholdInquiryStorageMapper.class),codec);transactions=new DataSourceTransactionManager(ds);
     archive=Files.createTempDirectory("mpp03-archive-");files=new HouseholdInquiryFiles(archive.toString());
     service=new HouseholdInquiryService(queries,storage,new HouseholdInquiryWorkbookParser(),files,codec,transactions,json,clock);
+    org.springframework.test.util.ReflectionTestUtils.setField(service,"voidedMonthlyPrices",
+        new VoidedSourceMonthlyPrices(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc),codec));
   }
   @AfterAll static void stop(){MYSQL.stop();}
   static byte[] source(String material,String price) throws Exception {
@@ -61,6 +67,38 @@ class HouseholdInquiryPublicationIntegrationTest {
   static PublishResult publish(Preview p){return service.publish("COMMERCIAL","finance",request(p));}
   static String material(){return "001Ab-"+UUID.randomUUID().toString().substring(0,8);}
   static void failure(Runnable call,String code){assertThatThrownBy(call::run).isInstanceOfSatisfying(HouseholdInquiryFailure.class,e->assertThat(e.code()).isEqualTo(code));}
+
+  @Test void voidStopsCurrentAndCarriedVersionKeepsArchiveAndAllowsReimport() throws Exception {
+    String code=material();
+    var older=publish(preview(code,"12"));
+    byte[] original=source(code,"63");
+    var incorrect=service.preview("COMMERCIAL","finance",original,"incorrect.xls","2026-11");
+    var wrong=publish(incorrect);
+    var stale=service.preview("COMMERCIAL","finance",original,"incorrect.xls","2026-11");
+    assertThat(service.current("COMMERCIAL",code,"2026-12",1,20).rows()).extracting(PriceView::unitPrice).containsExactly("63");
+    failure(() -> service.voidImport("HOUSEHOLD","finance",wrong.batchId()),"IMPORT_NOT_FOUND");
+    service.voidImport("COMMERCIAL","another-finance",wrong.batchId());
+    service.voidImport("COMMERCIAL","finance",wrong.batchId());
+    assertThat(service.current("COMMERCIAL",code,null,1,20).rows()).isEmpty();
+    assertThat(service.current("COMMERCIAL",code,"2026-11",1,20).rows()).isEmpty();
+    assertThat(storage.asOfMonth("COMMERCIAL",List.of(code),YearMonth.of(2026,12))).isEmpty();
+    assertThat(service.current("COMMERCIAL",code,"2026-10",1,20).rows()).extracting(PriceView::unitPrice).containsExactly("12");
+    assertThat(service.history("COMMERCIAL",code,1,20).rows()).extracting(PriceView::voided).containsExactly(true,false);
+    assertThat(service.importDetails("COMMERCIAL","another-finance",wrong.batchId()).publication()).isEqualTo(wrong);
+    assertThat(service.importOriginal("COMMERCIAL","another-finance",wrong.batchId()).bytes()).isEqualTo(original);
+    assertThat(service.imports("COMMERCIAL",1,100).rows()).anySatisfy(row -> {
+      assertThat(row.get("id")).isEqualTo(wrong.batchId());
+      assertThat(row.get("status")).isEqualTo("VOIDED");
+      assertThat(row.get("voided_by")).isEqualTo("another-finance");
+    });
+    failure(() -> publish(stale),"STALE_PREVIEW");
+    var correct=service.preview("COMMERCIAL","finance",source(code,"18"),"correct.xls","2026-11");
+    var replacement=publish(correct);
+    assertThat(replacement.rows().getFirst().revisionNo()).isEqualTo(3);
+    assertThat(replacement.rows().getFirst().previousVersionId()).isEqualTo(wrong.rows().getFirst().versionId());
+    assertThat(service.price("COMMERCIAL",older.rows().getFirst().versionId()).unitPrice()).isEqualTo("12");
+    assertThat(service.current("COMMERCIAL",code,"2026-12",1,20).rows()).extracting(PriceView::unitPrice).containsExactly("18");
+  }
 
   @Test void completeNovemberOriginalPublishesMissingCodesAndReimportsIdempotently() throws Exception {
     byte[] original=getClass().getResourceAsStream("/household-inquiry/real-20261107.xlsx").readAllBytes();

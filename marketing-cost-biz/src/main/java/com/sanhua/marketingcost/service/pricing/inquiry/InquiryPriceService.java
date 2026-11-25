@@ -70,6 +70,7 @@ public final class InquiryPriceService {
                   repository.lock(unit);
                   var previous = repository.replay(unit, requestId);
                   if (previous != null) {
+                    if ("VOIDED".equals(previous.get("status"))) throw new IllegalArgumentException("该次导入已失效，请重新上传文件");
                     if (!month.equals(previous.get("price_month"))
                         || !hash.equals(previous.get("file_hash"))
                         || !actor.equals(previous.get("created_by")))
@@ -161,7 +162,7 @@ public final class InquiryPriceService {
       throw new IllegalArgumentException("请选择有效价格月份");
   }
 
-  private static void unit(String unit) {
+  static void unit(String unit) {
     if (!Set.of("COMMERCIAL", "HOUSEHOLD").contains(Objects.toString(unit, "")))
       throw new IllegalArgumentException("缺少有效业务单元");
   }

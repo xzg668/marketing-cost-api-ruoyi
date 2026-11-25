@@ -13,6 +13,13 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class SettlementPriceRepository {
   public record RuleKey(String materialCode, SettlementPriceType priceType) {}
+  public record ImportPage(List<Map<String, Object>> rows, long total) {}
+  private static final String IMPORT_GROUP =
+      "CASE WHEN import_batch_token IS NOT NULL THEN import_batch_token ELSE CONCAT(price_month,'/',source_file_sha256,'/',HEX(source_file_name)) END";
+  private static final String IMPORT_FILTER = """
+      business_unit_type=:unit AND source_system='EXCEL'
+        AND source_file_sha256 IS NOT NULL AND source_file_name IS NOT NULL
+      """;
   private static final BeanPropertyRowMapper<SettlementPriceRecord> ROW = BeanPropertyRowMapper.newInstance(SettlementPriceRecord.class);
   private final NamedParameterJdbcTemplate jdbc;
 
@@ -66,7 +73,40 @@ public class SettlementPriceRepository {
     if (type != null) { filter += " AND price_type=:type"; parameters.addValue("type", type.name()); }
     return jdbc.query("SELECT ranked.* FROM (SELECT p.*,ROW_NUMBER() OVER (PARTITION BY material_code,price_type "
         + "ORDER BY price_month DESC,revision_no DESC) AS ranking FROM lp_settlement_price p WHERE " + filter
-        + ") ranked WHERE ranking=1 ORDER BY material_code,price_type", parameters, ROW);
+        + ") ranked WHERE ranking=1" + (activeOnly ? " AND voided_at IS NULL" : "")
+        + " ORDER BY material_code,price_type", parameters, ROW);
+  }
+
+  public ImportPage imports(String unit, int page, int size) {
+    var params = new MapSqlParameterSource("unit", unit).addValue("size", size).addValue("offset", (page - 1) * size);
+    var rows = jdbc.queryForList("""
+        SELECT MIN(id) AS id,MIN(source_file_name) AS file_name,MIN(price_month) AS month,
+          CASE WHEN COUNT(voided_at)=0 THEN 'PUBLISHED'
+            WHEN COUNT(voided_at)=COUNT(*) THEN 'VOIDED' ELSE 'PARTIAL' END AS status,
+          MIN(created_at) AS imported_at,IF(COUNT(DISTINCT created_by)=1,MIN(created_by),NULL) AS imported_by,
+          MAX(voided_at) AS voided_at,MAX(voided_by) AS voided_by,COUNT(*) AS row_count
+        FROM lp_settlement_price WHERE
+        """ + IMPORT_FILTER + " GROUP BY " + IMPORT_GROUP + " ORDER BY imported_at DESC,id DESC LIMIT :size OFFSET :offset", params);
+    long total = jdbc.queryForObject("SELECT COUNT(DISTINCT " + IMPORT_GROUP + ") FROM lp_settlement_price WHERE "
+        + IMPORT_FILTER, params, Long.class);
+    return new ImportPage(rows, total);
+  }
+
+  public List<SettlementPriceRecord> lockImport(String unit, SettlementPriceRecord original) {
+    var params = new MapSqlParameterSource("unit", unit).addValue("token", original.getImportBatchToken())
+        .addValue("month", original.getPriceMonth()).addValue("sha", original.getSourceFileSha256())
+        .addValue("name", original.getSourceFileName());
+    String group = original.getImportBatchToken() != null ? "import_batch_token=:token"
+        : "import_batch_token IS NULL AND price_month=:month AND source_file_sha256=:sha AND BINARY source_file_name=BINARY :name";
+    return jdbc.query("SELECT * FROM lp_settlement_price WHERE " + IMPORT_FILTER + " AND " + group + " ORDER BY id FOR UPDATE", params, ROW);
+  }
+
+  public void voidRules(String unit, List<Long> ids, String actor) {
+    if (ids.isEmpty()) return;
+    jdbc.update("""
+        UPDATE lp_settlement_price SET voided_by=:actor,voided_at=CURRENT_TIMESTAMP(6)
+        WHERE business_unit_type=:unit AND id IN (:ids) AND voided_at IS NULL
+        """, Map.of("unit", unit, "ids", ids, "actor", actor));
   }
 
   public SettlementPriceRecord insert(SettlementPriceRecord row) {
@@ -80,13 +120,13 @@ public class SettlementPriceRepository {
           original_copper_weight_g,original_zinc_weight_g,copper_weight_g,zinc_weight_g,weights_confirmed,
           weight_confirmation_note,weights_confirmed_by,weights_confirmed_at,expression,formula_version,tax_divisor,
           material_unit,unit_basis,source_system,source_file_name,source_file_sha256,source_file_ref,source_sheet,
-          source_rows_json,source_formula,remark,content_hash,created_by)
+          source_rows_json,source_formula,remark,content_hash,created_by,import_batch_token)
         VALUES(:businessUnitType,:materialCode,:materialName,:specModel,:priceType,:priceMonth,:revisionNo,:active,
           :givenPrice,:plannedPrice,:markupRatio,:baseSettlePrice,:budgetCu,:budgetZn,:referenceCu,:referenceZn,
           :originalCopperWeightG,:originalZincWeightG,:copperWeightG,:zincWeightG,:weightsConfirmed,
           :weightConfirmationNote,:weightsConfirmedBy,:weightsConfirmedAt,:expression,:formulaVersion,:taxDivisor,
           :materialUnit,:unitBasis,:sourceSystem,:sourceFileName,:sourceFileSha256,:sourceFileRef,:sourceSheet,
-          :sourceRowsJson,:sourceFormula,:remark,:contentHash,:createdBy)
+          :sourceRowsJson,:sourceFormula,:remark,:contentHash,:createdBy,:importBatchToken)
         """, parameters, key, new String[]{"id"});
     if (key.getKey() == null) throw new IllegalStateException("结算价格保存未返回修订编号");
     return byId(row.getBusinessUnitType(), key.getKey().longValue()).orElseThrow();

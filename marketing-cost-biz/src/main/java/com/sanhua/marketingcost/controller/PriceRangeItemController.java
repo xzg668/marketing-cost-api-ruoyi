@@ -2,6 +2,8 @@ package com.sanhua.marketingcost.controller;
 
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import com.sanhua.marketingcost.service.pricing.WorkbookPriceImportHistory;
+import static com.sanhua.marketingcost.service.pricing.WorkbookPriceImportHistory.Kind.RANGE_ORIGINAL;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceRangeItemPageResponse;
@@ -32,6 +34,9 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/v1/price-range/items")
 public class PriceRangeItemController {
+  @org.springframework.beans.factory.annotation.Autowired
+  private WorkbookPriceImportHistory importHistory;
+
   private final PriceRangeItemService priceRangeItemService;
   private final OriginalRangeImportService originals;
 
@@ -171,4 +176,37 @@ public class PriceRangeItemController {
       @RequestBody PriceRangeItemImportRequest request) {
     return CommonResult.success(priceRangeItemService.importItems(request));
   }
+  @PostMapping("/rows/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:range:import')")
+  @com.sanhua.marketingcost.annotation.OperationLog(module="区间价",operationType=com.sanhua.marketingcost.annotation.OperationType.UPDATE)
+  public CommonResult<Void> voidRow(@PathVariable long id) {
+    importHistory.withdrawRangeRow(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),id);
+    return CommonResult.success(null);
+  }
+
+  @GetMapping("/imports")
+  @PreAuthorize("@ss.hasPermi('price:range:import')")
+  public CommonResult<WorkbookPriceImportHistory.Page> importHistory(
+      @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) {
+    return CommonResult.success(importHistory.list(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),
+        RANGE_ORIGINAL,page,size));
+  }
+
+  @GetMapping("/imports/{id}/original")
+  @PreAuthorize("@ss.hasPermi('price:range:import')")
+  public org.springframework.http.ResponseEntity<byte[]> importOriginalFile(@PathVariable long id) {
+    var original=importHistory.original(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),RANGE_ORIGINAL,id);
+    return org.springframework.http.ResponseEntity.ok().contentType(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM)
+        .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,org.springframework.http.ContentDisposition.attachment()
+            .filename(original.fileName(),java.nio.charset.StandardCharsets.UTF_8).build().toString()).body(original.bytes());
+  }
+
+  @PostMapping("/imports/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:range:import')")
+  @com.sanhua.marketingcost.annotation.OperationLog(module="区间价",operationType=com.sanhua.marketingcost.annotation.OperationType.UPDATE)
+  public CommonResult<Void> voidImport(@PathVariable long id,java.security.Principal principal) {
+    importHistory.withdraw(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),RANGE_ORIGINAL,id,principal.getName());
+    return CommonResult.success(null);
+  }
+
 }

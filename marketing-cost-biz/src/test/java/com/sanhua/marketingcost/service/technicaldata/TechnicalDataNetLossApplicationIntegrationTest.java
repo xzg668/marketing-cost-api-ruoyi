@@ -4,11 +4,13 @@ import static org.assertj.core.api.Assertions.*;
 import com.sanhua.marketingcost.dto.technicaldata.*;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository.Recipient;
+import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.NetLossRateQuery;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
@@ -20,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Tag("integration")
 @Transactional
 class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
+  private static final String MISSING_RATE_MESSAGE = "未取到净损失率，无法计算成本。请补齐净损失率后重新核算。";
   private static final TechnicalDataActor WANG = new TechnicalDataActor(101L, "王工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor LI = new TechnicalDataActor(102L, "李工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor ADMIN = new TechnicalDataActor(1L, "管理员", Set.of("*:*:*"));
@@ -32,6 +35,7 @@ class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
   @Autowired MaterialMasterRawMapper materials;
   @Autowired QualityLossRateMapper rates;
   @Autowired NetLossRateQuery sources;
+  @Autowired BomRawHierarchyMapper hierarchy;
   @Autowired TechnicalDataSharedModules sharedModules;
   @Autowired TechnicalDataSharedModuleQuery sharedQuery;
   private Long taskId, productId, rateA;
@@ -83,13 +87,62 @@ class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(second.content().bareMaterialNo()).isEqualTo(key + "-B");
   }
 
+  @Test void finishedProductWithoutMasterBareUsesTheOnlyNonPackagingBomChild() {
+    String product = key + "-NOBARE";
+    directChild(product, key + "-PKG", "151551519", "包装组件", "No101", "210", null);
+    directChild(product, key + "-BOX", "15112", "纸箱", "No104", "210", null);
+    directChild(product, key + "-B", "11", "产品本体", "No101", "210", null);
+    directChild(product, key + "-OLD", "11", "已失效裸品", "No101", "210", LocalDate.of(2024, 12, 31));
+    directChild(product, key + "-OTHER", "11", "其他组织裸品", "No101", "220", null);
+    rate("NOBARE", "0.02", 2026, "COMMERCIAL");
+
+    var source = sources.lookup(product, null, "COMMERCIAL", 2026, "COMMERCIAL");
+    assertThat(source.bareMaterialNo()).isEqualTo(key + "-B");
+    assertThat(source.rate()).isEqualByComparingTo("0.008");
+    assertThat(sources.search("CODE", product, "COMMERCIAL", 2026, "COMMERCIAL")).containsExactly(source);
+    assertThat(sources.lookup(product, null, "COMMERCIAL", 2025, "COMMERCIAL").rate()).isNull();
+    assertThat(sources.lookup(product, null, "COMMERCIAL", 2026, "PLATE").rate()).isNull();
+
+    directChild(product, key + "-B2", "11", "另一裸品", "No101", "210", null);
+    var ambiguous = sources.lookup(product, null, "COMMERCIAL", 2026, "COMMERCIAL");
+    assertThat(ambiguous.bareMaterialNo()).isNull();
+    assertThat(ambiguous.rate()).isEqualByComparingTo("0.02");
+    var missing = sources.lookup(product, null, "COMMERCIAL", 2025, "COMMERCIAL");
+    assertThat(missing.reasonCode()).isEqualTo("NET_LOSS_BOM_BARE_AMBIGUOUS");
+    assertThat(missing.message()).isEqualTo(MISSING_RATE_MESSAGE);
+  }
+
+  private void directChild(String product, String code, String category, String categoryName,
+      String costElement, String priceOrg, LocalDate effectiveTo) {
+    var line = new BomRawHierarchy();
+    line.setTopProductCode(product);
+    line.setParentCode(product);
+    line.setMaterialCode(code);
+    line.setLevel(1);
+    line.setPath("/" + product + "/" + code + "/");
+    line.setMaterialCategory1(category);
+    line.setMaterialCategory2(categoryName);
+    line.setCostElementCode(costElement);
+    line.setBomPurpose("主制造");
+    line.setBomStatus("已核准");
+    line.setSourceType("U9");
+    line.setPriceOrgCode(priceOrg);
+    line.setEffectiveFrom(LocalDate.of(2020, 1, 1));
+    line.setEffectiveTo(effectiveTo);
+    line.setSourceImportBatchId(key);
+    line.setBuildBatchId(key);
+    line.setBuiltAt(LocalDateTime.now());
+    hierarchy.insert(line);
+  }
+
   @Test void missingProductBareOrYearlyRateStayMissingAndPublicZeroCanBeReferenced() {
     assertThat(sources.lookup(key, null, "COMMERCIAL", 2026, "COMMERCIAL").reasonCode()).isEqualTo("NET_LOSS_PRODUCT_MISSING");
     assertThat(sources.lookup(key, key + "-SAME", "COMMERCIAL", 2026, "COMMERCIAL").reasonCode()).isEqualTo("NET_LOSS_PRODUCT_AMBIGUOUS");
     assertThat(sources.lookup(key, key + "-ZERO", "COMMERCIAL", 2026, "COMMERCIAL").status()).isEqualTo("AVAILABLE");
     assertThat(source("NOBARE").source().reasonCode()).isEqualTo("NET_LOSS_BARE_MISSING");
+    assertThat(source("NOBARE").source().message()).isEqualTo(MISSING_RATE_MESSAGE);
     assertThat(source("NORATE").source().reasonCode()).isEqualTo("NET_LOSS_RATE_MISSING");
-    assertThatThrownBy(() -> service.save(productId, reference(source("NORATE"), 0), WANG)).hasMessageContaining("暂无");
+    assertThatThrownBy(() -> service.save(productId, reference(source("NORATE"), 0), WANG)).hasMessageContaining(MISSING_RATE_MESSAGE);
     var saved = service.save(productId, reference(source("ZERO"), 0), WANG);
     assertThat(saved.content().rate()).isZero();
     assertThat(saved.moduleStatus()).isEqualTo("READY");

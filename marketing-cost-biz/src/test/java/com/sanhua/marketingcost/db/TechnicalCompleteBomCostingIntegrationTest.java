@@ -220,6 +220,10 @@ class TechnicalCompleteBomCostingIntegrationTest extends OriginalPricingIntegrat
   }
 
   void modelOnlyPurchase(String replacement, String model) throws Exception {
+    modelOnlyPurchase(replacement, model, "测试供方");
+  }
+
+  void modelOnlyPurchase(String replacement, String model, String supplier) throws Exception {
     jdbc.update("""
         INSERT INTO lp_material_master_raw
           (material_code,material_name,material_model,material_spec,unit,organization_code,
@@ -234,7 +238,7 @@ class TechnicalCompleteBomCostingIntegrationTest extends OriginalPricingIntegrat
       var labels=List.of("料号","规格型号","供方名称","价格类型","批量价总价（元）","不含税价格");
       for (int i=0;i<labels.size();i++) header.createCell(i).setCellValue(labels.get(i));
       var line=sheet.createRow(1);
-      var values=List.of("",model,"测试供方","固定价","3.50","3.50");
+      var values=List.of("",model,supplier,"固定价","3.50","3.50");
       for (int i=0;i<values.size();i++) line.createCell(i).setCellValue(values.get(i));
       book.write(out);
       quote=out.toByteArray();
@@ -244,10 +248,12 @@ class TechnicalCompleteBomCostingIntegrationTest extends OriginalPricingIntegrat
         parser.parse(quote,"型号报价.xlsx",List.of()).rows());
   }
 
-  @Test void replacedPurchaseUsesModelOnlyInquiry() throws Exception {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"测试供方", ""})
+  void replacedPurchaseUsesModelOnlyInquiry(String supplier) throws Exception {
     createFixture(true);
     String replacement=material+"-NEW", model=replacement+"-MODEL";
-    modelOnlyPurchase(replacement,model);
+    modelOnlyPurchase(replacement,model,supplier);
     var reference=boms.reference(product,sample,ADMIN);
     String replaceAt=reference.rows().stream().filter(row -> material.equals(row.materialCode())).findFirst().orElseThrow().hierarchy();
     var request=new TechnicalBomSaveRequest();

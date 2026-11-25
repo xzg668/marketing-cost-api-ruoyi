@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
+import com.sanhua.marketingcost.service.NetLossRateQuery;
 import com.sanhua.marketingcost.service.costing.OemProductConfigStore;
 import java.math.BigDecimal;
 import java.util.List;
@@ -21,6 +22,31 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class CostInputRevisionServiceImplTest {
+
+  @Test void bomBareRateInvalidatesOnlyTheAffectedQuotationInput() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service = new CostInputRevisionServiceImpl(jdbc, (form, item, month) ->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved", java.util.Set.of(), java.util.Set.of(), true));
+    var quote = form();
+    var affected = item(11L, "1064900000157");
+    var ordinary = item(12L, "P-2");
+    String before = service.currentRevision(quote, affected, "2026-11");
+    String otherBefore = service.currentRevision(quote, ordinary, "2026-11");
+    var rates = mock(NetLossRateQuery.class);
+    ReflectionTestUtils.setField(service, "netLossRates", rates);
+    when(rates.lookup("1064900000157", null, "COMMERCIAL", 2026, "COMMERCIAL"))
+        .thenReturn(new NetLossRateQuery.Source("AVAILABLE", NetLossRateQuery.BOM_SOURCE_AVAILABLE, "采用 BOM 裸品费率",
+            1L, "1064900000157", "膜片式压力控制器", "MPS2AH314", "105700069", "COMMERCIAL", 2026, "COMMERCIAL",
+            2L, new BigDecimal("0.012")));
+    when(rates.lookup("P-2", null, "COMMERCIAL", 2026, "COMMERCIAL"))
+        .thenReturn(new NetLossRateQuery.Source("AVAILABLE", "NET_LOSS_SOURCE_AVAILABLE", "沿用本产品已有净损失率",
+            3L, "P-2", null, null, "B-2", "COMMERCIAL", 2026, "COMMERCIAL", 4L, new BigDecimal("0.01")));
+    String after = service.currentRevision(quote, affected, "2026-11");
+    assertThat(after).isNotEqualTo(before);
+    assertThat(service.currentRevisions(quote, List.of(affected, ordinary), "2026-11"))
+        .containsEntry(11L, after).containsEntry(12L, otherBefore);
+  }
 
   @Test void onlyConfiguredProductUsesAnOemInputRevision() {
     var jdbc = mock(JdbcTemplate.class);

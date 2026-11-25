@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.*;
 @Mapper
 public interface HouseholdInquiryStorageMapper {
   record MaterialIdentity(String materialCode,String organizationCode,String materialModel,String materialSpec) {}
-  @Select("SELECT EXISTS(SELECT 1 FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id WHERE p.business_unit_type=#{unit} AND p.material_code IS NULL AND b.status='PUBLISHED' AND b.source_month<=#{month})")
+  @Select("SELECT EXISTS(SELECT 1 FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id WHERE p.business_unit_type=#{unit} AND p.material_code IS NULL AND p.row_voided=0 AND b.status='PUBLISHED' AND b.source_month<=#{month})")
   boolean hasModelSources(@Param("unit") String unit,@Param("month") String month);
   @Select("<script>SELECT material_code,organization_code,material_model,material_spec FROM lp_material_master_raw WHERE active_flag=1 AND organization_code=#{organization} AND material_code IN <foreach collection='codes' item='code' open='(' separator=',' close=')'>#{code}</foreach></script>")
   List<MaterialIdentity> materialIdentities(@Param("organization") String organization,@Param("codes") Collection<String> codes);
@@ -46,23 +46,24 @@ public interface HouseholdInquiryStorageMapper {
 
   @Select("""
       <script>
-      SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
+      SELECT p.*,CASE WHEN p.row_voided=1 THEN 'VOIDED' ELSE b.status END AS batch_status,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
       FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id
-      WHERE p.business_unit_type=#{unit} AND b.status='PUBLISHED' AND p.current_match IN
+      WHERE p.business_unit_type=#{unit} AND b.status IN ('PUBLISHED','VOIDED')
+      <if test="!includeVoided">AND b.status='PUBLISHED' AND p.row_voided=0</if> AND p.current_match IN
       <foreach collection="materials" item="material" open="(" separator="," close=")">#{material}</foreach>
       ORDER BY p.material_code
       </script>
       """)
-  List<HouseholdInquiryPriceRow> current(@Param("unit") String unit,@Param("materials") Collection<String> materials);
+  List<HouseholdInquiryPriceRow> current(@Param("unit") String unit,@Param("materials") Collection<String> materials,@Param("includeVoided") boolean includeVoided);
 
   @Select("""
       <script>
-      SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
+      SELECT p.*,CASE WHEN p.row_voided=1 THEN 'VOIDED' ELSE b.status END AS batch_status,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
       FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id
-      WHERE p.business_unit_type=#{unit} AND b.status='PUBLISHED' AND b.source_month &lt;= #{month}
+      WHERE p.business_unit_type=#{unit} AND b.status='PUBLISHED' AND p.row_voided=0 AND b.source_month &lt;= #{month}
       AND p.match_key IN <foreach collection="materials" item="code" open="(" separator="," close=")">#{code}</foreach>
       AND NOT EXISTS (SELECT 1 FROM lp_household_inquiry_price n JOIN lp_household_inquiry_import_batch nb ON nb.id=n.import_batch_id
-        WHERE n.business_unit_type=p.business_unit_type AND n.match_key=p.match_key AND nb.status='PUBLISHED'
+        WHERE n.business_unit_type=p.business_unit_type AND n.match_key=p.match_key AND nb.status IN ('PUBLISHED','VOIDED')
         AND nb.source_month &lt;= #{month} AND (nb.source_month &gt; b.source_month OR (nb.source_month=b.source_month AND n.revision_no &gt; p.revision_no)))
       ORDER BY p.material_code
       </script>
@@ -70,7 +71,7 @@ public interface HouseholdInquiryStorageMapper {
   List<HouseholdInquiryPriceRow> asOfMonth(@Param("unit") String unit,@Param("materials") Collection<String> materials,@Param("month") String month);
 
   @Select("""
-      SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
+      SELECT p.*,CASE WHEN p.row_voided=1 THEN 'VOIDED' ELSE b.status END AS batch_status,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
       FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id
       WHERE p.business_unit_type=#{unit} AND b.status='PUBLISHED' AND p.material_code=#{material} ORDER BY p.revision_no DESC
       """)
@@ -78,7 +79,7 @@ public interface HouseholdInquiryStorageMapper {
 
   /** The publishing transaction may read its just-inserted row before the batch becomes visible. */
   @Select("""
-      SELECT p.*,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
+      SELECT p.*,CASE WHEN p.row_voided=1 THEN 'VOIDED' ELSE b.status END AS batch_status,b.source_month,b.pricing_unit,b.currency,b.tax_basis,b.file_key,b.file_sha256
       FROM lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id
       WHERE p.business_unit_type=#{unit} AND p.id=#{id}
       """)

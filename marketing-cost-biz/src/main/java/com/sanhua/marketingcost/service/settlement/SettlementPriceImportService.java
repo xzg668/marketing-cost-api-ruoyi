@@ -16,6 +16,9 @@ public class SettlementPriceImportService {
   @org.springframework.beans.factory.annotation.Autowired(required=false)
   private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
 
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.pricing.monthly.VoidedSourceMonthlyPrices voidedMonthlyPrices;
+
   public record Preview(SettlementWorkbookParser.ParsedWorkbook workbook, String fingerprint) {}
   public record ImportResult(int inserted, int revised, int unchanged, int sourceRows, List<Long> ruleIds, SettlementEffectivePriceService.Generation effectivePrices) {
     public ImportResult { ruleIds = List.copyOf(ruleIds); }
@@ -55,14 +58,18 @@ public class SettlementPriceImportService {
         if (!fingerprint(book, scope, current).equals(expectedFingerprint)) throw conflict();
         // 不变内容的归档可共享；数据库回滚时可留下未引用原件，绝不发布部分价格。
         files.save(scope.businessUnitType(), bytes);
+        String batchToken = UUID.randomUUID().toString();
         int inserted = 0, revised = 0, unchanged = 0;
         List<Long> ids = new ArrayList<>();
         for (var rule : book.rules().stream().sorted(Comparator.comparing(SettlementWorkbookParser.Rule::materialCode)
             .thenComparing(r -> r.priceType().name())).toList()) {
           var old = current.get(new SettlementPriceRepository.RuleKey(rule.materialCode(), rule.priceType()));
-          var candidate = revisions.fromImport(rule, book, scope, old, operator);
+          boolean withdrawn = old != null && old.getVoidedAt() != null;
           boolean sameMonth = old != null && old.getPriceMonth().equals(scope.priceMonth());
-          if (sameMonth && old.getContentHash().equals(candidate.getContentHash())) {
+          var candidate = revisions.fromImport(rule, book, scope, withdrawn ? null : old, operator);
+          candidate.setImportBatchToken(batchToken);
+          if (sameMonth && withdrawn) candidate.setRevisionNo(old.getRevisionNo() + 1);
+          if (sameMonth && !withdrawn && old.getContentHash().equals(candidate.getContentHash())) {
             unchanged++;
             ids.add(old.getId());
           } else {
@@ -75,6 +82,46 @@ public class SettlementPriceImportService {
             effectivePrices.generate(scope.businessUnitType(), operator));
       });
     } catch (DuplicateKeyException | ConcurrencyFailureException changed) { throw conflict(); }
+  }
+
+  public SettlementPriceRepository.ImportPage imports(String unit, int page, int size) {
+    if (page < 1 || page > 1_000_000 || size < 1 || size > 100)
+      throw new IllegalArgumentException("请填写有效页码，每页1至100条");
+    return prices.imports(unit, page, size);
+  }
+
+  public void voidRow(String unit, long id, String actor) {
+    String operator=SettlementScope.required(actor,"操作人",64);
+    transaction.executeWithoutResult(status->{
+      effectivePrices.lock(unit);
+      var rule=prices.byId(unit,id).orElseThrow(SettlementPriceImportService::missingImport);
+      if(rule.getVoidedAt()!=null)return;
+      prices.voidRules(unit,List.of(id),operator);
+      voidedMonthlyPrices.settlementRow(unit,id);
+      if(pendingState!=null)pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(
+          Set.of("PRICE"),unit,Set.of(rule.getMaterialCode()),Set.of()));
+    });
+  }
+
+  public void voidImport(String unit, long id, String actor) {
+    String operator = SettlementScope.required(actor, "操作人", 64);
+    try {
+      transaction.executeWithoutResult(status -> {
+        effectivePrices.lock(unit);
+        var original = prices.byId(unit, id).orElseThrow(SettlementPriceImportService::missingImport);
+        var rows = prices.lockImport(unit, original).stream().filter(row -> row.getVoidedAt() == null).toList();
+        if (rows.isEmpty()) return;
+        var ids = rows.stream().map(SettlementPriceRecord::getId).toList();
+        prices.voidRules(unit, ids, operator);
+        voidedMonthlyPrices.settlement(unit, ids);
+        if (pendingState != null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(
+            Set.of("PRICE"), unit, rows.stream().map(SettlementPriceRecord::getMaterialCode).collect(java.util.stream.Collectors.toSet()), Set.of()));
+      });
+    } catch (ConcurrencyFailureException changed) { throw conflict(); }
+  }
+
+  private static org.springframework.web.server.ResponseStatusException missingImport() {
+    return new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "结算价格导入记录不存在");
   }
 
   public OriginalFile original(String businessUnit, long id) {
@@ -92,7 +139,7 @@ public class SettlementPriceImportService {
     values.put("scope", scope);
     values.put("file", book.sha256());
     var versions = heads.values().stream().sorted(Comparator.comparing(SettlementPriceRecord::getId))
-        .map(row -> Map.of("id", row.getId(), "hash", row.getContentHash())).toList();
+        .map(row -> Map.of("id", row.getId(), "hash", row.getContentHash(), "voided", row.getVoidedAt() != null)).toList();
     values.put("versions", versions);
     return revisions.hash(values);
   }

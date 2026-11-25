@@ -86,6 +86,11 @@ class ScrapPriceControllerTest {
   @Configuration
   @EnableMethodSecurity
   static class Config {
+    @Bean
+    com.sanhua.marketingcost.service.pricing.WorkbookPriceImportHistory importHistory() {
+      return org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.WorkbookPriceImportHistory.class);
+    }
+
     @Bean(name = "ss")
     PermissionService permissions() {
       return new PermissionService();

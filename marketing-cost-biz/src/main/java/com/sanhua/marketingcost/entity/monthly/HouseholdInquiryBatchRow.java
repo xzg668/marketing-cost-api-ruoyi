@@ -25,6 +25,8 @@ public class HouseholdInquiryBatchRow {
   private String taxBasis;
   private String previewJson;
   private String status;
+  private String voidedBy;
+  private LocalDateTime voidedAt;
   private LocalDateTime expiresAt;
   private String resultJson;
   private LocalDateTime publishedAt;

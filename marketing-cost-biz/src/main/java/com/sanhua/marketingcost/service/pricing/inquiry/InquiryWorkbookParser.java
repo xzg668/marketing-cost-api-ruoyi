@@ -33,7 +33,17 @@ public final class InquiryWorkbookParser {
       Map<String, String> factors,
       String sheetName,
       int sourceRow,
-      Map<String, String> originalFields) {}
+      Map<String, String> originalFields,
+      String supplierCode,
+      InquiryRangePricing range) {
+    public Rule { supplierCode = Objects.toString(supplierCode, ""); }
+    public Rule(String materialCode, String materialName, String specification, String supplierName,
+        String unit, String priceType, BigDecimal originalPrice, String formula, CompiledFormula compiled,
+        Map<String, String> factors, String sheetName, int sourceRow, Map<String, String> originalFields) {
+      this(materialCode, materialName, specification, supplierName, unit, priceType, originalPrice,
+          formula, compiled, factors, sheetName, sourceRow, originalFields, "", null);
+    }
+  }
 
   public record Parsed(List<Rule> rows, List<String> sheets) {
     public Parsed {
@@ -71,7 +81,7 @@ public final class InquiryWorkbookParser {
           "供方名称",
           "备注及联动公式",
           "价格类型",
-          "铜基价",
+          "铜基价", "供应商代码", "行情因素", "行情单位", "区间下限", "区间上限", "区间单价(元)",
           "不含税价格");
 
   public Parsed parse(byte[] bytes, String fileName, List<Factor> catalog) {
@@ -95,9 +105,21 @@ public final class InquiryWorkbookParser {
             if (material.isBlank() && specification.isBlank())
               throw new IllegalArgumentException("料号和规格型号至少填写一项");
             String type = InquiryNames.normalize(field(row, header, "价格类型", 16));
-            if (!Set.of("固定价", "联动价").contains(type))
-              throw new IllegalArgumentException("价格类型须为固定价或联动价");
-            Cell price = cell(row, header, type.equals("固定价") ? "批量价总价(元)" : "不含税价格");
+            if (!Set.of("固定价", "联动价", "区间价").contains(type))
+              throw new IllegalArgumentException("价格类型须为固定价、联动价或区间价");
+            Cell price = cell(row, header, type.equals("区间价") ? "区间单价(元)"
+                : type.equals("固定价") ? "批量价总价(元)" : "不含税价格");
+            InquiryRangePricing range = null;
+            if (type.equals("区间价")) {
+              String factor = InquiryNames.normalize(field(row, header, "行情因素", 255));
+              var matches = factorKeys(factor, catalog, true);
+              if (matches.size() != 1) throw new IllegalArgumentException("行情因素无法唯一对应财务目录：" + factor);
+              String marketUnit = field(row, header, "行情单位", 32);
+              String upper = field(row, header, "区间上限", 64);
+              range = new InquiryRangePricing(matches.iterator().next(), marketUnit,
+                  List.of(new InquiryRangePricing.Band(decimal(cell(row, header, "区间下限")),
+                      upper.isBlank() ? null : new BigDecimal(upper), decimal(price), index + 1)));
+            }
             if (price == null || text(price).isBlank())
               throw new IllegalArgumentException(type + "缺少价格");
             CompiledFormula compiled = null;
@@ -149,7 +171,7 @@ public final class InquiryWorkbookParser {
                     Map.copyOf(factors),
                     header.sheet().getSheetName(),
                     index + 1,
-                    Map.copyOf(fields)));
+                    Map.copyOf(fields), field(row, header, "供应商代码", 64), range));
           } catch (IllegalArgumentException invalid) {
             throw new IllegalArgumentException(
                 header.sheet().getSheetName() + " 第" + (index + 1) + "行：" + invalid.getMessage(),
@@ -158,10 +180,35 @@ public final class InquiryWorkbookParser {
         }
       }
       if (rules.isEmpty()) throw new IllegalArgumentException("工作簿没有询价数据");
-      return new Parsed(rules, headers.stream().map(h -> h.sheet().getSheetName()).toList());
+      return new Parsed(mergeRanges(rules), headers.stream().map(h -> h.sheet().getSheetName()).toList());
     } catch (java.io.IOException invalid) {
       throw new IllegalArgumentException("无法读取询价工作簿", invalid);
     }
+  }
+
+  private static List<Rule> mergeRanges(List<Rule> rows) {
+    var groups = new LinkedHashMap<String, List<Rule>>();
+    for (var row : rows) {
+      String identity = InquiryNames.normalize(row.materialCode().isBlank() ? "SPEC:" + row.specification() : "CODE:" + row.materialCode())
+          + "\u0000" + InquiryNames.normalize(row.supplierCode().isBlank() ? row.supplierName() : "CODE:" + row.supplierCode());
+      groups.computeIfAbsent(identity, ignored -> new ArrayList<>()).add(row);
+    }
+    var result = new ArrayList<Rule>();
+    for (var group : groups.values()) {
+      if (group.stream().noneMatch(row -> row.range() != null)) { result.addAll(group); continue; }
+      var first = group.getFirst();
+      if (first.range() == null || group.stream().anyMatch(row -> row.range() == null
+          || !row.range().factorKey().equals(first.range().factorKey())
+          || !row.range().marketUnit().equals(first.range().marketUnit())
+          || !row.specification().equals(first.specification()) || !row.unit().equals(first.unit())))
+        throw new IllegalArgumentException("同一料号／规格和供方的区间询价须使用一致的行情因素、单位和价格类型");
+      var range = new InquiryRangePricing(first.range().factorKey(), first.range().marketUnit(),
+          group.stream().flatMap(row -> row.range().bands().stream()).toList());
+      result.add(new Rule(first.materialCode(), first.materialName(), first.specification(), first.supplierName(),
+          first.unit(), first.priceType(), first.originalPrice(), null, null, Map.of(), first.sheetName(),
+          first.sourceRow(), first.originalFields(), first.supplierCode(), range));
+    }
+    return List.copyOf(result);
   }
 
   private static List<Header> headers(Workbook book) {
@@ -273,6 +320,7 @@ public final class InquiryWorkbookParser {
 
   private static BigDecimal decimal(Cell cell) {
     try {
+      if (cell == null) throw new IllegalArgumentException("缺少必填数值");
       return new BigDecimal(text(cell));
     } catch (NumberFormatException invalid) {
       throw new IllegalArgumentException("单元格不是有效数值：" + cell.getAddress());

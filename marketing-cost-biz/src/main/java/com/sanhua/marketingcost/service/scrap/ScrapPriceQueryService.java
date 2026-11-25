@@ -40,7 +40,8 @@ public class ScrapPriceQueryService {
     var query =
         Wrappers.lambdaQuery(ScrapPrice.class)
             .eq(ScrapPrice::getBusinessUnitType, unit)
-            .eq(ScrapPrice::getPriceMonth, priceMonth);
+            .eq(ScrapPrice::getPriceMonth, priceMonth)
+            .eq(ScrapPrice::getVoided, 0);
     if (keyword != null && !keyword.isBlank())
       query.and(
           q ->

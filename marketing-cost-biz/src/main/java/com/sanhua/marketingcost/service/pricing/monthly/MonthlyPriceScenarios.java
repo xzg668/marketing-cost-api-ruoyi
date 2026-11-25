@@ -152,13 +152,14 @@ public final class MonthlyPriceScenarios {
         var snapshot = read(fact.evidence().json(), HouseholdMonthlyPriceSource.Snapshot.class);
         var source = snapshot.source().evidence().source();
         financial = new BigDecimal(source.unitPrice()); customer = financial;
-        if(snapshot.metalInputs()!=null) {
+        if (snapshot.metalInputs() != null) {
           var metal = snapshot.metalInputs();
-          var projected = customerContext(metal.financial(), customerPrices, publications, customerContexts);
-          householdCalculation=HouseholdMetalCalculation.calculate(financial,
-              new HouseholdMetalCalculation.Inputs(metal.copperGrams(), metal.zincGrams(),
-                  projected == null ? null : projected.financialOnly()),customerPrices);
-          customer=householdCalculation.calculatedW();
+          var base = capturedFinancialContext(metal.financial(), customerPrices, publications);
+          var inputs = new HouseholdMetalCalculation.Inputs(metal.copperGrams(), metal.zincGrams(), base);
+          var projected = HouseholdMetalCalculation.demandContext(inputs, customerPrices);
+          if (projected != null) customerContexts.add(projected.evidenceForFactors(base.financial().factors().keySet()));
+          householdCalculation = HouseholdMetalCalculation.calculateQuoted(financial, inputs, projected);
+          customer = householdCalculation.calculatedW();
         }
         if (fact.householdRate() == null || fact.householdRate().compareTo(new BigDecimal(source.householdRate())) != 0)
           throw new IllegalArgumentException("Adopted household H differs from source evidence");
@@ -176,7 +177,20 @@ public final class MonthlyPriceScenarios {
         var source = root.path("source").path("selected");
         financial = new BigDecimal(source.path("price").asText()); customer = financial;
         var calculation = source.path("calculation");
-        if ("联动价".equals(calculation.path("priceType").asText())) {
+        if ("区间价".equals(calculation.path("priceType").asText())) {
+          var range = convert(source.path("original").path("rule").path("range"),
+              com.sanhua.marketingcost.service.pricing.inquiry.InquiryRangePricing.class);
+          var captured = convert(calculation.path("financial"), FactorPriceSnapshot.class);
+          var family = selectedRequest(id, requests, keys).family();
+          var months = new PriceMonthSelection(family.month().toString(), captured.scope().priceMonth());
+          var base = family.specificationOnly() && family.materialCode().isBlank()
+              ? PriceFactorContext.forSpecification(family.specification(), months, captured)
+              : new PriceFactorContext(family.materialCode(), months, captured, null);
+          var unit = FactorPriceUnit.require(range.marketUnit());
+          financial = range.price(base.requiredPrice(range.factorKey(), unit, true)).setScale(18, RoundingMode.HALF_UP);
+          var projected = customerContext(base, customerPrices, publications, customerContexts);
+          customer = range.price(projected.requiredPrice(range.factorKey(), unit, true)).setScale(18, RoundingMode.HALF_UP);
+        } else if ("联动价".equals(calculation.path("priceType").asText())) {
           var inputs = new java.util.LinkedHashMap<String,BigDecimal>();
           calculation.path("inputs").fields().forEachRemaining(entry -> inputs.put(entry.getKey(),new BigDecimal(entry.getValue().asText())));
           financial = com.sanhua.marketingcost.formula.registry.ExpressionEvaluator.evaluate(calculation.path("expression").asText(),inputs).setScale(18,RoundingMode.HALF_UP);
@@ -188,10 +202,15 @@ public final class MonthlyPriceScenarios {
                 calculation.path("financeRevision").intValue(), selectedRequest(id, requests, keys).family().businessUnitType(),
                 "210", calculation.path("financeMonth").asText(), calculation.path("financeScheme").asText(), FactorPriceScope.Condition.GENERAL);
           }
-          var inquiryContext = inquiryBase == null ? null : customerContext(new PriceFactorContext(
-              selectedRequest(id, requests, keys).family().materialCode(),
-              new PriceMonthSelection(selectedRequest(id, requests, keys).family().month().toString(), inquiryBase.scope().priceMonth()),
-              inquiryBase, null), customerPrices, publications, customerContexts);
+          var inquiryFamily = selectedRequest(id, requests, keys).family();
+          PriceFactorContext inquiryFactors = null;
+          if (inquiryBase != null) {
+            var months = new PriceMonthSelection(inquiryFamily.month().toString(), inquiryBase.scope().priceMonth());
+            inquiryFactors = inquiryFamily.specificationOnly() && inquiryFamily.materialCode().isBlank()
+                ? PriceFactorContext.forSpecification(inquiryFamily.specification(), months, inquiryBase)
+                : new PriceFactorContext(inquiryFamily.materialCode(), months, inquiryBase, null);
+          }
+          var inquiryContext = customerContext(inquiryFactors, customerPrices, publications, customerContexts);
           calculation.path("factors").fields().forEachRemaining(entry -> {
             String factor = entry.getValue().asText();
             BigDecimal customerMetal = customerPrices.pricePerTon(factor);
@@ -232,8 +251,14 @@ public final class MonthlyPriceScenarios {
         var source = read(fact.evidence().json(), MonthlyOriginalRangePriceSource.Snapshot.class).source();
         var saved = read(source.calculationJson(), OriginalRangePriceRuntime.Calculation.class);
         var rule = rangeSnapshots.read(source.selected()).rule();
-        financial = originalRange.calculate(rule, saved.context().financialOnly()).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
-        customer = originalRange.calculate(rule, customerContext(saved.context(), customerPrices, publications, customerContexts)).priceExcludingTax().setScale(18, RoundingMode.HALF_UP);
+        var p0=originalRange.calculate(rule,saved.context().financialOnly());
+        var p1=originalRange.calculate(rule,customerContext(saved.context(),customerPrices,publications,customerContexts));
+        var bands=source.bands()==null?java.util.List.<com.sanhua.marketingcost.entity.PriceRangeItem>of()
+            :source.bands().stream().filter(band->source.selected().getId().equals(band.getFactorRuleId())).toList();
+        if(!bands.isEmpty() && (!OriginalRangePriceRuntime.hasBand(bands,p0) || !OriginalRangePriceRuntime.hasBand(bands,p1)))
+          throw new IllegalArgumentException("本次行情命中的区间价格已失效，请维护后重新核算");
+        financial=p0.priceExcludingTax().setScale(18,RoundingMode.HALF_UP);
+        customer=p1.priceExcludingTax().setScale(18,RoundingMode.HALF_UP);
       }
       case "RANGE_LEGACY_FACTOR" -> {
         var source = read(fact.evidence().json(), MonthlyLegacyRangePriceSource.Snapshot.class).source();
@@ -261,13 +286,16 @@ public final class MonthlyPriceScenarios {
         var rule = convert(capturedRule, SettlementPriceRecord.class);
         var base = source.path("base").isNull() ? null : convert(source.path("base"), SettlementBasePrice.class);
         financial = settlement.calculate(rule, base).unitPrice();
-        var copper = customerPrices.copper(); var zinc = customerPrices.zinc();
+        var copper = customerPrices.pricePerTon(PriceFactorContext.COPPER);
+        var zinc = customerPrices.pricePerTon(PriceFactorContext.ZINC);
         if (base != null && base.financial() != null) {
           var ctx = customerContext(new PriceFactorContext(rule.getMaterialCode(),
               new PriceMonthSelection(base.priceMonth(), base.priceMonth()), base.financial(), null),
               customerPrices, publications, customerContexts);
-          copper = ctx.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_TON, true);
-          zinc = ctx.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_TON, true);
+          copper = rule.getCopperWeightG() == null || rule.getCopperWeightG().signum() == 0
+              ? null : ctx.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_TON, true);
+          zinc = rule.getZincWeightG() == null || rule.getZincWeightG().signum() == 0
+              ? null : ctx.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_TON, true);
         }
         var projected = base == null || (copper == null && zinc == null) ? base : new SettlementBasePrice(base.id(), base.businessUnitType(),
             base.priceMonth(), base.revisionNo(), base.active(), copper == null ? base.copperPrice() : copper.movePointLeft(3),
@@ -343,9 +371,19 @@ public final class MonthlyPriceScenarios {
 
   private PriceFactorContext customerContext(PriceFactorContext base, CustomerMaterialPrices customer,
       Map<String, FactorPriceSnapshot> publications, List<PriceFactorContext> traces) {
+    var financial = capturedFinancialContext(base, customer, publications);
+    if (financial == null) return null;
+    var result = financial.withCustomerMaterials(customer);
+    traces.add(result.evidenceForFactors(financial.financial().factors().keySet()));
+    return result;
+  }
+
+  private PriceFactorContext capturedFinancialContext(PriceFactorContext base, CustomerMaterialPrices customer,
+      Map<String, FactorPriceSnapshot> publications) {
     if (base == null) return null;
     var captured = base.financial();
-    if (finance != null && customer.copper() != null && captured.cuBands().isEmpty()
+    if (finance != null && customer.copper() != null
+        && (captured.cuBands().isEmpty() || !CustomerMaterialPrices.CALCULATION_VERSION.equals(base.substitutionVersion()))
         && "210".equals(captured.scope().priceOrgCode())) {
       String key = captured.batchId() + ":" + captured.revision() + ":" + captured.scope();
       var full = publications.computeIfAbsent(key, ignored -> finance.readCaptured(captured.batchId(), captured.revision(),
@@ -357,11 +395,9 @@ public final class MonthlyPriceScenarios {
             || !original.unit().equals(saved.unit()) || original.taxIncluded() != saved.taxIncluded())
           throw new IllegalArgumentException("保存财务因素与原发布不一致：" + entry.getKey());
       }
-      base = new PriceFactorContext(base.materialCode(), base.months(), captured.withCuBands(full.cuBands()), null, base.boardInputs());
+      return base.financialOnly().withFinancialSnapshot(captured.withCuBands(full.cuBands()));
     }
-    var result = base.withCustomerMaterials(customer);
-    if (result.customerBand() != null) traces.add(result.evidenceForFactors(base.financial().factors().keySet()));
-    return result;
+    return base;
   }
 
   private BigDecimal formula(PriceLinkedItem rule, String month, LocalDate date, PreparedFormulaInputs prepared) {

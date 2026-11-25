@@ -72,6 +72,29 @@ public class SettlementPriceController {
         .body(original.bytes());
   }
 
+  @GetMapping("/imports")
+  @PreAuthorize("@ss.hasPermi('price:settlement:import')")
+  public CommonResult<SettlementPriceRepository.ImportPage> imports(@RequestParam(defaultValue="1") int page,
+      @RequestParam(defaultValue="20") int size) {
+    return CommonResult.success(imports.imports(unit(), page, size));
+  }
+
+  @PostMapping("/rows/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:settlement:import')")
+  @OperationLog(module="结算价格",operationType=OperationType.UPDATE)
+  public CommonResult<Void> voidRow(@PathVariable long id,Principal principal) {
+    imports.voidRow(unit(),id,actor(principal));
+    return CommonResult.success(null);
+  }
+
+  @PostMapping("/imports/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:settlement:import')")
+  @OperationLog(module="结算价格",operationType=OperationType.UPDATE)
+  public CommonResult<Void> voidImport(@PathVariable long id, Principal principal) {
+    imports.voidImport(unit(), id, actor(principal));
+    return CommonResult.success(null);
+  }
+
   @PostMapping("/import/preview")
   @PreAuthorize("@ss.hasPermi('price:settlement:import')")
   public CommonResult<SettlementPriceImportService.Preview> preview(@RequestPart("file") MultipartFile file,

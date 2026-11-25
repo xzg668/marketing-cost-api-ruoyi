@@ -279,7 +279,9 @@ class TechnicalDataNativeChainIntegrationTest extends OriginalPricingIntegration
     var before=views.detail(f.taskIds().getFirst(),ADMIN);
     assertThat(before.taskStatus()).isEqualTo("PENDING");
     assertThat(before.products().getFirst().profile().unitToolingFee()).isNull();
-    assertThat(before.products().getFirst().currentEditVersionId()).isNull();
+    // admin can read the shared draft identity for salary maintenance; PROFILE content stays private.
+    assertThat(before.products().getFirst().currentEditVersionId())
+        .isEqualTo(repository.findProducts(f.taskIds().getFirst()).getFirst().getCurrentEditVersionId());
     assertThatThrownBy(() -> save(f.taskIds().getFirst(),ADMIN,"99")).hasMessageContaining("未分派给本人");
     var product=repository.findProducts(f.taskIds().getFirst()).getFirst();
     var module=repository.findModules(product.getId()).stream().filter(row -> "PROFILE".equals(row.getModuleType())).findFirst().orElseThrow();

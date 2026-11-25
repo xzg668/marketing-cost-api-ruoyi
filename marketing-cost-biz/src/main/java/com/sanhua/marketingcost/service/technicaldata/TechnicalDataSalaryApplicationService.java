@@ -26,11 +26,14 @@ public class TechnicalDataSalaryApplicationService {
   private final TechnicalDataSalarySourceQuery sources;
   private final TechnicalDataSalaryUploadParser parser;
   private final TechnicalDataAttachmentStore files;
+  private final TechnicalDataSalaryPdfStore pdfFiles;
 
   public TechnicalDataSalaryApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataSourceSnapshotFactory snapshots,
       TechnicalDataVersionContentCodec codec, TechnicalDataSalarySourceQuery sources,
-      TechnicalDataSalaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse) {
+      TechnicalDataSalaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy, TechnicalDataUnchangedModuleReuse reuse,
+      TechnicalDataSalaryPdfStore pdfFiles) {
+    this.pdfFiles = pdfFiles;
     this.reuse = reuse;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
@@ -84,6 +87,29 @@ public class TechnicalDataSalaryApplicationService {
         .filter(Objects::nonNull).map(ItemEvidence::upload).filter(Objects::nonNull).findFirst()
         .orElseThrow(() -> invalid("此工资版本没有上传工时表"));
     return files.read(productId, upload.fileSha256());
+  }
+
+  @Transactional(readOnly = true)
+  public TechnicalDataSalaryPdfStore.Document pdf(Long productId, TechnicalDataActor actor) {
+    scope(productId, actor, null);
+    return pdfFiles.current(productId);
+  }
+
+  @Transactional(readOnly = true)
+  public TechnicalDataAttachmentStore.StoredFile pdfFile(Long productId, TechnicalDataActor actor) {
+    scope(productId, actor, null);
+    return pdfFiles.read(productId);
+  }
+
+  @Transactional
+  public TechnicalDataSalaryPdfStore.Document savePdf(Long productId, Integer expectedVersion, String expectedSha256,
+      byte[] bytes, TechnicalDataActor actor) {
+    if (expectedVersion == null || expectedVersion < 0) throw invalid("请刷新工资资料后重新上传");
+    var scope = scope(productId, actor, expectedVersion);
+    if (!editable(scope, actor)) throw forbidden("当前工资模块不可编辑");
+    String identity = scope.product().getMaterialNo();
+    if (identity == null || identity.isBlank()) identity = scope.product().getSourceModel();
+    return pdfFiles.save(productId, identity, bytes, expectedSha256, actor.userId());
   }
 
   @Transactional

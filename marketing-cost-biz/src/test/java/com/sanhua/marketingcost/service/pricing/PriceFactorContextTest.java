@@ -12,6 +12,55 @@ import org.junit.jupiter.api.Test;
 
 class PriceFactorContextTest {
   @Test
+  void specificationOnlyIdentitySurvivesCustomerCalculationSnapshotsAndReplay() throws Exception {
+    var original = financial();
+    String model = "MODEL-" + "A".repeat(100);
+    var context = PriceFactorContext.forSpecification(model, original.months(), original.financial());
+    var customer = context.withCustomerMaterials(new CustomerMaterialPrices(
+        new BigDecimal("100000"), new BigDecimal("24000"), null, null, null, null));
+    assertThat(customer.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true))
+        .isEqualByComparingTo("100");
+    assertThat(customer.financialOnly()).isEqualTo(context);
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    for (var copy : List.of(customer, customer.financialOnly(), customer.withBoardInputs(null),
+        customer.withFinancialSnapshot(original.financial()), customer.evidenceForFactors(java.util.Set.of("AVG|cu")),
+        context.withCustomerMetalsPerTon(new BigDecimal("100000"), null),
+        context.withCustomerCopperPerTon(new BigDecimal("100000")))) {
+      assertThat(copy.materialCode()).isEmpty();
+      assertThat(copy.materialSpecification()).isEqualTo(model);
+      assertThat(mapper.readValue(mapper.writeValueAsString(copy), PriceFactorContext.class)).isEqualTo(copy);
+    }
+  }
+
+  @Test
+  void explicitSpecificationDoesNotAllowMissingIdentityOrChangeExistingCodeValidation() {
+    var base = financial();
+    assertThatThrownBy(() -> new PriceFactorContext("", base.months(), base.financial(), null))
+        .hasMessageContaining("料号");
+    assertThatThrownBy(() -> new PriceFactorContext("X".repeat(65), base.months(), base.financial(), null))
+        .hasMessageContaining("64");
+    assertThatThrownBy(() -> PriceFactorContext.forSpecification(" ", base.months(), base.financial()))
+        .hasMessageContaining("型号／规格");
+    assertThatThrownBy(() -> PriceFactorContext.forSpecification("X".repeat(513), base.months(), base.financial()))
+        .hasMessageContaining("512");
+    assertThatThrownBy(() -> PriceFactorContext.forSpecification("MODEL", new PriceMonthSelection("2026-11", "2026-09"), base.financial()))
+        .hasMessageContaining("来源月");
+    var model = PriceFactorContext.forSpecification("MODEL", base.months(), base.financial());
+    assertThatThrownBy(() -> model.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, false))
+        .hasMessageContaining("税价");
+    assertThatThrownBy(() -> model.withCustomerCopperPerTon(BigDecimal.ZERO)).hasMessageContaining("大于0");
+  }
+
+  @Test
+  void codedHistoricalSnapshotsHaveNoAdditionalIdentityField() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    var original = financial();
+    var json = mapper.writeValueAsString(original);
+    assertThat(json).doesNotContain("materialSpecification");
+    assertThat(mapper.readValue(json, PriceFactorContext.class)).isEqualTo(original);
+  }
+
+  @Test
   void quotationCopperAndZincOverrideOnlyTheirFormulaInputsAndKeepFinancialEvidence() {
     var base = financial();
     var quote = base.withCustomerMetalsPerTon(new BigDecimal("100000"), new BigDecimal("24000"));
@@ -183,7 +232,8 @@ class PriceFactorContextTest {
             "sha",
             "hash",
             factors,
-            List.of("CU_90000", "CU_100000"),
+            // This fixture exercises a publication without Cu bands. Multi-band tests capture both columns.
+            List.of("CU_90000"),
             "finance",
             LocalDateTime.of(2026, 10, 1, 0, 0),
             null);

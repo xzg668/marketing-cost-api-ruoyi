@@ -154,6 +154,29 @@ class MonthlyQuotationInputRevisionTest {
     assertThat(service.read(form, item, "2026-10")).isEqualTo(scope);
   }
 
+  @Test void theHouseholdMetalRuleRefreshesAffectedPreparationsWithoutRefreshingOrdinaryOnes() {
+    var ordinary = service.read(form, item, "2026-10");
+    form.setPriceLinkMode("固定");
+    form.setCopperPrice(new BigDecimal("120000"));
+    assertThat(service.read(form, item, "2026-10")).isEqualTo(ordinary);
+
+    var household = new MonthlyAdoptionPlan.Selection(17L, selection.applicability(),
+        MonthlyAdoptionPlan.PriceFact.household(BigDecimal.TEN, new BigDecimal("0.085"),
+            MonthlyAdoptionPlan.SourceEvidence.ofJson("{\"metalInputs\":{\"copperGrams\":72.2,\"zincGrams\":1.3}}")));
+    var plan = new MonthlyAdoptionPlan(Map.of(request, household),
+        List.of(new MonthlyAdoptionPlan.Use("P/A", request, new BigDecimal("2.5"))), Set.of());
+    row.setInputSnapshotJson(codec.encode(MonthlyPreparationPrice.of(new QuotationPriceSession.Value(request, household,
+        BigDecimal.TEN, BigDecimal.TEN), "P/A", new BigDecimal("2.5")).withInputs(MonthlyPreparationInputs.capture(plan, "P/A"))));
+    when(prices.readByIds(eq("COMMERCIAL"), any())).thenReturn(Map.of(17L, household));
+    when(prices.lookup(any())).thenReturn(new MonthlyMaterialPrices.Lookup(Map.of(request, household), Set.of()));
+    var withDemand = service.read(form, item, "2026-10");
+    assertThat(service.read(form, item, "2026-10")).isEqualTo(withDemand);
+    form.setCopperPrice(null);
+    var withoutDemand = service.read(form, item, "2026-10");
+    assertThat(withDemand.evidence()).isNotEqualTo(withoutDemand.evidence());
+    assertThat(withDemand.unadoptedMaterials()).isEqualTo(withoutDemand.unadoptedMaterials());
+  }
+
   private static QuoteEffectiveBomNode node(String key, String path, String parent, String code, BigDecimal q) {
     var node = new QuoteEffectiveBomNode(); node.setNodeKey(key); node.setNodePath(path); node.setParentNodeKey(parent);
     node.setMaterialCode(code); node.setMaterialUnit("件"); node.setPriceOrgCode("210"); node.setQtyPerTop(q);

@@ -47,6 +47,7 @@ public final class ScrapRuleMonthPolicy {
       else if (previous.getPriceMonth().equals(row.getPriceMonth()))
         throw new IllegalArgumentException("同月废料规则身份重复：" + row.getMaterialCode());
     }
+    selected.values().removeIf(row -> row.getVoided() == 1);
     return Collections.unmodifiableMap(selected);
   }
 

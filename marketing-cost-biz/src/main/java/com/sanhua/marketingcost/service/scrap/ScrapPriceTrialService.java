@@ -42,7 +42,7 @@ public class ScrapPriceTrialService {
     var row = query.detail(businessUnit, id);
     if (request.expectedVersion() == null || !Objects.equals(row.getRowVersion(), request.expectedVersion()))
       throw new IllegalArgumentException("废料价格已更新，请重新打开详情后试算");
-    if (!"READY".equals(row.getCalcStatus()) || row.getUnitPrice() == null)
+    if (row.getVoided() == 1 || !"READY".equals(row.getCalcStatus()) || row.getUnitPrice() == null)
       throw new IllegalArgumentException("废料价格尚不可试算：" + Objects.toString(row.getCalcMessage(), "尚未取得财务基价"));
     if ("LINKED".equals(row.getPriceType())
         && (row.getCalculationJson() == null || row.getCalculationJson().isBlank()))

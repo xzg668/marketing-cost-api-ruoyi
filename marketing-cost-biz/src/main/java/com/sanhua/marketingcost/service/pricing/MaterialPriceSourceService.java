@@ -4,6 +4,7 @@ import static com.sanhua.marketingcost.service.pricing.MaterialPriceSourceCatalo
 
 import java.time.YearMonth;
 import java.util.*;
+import java.util.stream.Collectors;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -11,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class MaterialPriceSourceService {
+  private static final int QUOTATION_SCAN_BATCH_SIZE = 200;
   private final MaterialPriceSourceRepository repository;
   private final MaterialPriceSourceScanner scanner;
   private final MaterialPriceMonthSelector months;
@@ -168,8 +170,54 @@ public class MaterialPriceSourceService {
   @Transactional(rollbackFor=Exception.class)
   public void includeUnpricedManufactures(String unit,String month,long itemId) {
     if(!repository.installed()) return;
-    for(var material:repository.manufacturedMaterials(unit,month,itemId))
-      includeCalculatedMake(unit,month,material.organization(),material.materialCode());
+    publishManufactures(unit, month, repository.manufacturedMaterials(unit,month,itemId));
+  }
+
+  @Transactional(rollbackFor=Exception.class)
+  public void includeCalculatedMakes(String unit, String month, Collection<Key> materials) {
+    if (materials.isEmpty() || !repository.installed()) return;
+    publishManufactures(unit, month, materials);
+  }
+
+  private record ManufactureScan(Map<String,Object> scope, List<Candidate> candidates) {}
+
+  private void publishManufactures(String unit, String month, Collection<Key> materials) {
+    Map<String, LinkedHashSet<String>> byOrg = new LinkedHashMap<>();
+    for (Key material : materials) {
+      byOrg.computeIfAbsent(text(material.organization()), ignored -> new LinkedHashSet<>())
+          .add(text(material.materialCode()));
+    }
+    var scans = new ArrayList<ManufactureScan>();
+    // Scan all members before taking the shared business-unit/month publication lock.
+    for (var group : byOrg.entrySet()) {
+      var codes = List.copyOf(group.getValue());
+      var scope = quotationParameters(unit, month, group.getKey(), codes.getFirst());
+      scope.put("code", "");
+      for (int start = 0; start < codes.size(); start += QUOTATION_SCAN_BATCH_SIZE) {
+        var params = new HashMap<>(scope);
+        params.put("materialCodes", codes.subList(start, Math.min(start + QUOTATION_SCAN_BATCH_SIZE, codes.size())));
+        var byCode = scanner.scan(params).stream()
+            .collect(Collectors.groupingBy(row -> row.key().materialCode(), LinkedHashMap::new, Collectors.toList()));
+        var publishable = byCode.values().stream()
+            .filter(rows -> rows.size() > 1 && rows.stream().anyMatch(row -> "MAKE".equals(row.key().sourceType())))
+            .flatMap(List::stream)
+            .toList();
+        if (!publishable.isEmpty()) scans.add(new ManufactureScan(params, publishable));
+      }
+    }
+    if (scans.isEmpty()) return;
+    var scope = scans.getFirst().scope();
+    long generation = repository.lock(scope);
+    var added = new ArrayList<Candidate>();
+    for (var scan : scans) {
+      var existing = repository.quotationRows(scan.scope()).stream()
+          .map(row -> new Key(row.materialCode(), row.organization(), row.sourceType()))
+          .collect(Collectors.toSet());
+      for (Candidate row : scan.candidates()) {
+        if ("MAKE".equals(row.key().sourceType()) || !existing.contains(row.key())) added.add(row);
+      }
+    }
+    repository.append(scope, added, generation, "MAKE_CALCULATED");
   }
 
   @Transactional(rollbackFor=Exception.class)

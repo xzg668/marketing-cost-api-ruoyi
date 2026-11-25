@@ -15,6 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/v1/inquiry-prices")
 public class InquiryPriceController {
   private final InquiryPriceService service;
+  private final com.sanhua.marketingcost.service.pricing.inquiry.InquiryImportVoidService voids;
 
   /** Preserve the source lookup's 404 rather than the application's generic 500 fallback. */
   @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
@@ -24,8 +25,26 @@ public class InquiryPriceController {
         .body(CommonResult.error(missing.getStatusCode().value(), missing.getReason()));
   }
 
-  public InquiryPriceController(InquiryPriceService service) {
+  public InquiryPriceController(InquiryPriceService service,
+      com.sanhua.marketingcost.service.pricing.inquiry.InquiryImportVoidService voids) {
     this.service = service;
+    this.voids = voids;
+  }
+
+  @PostMapping("/imports/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:inquiry:import')")
+  @OperationLog(module = "询价", operationType = OperationType.UPDATE)
+  public CommonResult<com.sanhua.marketingcost.service.pricing.inquiry.InquiryImportVoidService.Result> voidBatch(
+      @PathVariable long id, Principal principal) {
+    return CommonResult.success(voids.voidBatch(unit(), id, principal.getName()));
+  }
+
+  @PostMapping("/rows/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:inquiry:import')")
+  @OperationLog(module = "询价", operationType = OperationType.UPDATE)
+  public CommonResult<Void> voidRow(@PathVariable long id,Principal principal) {
+    voids.voidRow(unit(),id,principal.getName());
+    return CommonResult.success(null);
   }
 
   @PostMapping(value = "/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

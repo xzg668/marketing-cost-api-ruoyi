@@ -48,6 +48,8 @@ class OriginalPriceTrialServiceTest {
           withSettings()
               .mockMaker(org.mockito.MockMakers.INLINE)
               .defaultAnswer(CALLS_REAL_METHODS));
+  private final com.sanhua.marketingcost.mapper.PriceRangeItemMapper rangeRows =
+      mock(com.sanhua.marketingcost.mapper.PriceRangeItemMapper.class);
   private final OriginalPriceTrialService service =
       new OriginalPriceTrialService(
           linked,
@@ -57,7 +59,7 @@ class OriginalPriceTrialServiceTest {
           rangeCalculator,
           finance,
           batches,
-          effectivePrices);
+          effectivePrices,rangeRows);
   private final PriceFactorContext context = PriceFactorContextTest.financial();
   private PriceLinkedItem item;
 
@@ -233,6 +235,12 @@ class OriginalPriceTrialServiceTest {
             "匹配",
             bands,
             List.of());
+    var matching=java.util.stream.IntStream.range(0,4).mapToObj(n->{
+      var band=new com.sanhua.marketingcost.entity.PriceRangeItem();
+      band.setFactorRuleId(8L);band.setSourceSheetName("矩阵");band.setSourceCellRef("D"+(n+1));
+      return band;
+    }).toList();
+    when(rangeRows.selectList(any())).thenReturn(matching);
     row.setOrgCode("210");
     row.setMaterialCode("MAT-01");
     row.setSupplierCode("SUP");

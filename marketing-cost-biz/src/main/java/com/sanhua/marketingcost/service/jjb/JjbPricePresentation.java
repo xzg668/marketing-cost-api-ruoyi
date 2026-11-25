@@ -2,7 +2,9 @@ package com.sanhua.marketingcost.service.jjb;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.jjb.JjbReadModel.ProcessingFee;
 import com.sanhua.marketingcost.dto.jjb.JjbReadModel.Row;
+import com.sanhua.marketingcost.entity.CostRunTraceSnapshot;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.service.costing.MonthlyProductCost;
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec;
@@ -10,7 +12,8 @@ import java.util.*;
 
 /** Displays the original adopted source and its unit, without selecting today's prices. */
 final class JjbPricePresentation {
-  private record Fact(Long id, String material, String unit, String source, String settlementCopperWeightG) {}
+  private record Fact(Long id, String material, String unit, String source, String settlementCopperWeightG,
+      ProcessingFee processingFee) {}
   private final ObjectMapper json;
   private final MonthlyPriceDocumentCodec codec;
 
@@ -21,26 +24,38 @@ final class JjbPricePresentation {
 
   ArrayList<Row> apply(List<Row> rows, MonthlyProductCost.Result calculation,
       List<PricePrepareItem> preparations) {
+    return apply(rows, calculation, preparations, List.of(), new JjbProcessingFees(json, null));
+  }
+
+  ArrayList<Row> apply(List<Row> rows, MonthlyProductCost.Result calculation,
+      List<PricePrepareItem> preparations, List<CostRunTraceSnapshot> traces, JjbProcessingFees processingFees) {
     var facts = new ArrayList<Fact>();
     if (calculation != null) for (var adopted : calculation.adoptedPrices()) {
       var family = adopted.request().family();
       var evidence = tree(adopted.selection().fact().evidence().json());
       facts.add(new Fact(adopted.selection().monthlyPriceId(), family.materialCode(), family.unit(),
-          source(evidence.path("sourceKind").asText()), settlementCopperWeight(evidence)));
+          source(evidence.path("sourceKind").asText()), settlementCopperWeight(evidence),
+          processingFees.fromEvidence(evidence, family.materialCode())));
     }
     var byPreparation = new HashMap<Long, Fact>();
+    var directFees = new HashMap<Long, Fact>();
     for (var prepared : preparations) {
       if (!"MONTHLY_PRICE".equals(prepared.getResultRefType())) continue;
       var captured = tree(prepared.getInputSnapshotJson());
       var family = captured.path("request").path("family");
+      if (!Objects.equals(prepared.getMaterialCode(), family.path("materialCode").asText())) continue;
+      var evidence = tree(captured.path("selection").path("fact").path("evidence").path("json").asText(null));
+      var fact = new Fact(prepared.getMonthlyPriceId(), prepared.getMaterialCode(), text(family, "unit"),
+          source(text(evidence, "sourceKind")), settlementCopperWeight(evidence),
+          processingFees.fromEvidence(evidence, prepared.getMaterialCode()));
+      directFees.put(prepared.getId(), fact);
       // Only ordinary preparation quantities use this identity conversion. MAKE raw-price
       // conversions describe a child price, not the parent quantity shown on the sheet.
-      if (captured.path("unitPriceMultiplier").decimalValue().compareTo(java.math.BigDecimal.ONE) != 0) continue;
-      var evidence = tree(captured.path("selection").path("fact").path("evidence").path("json").asText(null));
-      if (Objects.equals(prepared.getMaterialCode(), family.path("materialCode").asText()))
-        byPreparation.put(prepared.getId(), new Fact(prepared.getMonthlyPriceId(), prepared.getMaterialCode(),
-            text(family, "unit"), source(text(evidence, "sourceKind")), settlementCopperWeight(evidence)));
+      if (captured.path("unitPriceMultiplier").decimalValue().compareTo(java.math.BigDecimal.ONE) == 0)
+        byPreparation.put(prepared.getId(), fact);
     }
+    var linkedTraces = traces.stream().filter(trace -> "LINKED_PRICE".equals(trace.getSourceType()) && trace.getPartItemId() != null)
+        .collect(java.util.stream.Collectors.groupingBy(CostRunTraceSnapshot::getPartItemId));
     var result = new ArrayList<Row>();
     for (var row : rows) {
       if (!Set.of("PART", "HOUSEHOLD", "EXPLANATION").contains(row.kind())) { result.add(row); continue; }
@@ -55,9 +70,27 @@ final class JjbPricePresentation {
       var copperWeights = matching.stream().map(Fact::settlementCopperWeightG).distinct().toList();
       result.add(row.toBuilder().unit(units.size() == 1 ? units.getFirst() : row.unit())
           .priceSource(sources.isEmpty() ? source(row.priceSource()) : String.join("、", sources))
-          .settlementCopperWeightG(copperWeights.size() == 1 ? copperWeights.getFirst() : null).build());
+          .settlementCopperWeightG(copperWeights.size() == 1 ? copperWeights.getFirst() : null)
+          .processingFee(processingFee(row, directFees, matching, linkedTraces, processingFees)).build());
     }
     return result;
+  }
+
+  private ProcessingFee processingFee(Row row, Map<Long, Fact> directFees, List<Fact> matching,
+      Map<Long, List<CostRunTraceSnapshot>> linkedTraces, JjbProcessingFees processingFees) {
+    if (row.processingFee() != null || !row.manufacturing().isEmpty()) return row.processingFee();
+    var prepared = row.sources().stream().filter(ref -> "lp_price_prepare_item".equals(ref.table()))
+        .map(ref -> directFees.get(ref.id())).filter(Objects::nonNull)
+        .filter(fact -> Objects.equals(row.code(), fact.material())).toList();
+    var choices = prepared.isEmpty() ? matching : prepared;
+    if (!choices.isEmpty()) {
+      var fees = choices.stream().map(Fact::processingFee).distinct().toList();
+      return fees.size() == 1 ? fees.getFirst() : null;
+    }
+    if (!"PART".equals(row.kind()) || row.partItemIds().size() != 1) return null;
+    var captured = linkedTraces.getOrDefault(row.partItemIds().getFirst(), List.of());
+    return captured.size() == 1
+        ? processingFees.fromLinkedTrace(tree(captured.getFirst().getSourceSnapshotJson()), row.code()) : null;
   }
 
   private static String settlementCopperWeight(JsonNode evidence) {

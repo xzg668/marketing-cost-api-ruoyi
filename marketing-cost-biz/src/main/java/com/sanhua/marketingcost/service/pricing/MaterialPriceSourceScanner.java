@@ -60,7 +60,7 @@ public class MaterialPriceSourceScanner {
         p.business_unit_type=:unit AND p.deleted=0 AND p.rule_status IN ('LEGACY','PUBLISHED')
         AND NOT EXISTS (SELECT 1 FROM lp_price_linked_item n WHERE n.business_unit_type=p.business_unit_type
           AND n.org_code=p.org_code AND n.pricing_month=p.pricing_month AND n.rule_identity_key=p.rule_identity_key
-          AND n.deleted=0 AND n.rule_status IN ('LEGACY','PUBLISHED') AND n.rule_revision>p.rule_revision)
+          AND n.deleted=0 AND n.rule_status IN ('LEGACY','PUBLISHED','VOIDED') AND n.rule_revision>p.rule_revision)
         AND ((p.source_kind='PUBLIC' AND p.pricing_month=(CASE p.org_code WHEN '210' THEN :month210 ELSE :month220 END))
           OR (p.source_kind='TECH_SUPPLEMENTAL' AND p.technical_publication_status='AVAILABLE'
             AND p.pricing_month<=:month AND (p.effective_from IS NULL OR p.effective_from<=:asOf)
@@ -70,10 +70,11 @@ public class MaterialPriceSourceScanner {
         p.business_unit_type=:unit AND p.rule_status IN ('LEGACY','PUBLISHED')
         AND (p.pricing_month=(CASE p.org_code WHEN '210' THEN :month210 ELSE :month220 END)
           OR (p.pricing_month IS NULL AND p.current_flag=1))
-        AND EXISTS (SELECT 1 FROM lp_price_range_item band WHERE band.factor_rule_id=p.id)
-        """));
+        AND EXISTS (SELECT 1 FROM lp_price_range_item band WHERE band.factor_rule_id=p.id AND band.row_voided=0)
+        AND
+        """ + com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper.NOT_MASKED_BY_WITHDRAWAL));
     sources.add(source("lp_price_range_item p", "p.material_code", "p.material_name", "p.org_code", "'RANGE'", """
-        p.business_unit_type=:unit AND (p.range_basis='QTY' OR p.range_basis IS NULL) AND p.current_flag=1
+        p.business_unit_type=:unit AND p.row_voided=0 AND (p.range_basis='QTY' OR p.range_basis IS NULL) AND p.current_flag=1
         AND (p.price_excl_tax IS NOT NULL OR p.price_incl_tax IS NOT NULL)
         AND (p.effective_from IS NULL OR p.effective_from<=:asOf)
         AND (p.effective_to IS NULL OR p.effective_to>=:monthStart)
@@ -87,30 +88,36 @@ public class MaterialPriceSourceScanner {
               + "AND (p.eff_date IS NULL OR p.eff_date<=:asOf) AND (p.exp_date IS NULL OR p.exp_date>=:monthStart)"));
     }
     sources.add(source("lp_invoice_price p", "p.material_code", "p.material_name", "p.org_code", "'INVOICE'", """
-        p.business_unit_type=:unit AND p.unit_price IS NOT NULL
+        p.business_unit_type=:unit AND p.unit_price IS NOT NULL AND p.row_voided=0
+        AND EXISTS (SELECT 1 FROM lp_invoice_import_batch b WHERE b.id=p.batch_id AND b.voided_at IS NULL)
         AND p.batch_id=(SELECT MAX(n.batch_id) FROM lp_invoice_price n
           WHERE n.business_unit_type=p.business_unit_type AND n.org_code=p.org_code AND n.material_code=p.material_code)
         """));
     sources.add(source("lp_inquiry_rule p CROSS JOIN organizations o", "p.material_key",
         "JSON_UNQUOTE(JSON_EXTRACT(p.rule_json,'$.materialName'))", "o.organization", "'INQUIRY'", """
         p.business_unit_type=:unit AND p.price_month<=:month
+        AND p.row_voided=0 AND EXISTS (SELECT 1 FROM lp_inquiry_import_batch b WHERE b.id=p.batch_id AND b.status<>'VOIDED')
         AND NOT EXISTS (SELECT 1 FROM lp_inquiry_rule n WHERE n.business_unit_type=p.business_unit_type
           AND n.identity_key=p.identity_key AND n.batch_id>p.batch_id AND n.price_month<=:month)
         """));
     sources.add(source("lp_household_inquiry_price p JOIN lp_household_inquiry_import_batch b ON b.id=p.import_batch_id CROSS JOIN organizations o",
         "p.material_code", "p.material_name", "o.organization", "'HOUSEHOLD_INQUIRY'", """
-        p.business_unit_type=:unit AND b.status='PUBLISHED' AND b.source_month<=:month AND p.unit_price IS NOT NULL
+        p.business_unit_type=:unit AND b.status='PUBLISHED' AND p.row_voided=0 AND b.source_month<=:month AND p.unit_price IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM lp_household_inquiry_price n
           JOIN lp_household_inquiry_import_batch nb ON nb.id=n.import_batch_id
-          WHERE n.business_unit_type=p.business_unit_type AND n.match_key=p.match_key AND nb.status='PUBLISHED'
+          WHERE n.business_unit_type=p.business_unit_type AND n.match_key=p.match_key AND nb.status IN ('PUBLISHED','VOIDED')
             AND nb.source_month<=:month AND (nb.source_month>b.source_month OR (nb.source_month=b.source_month AND n.revision_no>p.revision_no)))
         """));
     sources.add(source("lp_settlement_price p CROSS JOIN organizations o", "p.material_code", "p.material_name", "o.organization", "p.price_type", """
-        p.business_unit_type=:unit AND p.price_month=:month AND p.active=1
+        p.business_unit_type=:unit AND p.price_month=:month AND p.active=1 AND p.voided_at IS NULL
         AND p.price_type IN ('SETTLE_FIXED','SETTLE_LINKED')
+        AND NOT EXISTS (SELECT 1 FROM lp_settlement_price newer
+          WHERE newer.business_unit_type=p.business_unit_type AND newer.material_code=p.material_code
+            AND newer.price_type=p.price_type AND newer.price_month=p.price_month AND newer.active=1
+            AND newer.revision_no>p.revision_no AND newer.voided_at IS NOT NULL)
         """));
     sources.add(source("lp_scrap_price p CROSS JOIN organizations o", "p.material_code", "p.material_name", "o.organization", "'SCRAP'", """
-        p.business_unit_type=:unit AND p.price_month=:month AND p.calc_status='READY' AND p.unit_price IS NOT NULL
+        p.business_unit_type=:unit AND p.price_month=:month AND p.voided=0 AND p.calc_status='READY' AND p.unit_price IS NOT NULL
         """));
     sources.add(source("make_calculations p",
         "p.parent_material_no", "p.parent_material_name", "p.source_price_org_code", "'MAKE'", """

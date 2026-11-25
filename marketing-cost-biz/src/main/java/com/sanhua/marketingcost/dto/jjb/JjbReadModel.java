@@ -41,6 +41,11 @@ public record JjbReadModel(Identity identity, Header header, List<Row> rows,
   }
   public record Totals(String totalCost, String cuMaterialAdjustment, String finalQuoteAmount) {}
   public record Source(String table, Long id, String description) {}
+  public record ProcessingFee(String amount, String unit, String taxBasis) {
+    public String displayUnit() {
+      return unit + (taxBasis == null ? "" : "（" + taxBasis + "）");
+    }
+  }
   /** One row's identity/evidence survives layout changes and is shared with the trace drawer. */
   @Builder(toBuilder = true)
   public record Row(String key, String section, String kind, String code, String name,
@@ -51,7 +56,8 @@ public record JjbReadModel(Identity identity, Header header, List<Row> rows,
       List<Long> monthlyPriceIds, List<String> paths, String householdRate,
       String salesRate, String coefficient, Map<String,String> householdCalculation,
       List<Map<String,String>> manufacturing, Map<String,String> separateCalculation,
-      boolean multiPriceSource, String displayCode, String displayName, String settlementCopperWeightG, String cmsSourceNote) {
+      boolean multiPriceSource, String displayCode, String displayName, String settlementCopperWeightG, String cmsSourceNote,
+      ProcessingFee processingFee) {
     public Row {
       separateCalculation=separateCalculation==null?Map.of():Map.copyOf(separateCalculation);
       manufacturing=manufacturing==null?List.of():manufacturing.stream().map(Map::copyOf).toList();

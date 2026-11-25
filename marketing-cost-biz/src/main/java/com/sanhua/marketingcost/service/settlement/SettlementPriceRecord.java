@@ -52,6 +52,12 @@ public class SettlementPriceRecord {
   private String contentHash;
   private String createdBy;
   private LocalDateTime createdAt;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private String importBatchToken;
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private String voidedBy;
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  private LocalDateTime voidedAt;
 
   public SettlementWeights weights() {
     return new SettlementWeights(originalCopperWeightG, originalZincWeightG, copperWeightG,

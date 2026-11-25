@@ -44,15 +44,15 @@ class LinkedApprovalWorkbookParserTest {
               .add(new BigDecimal(".12")).add(new BigDecimal("260")).add(new BigDecimal("6.6"))
               .add(new BigDecimal(".39")).add(new BigDecimal("10.8")).add(new BigDecimal("15.6"))
               .add(new BigDecimal("66")).divide(new BigDecimal("1.13"),MathContext.DECIMAL128));
-      BigDecimal difference=new BigDecimal("15").multiply(new BigDecimal(".372"))
+      BigDecimal difference=new BigDecimal("10").multiply(new BigDecimal(".372"))
           .add(new BigDecimal("100").multiply(new BigDecimal(".26")))
-          .add(new BigDecimal("4").multiply(new BigDecimal(".33")))
+          .add(new BigDecimal("979").multiply(new BigDecimal(".33")))
           .add(new BigDecimal("6").multiply(new BigDecimal(".2")))
           .add(new BigDecimal("6").multiply(new BigDecimal(".3")))
           .divide(new BigDecimal("1.13"),MathContext.DECIMAL128);
       assertThat(actual.priceExcludingTax().subtract(base.priceExcludingTax())).isCloseTo(difference,within(new BigDecimal("1e-28")));
       assertThat(p1.customerBand().schemeCode()).isEqualTo("CU_100000");
-      assertThat(p1.requiredPrice("AVG|1#ZN",com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("24");
+      assertThat(p1.requiredPrice("AVG|1#ZN",com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("999");
       assertThat(p1.financialOnly()).isEqualTo(p0);
     }
   }

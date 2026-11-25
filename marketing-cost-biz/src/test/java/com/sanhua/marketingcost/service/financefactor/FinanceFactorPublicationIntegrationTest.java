@@ -79,7 +79,7 @@ class FinanceFactorPublicationIntegrationTest {
         MountableFile.forClasspathResource("db/V318__technical_factor_source_reference.sql"),
         "/tmp/technical-source.sql");
     for (String name :
-        List.of("V325__finance_effective_price.sql", "V326__original_workbook_source.sql", "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql", "V356__inquiry_price_sources.sql"))
+        List.of("V325__finance_effective_price.sql", "V326__original_workbook_source.sql", "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql", "V356__inquiry_price_sources.sql", "V394__inquiry_import_void.sql"))
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/" + name), "/tmp/" + name);
     var dataSource =
         new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
@@ -130,6 +130,7 @@ class FinanceFactorPublicationIntegrationTest {
     script("/tmp/V332__settlement_price_versions.sql");
     script("/tmp/V341__settlement_effective_price.sql");
     script("/tmp/V356__inquiry_price_sources.sql");
+    script("/tmp/V394__inquiry_import_void.sql");
     service = service(sources);
   }
 

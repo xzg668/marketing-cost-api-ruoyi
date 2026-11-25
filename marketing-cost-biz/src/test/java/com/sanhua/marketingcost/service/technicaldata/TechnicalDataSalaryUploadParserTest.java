@@ -80,6 +80,40 @@ class TechnicalDataSalaryUploadParserTest {
     }
   }
 
+  @Test void downloadableTemplateUnlocksDetailInputsAndProtectsHeadersAndFormulas() throws Exception {
+    try (var input = getClass().getResourceAsStream("/templates/technical-data/salary.xlsx");
+         var workbook = WorkbookFactory.create(input)) {
+      var sheet = workbook.getSheetAt(0);
+      assertThat(sheet.getProtect()).isTrue();
+      assertThat(sheet.getRow(0).getCell(0).getCellStyle().getLocked()).isTrue();
+      for (Cell header : sheet.getRow(1)) {
+        assertThat(header.getCellStyle().getLocked()).as("%s", header.getAddress()).isTrue();
+      }
+      for (int rowIndex = 2; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+        var row = sheet.getRow(rowIndex);
+        for (int columnIndex = 0; columnIndex < 12; columnIndex++) {
+          var cell = row.getCell(columnIndex);
+          boolean formulaColumn = columnIndex >= 8 && columnIndex <= 10;
+          assertThat(cell.getCellStyle().getLocked()).as("%s locked", cell.getAddress()).isEqualTo(formulaColumn);
+          if (formulaColumn) assertThat(cell.getCellType()).isEqualTo(CellType.FORMULA);
+        }
+      }
+
+      var row = sheet.getRow(8);
+      row.getCell(0).setCellValue("测试零件");
+      row.getCell(5).setCellValue(1);
+      row.getCell(6).setCellValue(10);
+      row.getCell(7).setCellValue(23);
+      row.getCell(11).setCellValue("新增工序");
+      var parsed = parser.parse("工时模板2026第一版.xlsx", bytes(workbook));
+      assertThat(parsed.issues()).isEmpty();
+      assertThat(parsed.items()).hasSize(7);
+      assertThat(parsed.items().getLast().row()).isEqualTo(9);
+      assertThat(parsed.items().getLast().amountYuan()).isEqualByComparingTo("0.075207");
+      assertThat(parsed.amountYuan()).isEqualByComparingTo("0.601241");
+    }
+  }
+
   static byte[] original() throws Exception {
     try (var input = TechnicalDataSalaryUploadParserTest.class.getResourceAsStream("/fixtures/technical-data/salary-original.xlsx")) { return input.readAllBytes(); }
   }

@@ -9,6 +9,8 @@ import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceQueryServiceImpl;
 import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
 import com.sanhua.marketingcost.service.technicaldata.EffectiveTechnicalDataQueryServiceImpl;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalaryApplicationService;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalaryPdfStore;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataVersionContentCodec;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
@@ -69,6 +71,14 @@ class CostRunWorkerApplicationTest {
             EffectiveTechnicalDataQueryServiceImpl.class,
             PasswordEncodingConfig.class,
             TechnicalDataVersionContentCodec.class);
+  }
+
+  @Test
+  void workerPreparationRegistersSalaryServiceAndItsPdfStore() {
+    Import imports = QuotePreparationWorkerConfiguration.class.getAnnotation(Import.class);
+
+    assertThat(imports.value())
+        .contains(TechnicalDataSalaryApplicationService.class, TechnicalDataSalaryPdfStore.class);
   }
 
   @Test

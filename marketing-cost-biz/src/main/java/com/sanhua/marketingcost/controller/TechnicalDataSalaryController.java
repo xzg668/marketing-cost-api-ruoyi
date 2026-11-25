@@ -30,6 +30,7 @@ import org.springframework.http.ResponseEntity;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSalaryUploadResponse;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalaryUploadParser;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAttachmentStore;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalaryPdfStore;
 
 @RestController
 @RequestMapping("/api/v2/technical-data/products/{productId}/salary")
@@ -92,6 +93,31 @@ public class TechnicalDataSalaryController {
     return download(() -> applicationService.file(productId, versionId, actorProvider.current()));
   }
 
+  @PreAuthorize(READ_PERMISSION)
+  @GetMapping("/pdf")
+  public CommonResult<TechnicalDataSalaryPdfStore.Document> pdf(@PathVariable Long productId) {
+    return execute(() -> applicationService.pdf(productId, actorProvider.current()));
+  }
+
+  @PreAuthorize(EDIT_PERMISSION)
+  @PostMapping(value = "/pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public CommonResult<TechnicalDataSalaryPdfStore.Document> uploadPdf(@PathVariable Long productId,
+      @RequestParam MultipartFile file, @RequestParam Integer expectedVersion,
+      @RequestParam(required = false) String expectedSha256) {
+    return execute(() -> {
+      if (file.isEmpty() || file.getSize() > TechnicalDataSalaryPdfStore.MAX_BYTES)
+        throw new IllegalArgumentException("工时PDF不能为空，且不能超过10MB");
+      try { return applicationService.savePdf(productId, expectedVersion, expectedSha256, file.getBytes(), actorProvider.current()); }
+      catch (IOException exception) { throw new IllegalArgumentException("无法读取工时PDF", exception); }
+    });
+  }
+
+  @PreAuthorize(READ_PERMISSION)
+  @GetMapping("/pdf/file")
+  public ResponseEntity<?> pdfFile(@PathVariable Long productId) {
+    return download(() -> applicationService.pdfFile(productId, actorProvider.current()), MediaType.APPLICATION_PDF);
+  }
+
   @PreAuthorize(EDIT_PERMISSION)
   @PutMapping
   public CommonResult<TechnicalDataSalaryResponse> save(
@@ -100,10 +126,14 @@ public class TechnicalDataSalaryController {
   }
 
   private ResponseEntity<?> download(Supplier<TechnicalDataAttachmentStore.StoredFile> supplier) {
+    return download(supplier, MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+  }
+
+  private ResponseEntity<?> download(Supplier<TechnicalDataAttachmentStore.StoredFile> supplier, MediaType mediaType) {
     var result = execute(supplier);
     if (result.getCode() != 0) return ResponseEntity.status(result.getCode()).body(result);
     var file = result.getData();
-    return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+    return ResponseEntity.ok().contentType(mediaType)
         .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(file.fileName(), StandardCharsets.UTF_8).build().toString())
         .body(file.bytes());
   }

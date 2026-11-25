@@ -58,6 +58,50 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
     SecurityContextHolder.clearContext();
   }
 
+  @Test void voidBatchBlocksHistoricalFallbackAndAllowsCorrectedFile() throws Exception {
+    byte[] initial=original();
+    var first=upload(initial,october);
+    byte[] incorrect=edited(sheet -> sheet.getRow(3).getCell(8).setCellValue(99));
+    var second=upload(incorrect,october);
+    var selected=prices.effective(october,"201809648",SettlementPriceType.SETTLE_FIXED).getFirst();
+    var stale=imports.preview(incorrect,"original.xls",october);
+    var november=new SettlementScope("COMMERCIAL","2026-11");
+    assertThat(prices.effective(november,null,null)).hasSize(37);
+    assertThatThrownBy(() -> imports.voidImport("HOUSEHOLD",selected.getId(),"finance")).hasMessageContaining("不存在");
+    imports.voidImport("COMMERCIAL",selected.getId(),"second-finance");
+    imports.voidImport("COMMERCIAL",selected.getId(),"retry");
+    assertThat(prices.effective(october,"201809648",SettlementPriceType.SETTLE_FIXED)).isEmpty();
+    assertThat(prices.effective(november,null,null)).hasSize(36);
+    assertThat(prices.history(october,"201809648",SettlementPriceType.SETTLE_FIXED))
+        .extracting(SettlementPriceRecord::getVoidedBy).containsExactly("second-finance",null);
+    assertThat(imports.original("COMMERCIAL",selected.getId()).bytes()).isEqualTo(incorrect);
+    assertThat(imports.imports("COMMERCIAL",1,20).total()).isEqualTo(2);
+    assertThatThrownBy(() -> imports.confirm(incorrect,"original.xls",october,stale.fingerprint(),"finance"))
+        .isInstanceOf(OptimisticLockingFailureException.class);
+    assertThat(upload(initial,october).revised()).isOne();
+    assertThat(prices.effective(november,"201809648",SettlementPriceType.SETTLE_FIXED).getFirst().getRevisionNo()).isEqualTo(3);
+    assertThat(second.revised()).isOne();
+    assertThat(first.inserted()).isEqualTo(37);
+  }
+
+  @Test void historicalUploadGroupsOnlyMatchingFileAndMonth() throws Exception {
+    byte[] bytes=original();
+    var november=new SettlementScope("COMMERCIAL","2026-11");
+    upload(bytes,october);
+    upload(bytes,november);
+    jdbc.update("UPDATE lp_settlement_price SET import_batch_token=NULL");
+    var history=imports.imports("COMMERCIAL",1,20);
+    assertThat(history.total()).isEqualTo(2);
+    var octoberBatch=history.rows().stream().filter(row -> "2026-10".equals(row.get("month"))).findFirst().orElseThrow();
+    long id=((Number)octoberBatch.get("id")).longValue();
+    imports.voidImport("COMMERCIAL",id,"finance");
+    assertThat(prices.effective(october,null,null)).isEmpty();
+    assertThat(prices.effective(november,null,null)).hasSize(37);
+    assertThat(imports.original("COMMERCIAL",id).bytes()).isEqualTo(bytes);
+    assertThat(upload(bytes,october).revised()).isEqualTo(37);
+    assertThat(imports.imports("COMMERCIAL",1,20).total()).isEqualTo(3);
+  }
+
   @Test void originalImportRetainsAllSourcesAndReimportHasNoBusinessChanges() throws Exception {
     byte[] bytes = original();
     var preview = imports.preview(bytes, "明细表导出_20261017.xls", october);

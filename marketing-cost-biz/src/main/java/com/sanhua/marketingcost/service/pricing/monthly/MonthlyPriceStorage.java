@@ -63,13 +63,61 @@ public class MonthlyPriceStorage {
   /** Publication takes the same catalog lock exclusively, before touching monthly selections. */
   public void lockAndCheckFinance(MonthlyAdoptionPlan planned) {
     requireAdoptionTransaction();
+    var settlementIds=new TreeMap<String,Set<Long>>();
+    var newSettlements=new LinkedHashMap<MonthlyPriceFamilyKey,String>();
+    var invoiceImports=new TreeMap<String,Set<Long>>();
+    var rangeImports=new TreeMap<String,Set<Long>>();
+    var scrapImports=new TreeMap<String,Set<String>>();
+    var financeUnits=new TreeSet<String>();
     var references=new LinkedHashMap<MonthlyPriceRequest,Set<MonthlyFinanceReferences.Reference>>();
     planned.selections().forEach((request,selection)->{
-      var refs=MonthlyFinanceReferences.read(codec.decode(codec.wrap(selection.fact().evidence().json()),JsonNode.class));
-      if(!refs.isEmpty())references.put(request,refs);
+      var evidence=codec.decode(codec.wrap(selection.fact().evidence().json()),JsonNode.class);
+      var refs=MonthlyFinanceReferences.read(evidence);
+      if(Set.of("SETTLE_FIXED","SETTLE_LINKED").contains(evidence.path("sourceKind").asText())) {
+        long id=evidence.path("source").path("rule").path("id").asLong();
+        if(id>0 && selection.monthlyPriceId()==null) {
+          settlementIds.computeIfAbsent(request.family().businessUnitType(),ignored->new TreeSet<>()).add(id);
+          newSettlements.put(request.family(),evidence.path("sourceKind").asText());
+        }
+      }
+      if(!refs.isEmpty()) {
+        references.put(request,refs);
+        financeUnits.add(request.family().businessUnitType());
+      }
+      if(selection.monthlyPriceId()==null) {
+        String unit=request.family().businessUnitType();
+        switch(evidence.path("sourceKind").asText()) {
+          case "INVOICE" -> invoiceImports.computeIfAbsent(unit,ignored->new TreeSet<>()).addAll(PriceImportReferences.invoice(evidence));
+          case "RANGE_FACTOR" -> {
+            financeUnits.add(unit);
+            rangeImports.computeIfAbsent(unit,ignored->new TreeSet<>()).addAll(PriceImportReferences.range(evidence));
+          }
+          case "SCRAP_PRICE" -> {
+            financeUnits.add(unit);
+            scrapImports.computeIfAbsent(unit,ignored->new TreeSet<>()).addAll(PriceImportReferences.scrap(evidence));
+          }
+          default -> {}
+        }
+      }
     });
-    references.keySet().stream().map(request->request.family().businessUnitType()).distinct().sorted()
-        .forEach(mapper::lockFinancePublication);
+    financeUnits.forEach(mapper::lockFinancePublication);
+    invoiceImports.forEach((unit,ids)->ids.forEach(id->requireActiveImport(mapper.lockInvoiceImport(unit,id))));
+    rangeImports.forEach((unit,ids)->ids.forEach(id->requireActiveImport(mapper.lockRangeImport(unit,id))));
+    scrapImports.forEach((unit,ids)->ids.forEach(id->requireActiveImport(mapper.lockScrapImport(unit,id))));
+    planned.selections().entrySet().stream()
+        .filter(entry->entry.getValue().monthlyPriceId()==null)
+        .sorted(java.util.Comparator.comparing(entry->entry.getKey().family().canonical()))
+        .forEach(entry->lockSelectedSources(entry.getKey().family().businessUnitType(),
+            codec.decode(codec.wrap(entry.getValue().fact().evidence().json()),JsonNode.class)));
+    settlementIds.keySet().forEach(mapper::lockSettlementPublication);
+    settlementIds.forEach((unit,ids)->{
+      for(long id:ids)if(mapper.lockSettlementSource(unit,id)==null)
+        throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,"结算原稿已失效，请重新取价");
+    });
+    newSettlements.forEach((family,type)->{
+      if(Boolean.TRUE.equals(mapper.latestSettlementVoided(family.businessUnitType(),family.materialCode(),type,family.month().toString())))
+        throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,"适用结算原稿已失效，请重新取价");
+    });
     planned.selections().entrySet().stream().filter(entry->entry.getValue().fact().type()==PricingType.HOUSEHOLD_INQUIRY)
         .sorted(java.util.Comparator.comparing(entry->entry.getKey().family().canonical())).forEach(entry->{
           var family=entry.getKey().family();
@@ -78,7 +126,10 @@ public class MonthlyPriceStorage {
           String material=original.path("materialCode").isTextual()?original.path("materialCode").asText():null;
           String matchKey=com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryKey.of(material,original.path("specification").asText(null));
           for(String key:new TreeSet<>(List.of("C:"+family.materialCode(),matchKey)))mapper.lockHouseholdCurrent(family.businessUnitType(),key);
-          Long latest=mapper.currentHouseholdSource(family.businessUnitType(),family.materialCode(),family.month().toString(),matchKey);
+          String exactKey="C:"+family.materialCode();
+          Long latest=mapper.currentHouseholdSource(family.businessUnitType(),family.month().toString(),exactKey);
+          if(latest==null && !exactKey.equals(matchKey))
+            latest=mapper.currentHouseholdSource(family.businessUnitType(),family.month().toString(),matchKey);
           if(!Objects.equals(latest,source.path("householdSourceId").asLong()))
             throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,"适用家用询价在采用前已更新，请重新取价");
         });
@@ -94,8 +145,49 @@ public class MonthlyPriceStorage {
     });
   }
 
+  private static void requireActiveImport(Long id) {
+    if(id==null)throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,
+        "导入来源已失效，请重新取价");
+  }
+
+  private void lockSelectedSources(String unit,JsonNode evidence) {
+    switch(evidence.path("sourceKind").asText()) {
+      case "INQUIRY" -> PriceImportReferences.inquiryRows(evidence)
+          .forEach(id->requireActiveImport(mapper.lockInquiryRow(unit,id)));
+      case "LINKED","LINKED_LEGACY" -> PriceImportReferences.linkedRows(evidence)
+          .forEach(id->requireActiveImport(mapper.lockLinkedRow(unit,id)));
+      case "INVOICE" -> {
+        for(var row:PriceImportReferences.invoiceRows(evidence)) {
+          long id=row.path("id").asLong(),batch=row.path("batch_id").asLong();
+          if(id>0 && batch>0)requireActiveImport(mapper.lockInvoiceRow(unit,id,batch));
+        }
+      }
+      case "SCRAP_PRICE" -> {
+        for(var row:PriceImportReferences.scrapRows(evidence)) {
+          long id=row.path("id").asLong();
+          int revision=row.path("ruleRevision").asInt();
+          if(id>0 && revision>0)requireActiveImport(mapper.lockScrapRow(unit,id,revision));
+        }
+      }
+      case "RANGE_FACTOR","RANGE_LEGACY_FACTOR","RANGE_QTY" -> {
+        var ids=new TreeSet<Long>();
+        long selected=PriceImportReferences.selectedRangeRow(evidence);
+        if(selected>0)ids.add(selected);
+        if("RANGE_FACTOR".equals(evidence.path("sourceKind").asText()))
+          for(var band:evidence.path("source").path("bands"))if(band.path("id").asLong()>0)ids.add(band.path("id").asLong());
+        for(long id:ids)requireActiveImport(mapper.lockRangeRow(unit,id));
+      }
+      default -> {}
+    }
+  }
+
   /** REPEATABLE_READ next-key locks cover existing rows and absent-key gaps, without lock rows. */
   public void lockFamilies(Collection<MonthlyPriceFamilyKey> families) {
+    lockFamilies(families, false);
+  }
+
+  /** A reuse-only plan needs a stable current read of each adopted price until commit. */
+  void lockFamilies(Collection<MonthlyPriceFamilyKey> families, boolean reuseOnly) {
     requireAdoptionTransaction();
     var byHash=new TreeMap<String,MonthlyPriceFamilyKey>();
     for(var key:families) {
@@ -106,7 +198,7 @@ public class MonthlyPriceStorage {
     var hashes=new ArrayList<>(byHash.keySet());
     for(int start=0;start<hashes.size();start+=128) {
       var chunk=hashes.subList(start,Math.min(start+128,hashes.size()));
-      for(var row:mapper.lockFamilies(chunk)) {
+      for(var row:mapper.lockFamilies(chunk, reuseOnly)) {
         if(!read(row).family().equals(byHash.get(row.getFamilyHash())))
           throw new IllegalStateException("Monthly identity hash conflict");
       }

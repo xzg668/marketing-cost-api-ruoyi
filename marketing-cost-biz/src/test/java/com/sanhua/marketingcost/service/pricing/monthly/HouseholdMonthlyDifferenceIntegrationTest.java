@@ -77,7 +77,8 @@ class HouseholdMonthlyDifferenceIntegrationTest {
     String material=code(),month="2067-11";finance(month,1,"90","20.8310629161179");inquiry(material,month,"18.9343");
     var adopted=adopt(material,month);long id=adopted.selections().get(r(material,month)).monthlyPriceId();
     for(var data:List.of(new String[]{"120000","27774.7505548238","20.463109690363685593","4.702675"},new String[]{null,null,"18.9343","0"},new String[]{"80000",null,"18.426335398230088496","-1.562518"})) {
-      var customer=CustomerMaterialPrices.copperAndZinc(data[0]==null?null:d(data[0]),data[1]==null?null:d(data[1]));
+      var customer=new CustomerMaterialPrices(data[0]==null?null:d(data[0]),data[1]==null?null:d(data[1]),
+          null,null,null,null,"固定");
       String financeNo="FIN-"+UUID.randomUUID(),customerNo="OA-"+UUID.randomUUID();
       var version=versionService.createRunning("HH-"+UUID.randomUUID(),1L,"TOP",month,month,financeNo,"COMMERCIAL");
       version.setFinancePricePrepareNo(financeNo);version.setOaPricePrepareNo(customerNo);versionMapper.updateById(version);
@@ -93,7 +94,7 @@ class HouseholdMonthlyDifferenceIntegrationTest {
       var evidence=codec.decode(codec.wrap(pair.customerEvidenceJson()),com.fasterxml.jackson.databind.JsonNode.class);
       assertThat(evidence.path("householdCalculation").path("calculatedW").asText()).isNotBlank();
       assertThat(evidence.path("originalW").path("formula").asText()).contains("$W$1-$V$1");
-      var sheet=new com.sanhua.marketingcost.service.jjb.JjbProjection(new com.fasterxml.jackson.databind.ObjectMapper())
+      var sheet=new com.sanhua.marketingcost.service.jjb.JjbProjection(new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules())
           .project(reread,new com.sanhua.marketingcost.entity.OaForm(),new com.sanhua.marketingcost.entity.OaFormItem(),List.of());
       var audit=sheet.rows().stream().filter(row->row.kind().equals("HOUSEHOLD")).findFirst().orElseThrow().householdCalculation();
       assertThat(audit).containsEntry("baseCopper","90")

@@ -7,8 +7,12 @@ import com.sanhua.marketingcost.entity.OaForm;
 
 /** Quote-local, tax-included base prices, normalized to CNY/ton before calculation. */
 public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDecimal silver,
-    BigDecimal tin, BigDecimal sus304, BigDecimal sus316) {
-  public static final String CALCULATION_VERSION = "MONTHLY_MATERIAL_CU_BANDS_V5";
+    BigDecimal tin, BigDecimal sus304, BigDecimal sus316, String priceLinkMode) {
+  public static final String CALCULATION_VERSION = "MONTHLY_MATERIAL_CU_BANDS_V6";
+  public CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDecimal silver,
+      BigDecimal tin, BigDecimal sus304, BigDecimal sus316) {
+    this(copper, zinc, silver, tin, sus304, sus316, null);
+  }
   public CustomerMaterialPrices {
     requirePositive(copper, "Cu"); requirePositive(zinc, "Zn");
     requirePositive(silver, "Ag"); requirePositive(tin, "Sn");
@@ -22,7 +26,8 @@ public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDeci
   /** The quotation form labels these values as tax-included CNY/ton. */
   public static CustomerMaterialPrices fromQuotation(OaForm form) {
     return new CustomerMaterialPrices(positive(form.getCopperPrice()), positive(form.getZincPrice()),
-        positive(form.getSilverPrice()), null, positive(form.getSus304Price()), positive(form.getSus316lPrice()));
+        positive(form.getSilverPrice()), null, positive(form.getSus304Price()), positive(form.getSus316lPrice()),
+        form.getPriceLinkMode());
   }
 
   private static BigDecimal positive(BigDecimal value) {
@@ -30,6 +35,7 @@ public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDeci
   }
 
   public BigDecimal pricePerTon(String factorKey) {
+    if (usesFinancialCopperBand() && usesCopperBand(factorKey)) return null;
     return switch (canonicalKey(factorKey)) {
       case "AVG|1#CU" -> copper;
       case "AVG|1#ZN" -> zinc;
@@ -42,14 +48,25 @@ public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDeci
     };
   }
 
+  @JsonIgnore public boolean usesFinancialCopperBand() {
+    return priceLinkMode != null && java.util.Set.of("固定", "销售价格固定").contains(priceLinkMode.trim());
+  }
+
+  @JsonIgnore public boolean prefersCustomerPrices() {
+    return priceLinkMode != null && java.util.Set.of("联动", "销售价格联动").contains(priceLinkMode.trim());
+  }
+
+  @JsonIgnore public BigDecimal copperForBand() { return usesFinancialCopperBand() ? null : copper; }
+
   @JsonIgnore public boolean isEmpty() {
     return copper == null && zinc == null && silver == null && tin == null
         && sus304 == null && sus316 == null;
   }
 
-  /** Two supplemental factors absent from the demand form use its Cu band. */
+  /** The two copper names share a canonical identity; these are the five Cu-band rows. */
   public static boolean usesCopperBand(String factorKey) {
-    return java.util.Set.of("AVG|美国柜装黄铜", "AVG|H65黄铜边料").contains(canonicalKey(factorKey));
+    return java.util.Set.of("AVG|1#CU", "AVG|1#ZN", "AVG|美国柜装黄铜", "AVG|H65黄铜边料")
+        .contains(canonicalKey(factorKey));
   }
 
   public static boolean affects(String factorKey) {

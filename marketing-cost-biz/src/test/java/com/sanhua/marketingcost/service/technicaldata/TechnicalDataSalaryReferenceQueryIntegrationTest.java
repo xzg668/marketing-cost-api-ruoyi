@@ -49,7 +49,7 @@ class TechnicalDataSalaryReferenceQueryIntegrationTest extends BomMapperTestBase
     assertThat(query.requireReference(task, target, selected.materialNo(), selected.fingerprint(), "REFERENCE")).isEqualTo(selected);
     assertThat(cms.selectSalarySources(2026, "COMMERCIAL", List.of(key + "-REF")))
         .extracting(CmsCostSourceEffective::getId).containsExactly(selected.direct().sourceId(), selected.indirect().sourceId());
-    assertThat(query.read(target.getMaterialNo(), 2026, "COMMERCIAL").rows()).isEmpty();
+    assertThat(query.read(target.getMaterialNo(), 2026, "COMMERCIAL")).isEmpty();
   }
 
   @Test void singleSalaryCannotStandInForBothButUploadCanReferenceOnlyIndirectAndZeroIsValid() {

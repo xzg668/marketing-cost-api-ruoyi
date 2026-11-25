@@ -18,6 +18,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Tag("integration")
 @Transactional
+@org.springframework.test.context.TestPropertySource(properties={
+    "quote.technical-data.attachments-root=${java.io.tmpdir}/technical-salary-${random.uuid}",
+    "quote.technical-data.salary-pdf-root=${java.io.tmpdir}/technical-salary-pdf-${random.uuid}"})
 class TechnicalDataSalaryApplicationIntegrationTest extends BomMapperTestBase {
   private static final TechnicalDataActor WANG = new TechnicalDataActor(101L, "王工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor LI = new TechnicalDataActor(102L, "李工", Set.of("technical:data:task:edit"));
@@ -92,7 +95,6 @@ class TechnicalDataSalaryApplicationIntegrationTest extends BomMapperTestBase {
     assertThatThrownBy(() -> service.save(productId, input, LI)).hasMessageContaining("未分派");
     var forged = new ObjectMapper().readValue("{\"entryMode\":\"REFERENCE\",\"expectedVersion\":0,\"amount\":null}", TechnicalDataSalarySaveRequest.class);
     assertThatThrownBy(() -> service.save(productId, forged, WANG)).hasMessageContaining("不支持的字段");
-    assertThatThrownBy(() -> service.save(productId, input, ADMIN)).hasMessageContaining("未分派");
     var saved = service.save(productId, input, WANG);
     assertThatThrownBy(() -> service.save(productId, input, WANG)).hasMessageContaining("其他会话");
     assertThat(service.get(productId, null, WANG).draftVersionId()).isEqualTo(saved.draftVersionId());
@@ -154,6 +156,36 @@ class TechnicalDataSalaryApplicationIntegrationTest extends BomMapperTestBase {
     var reference = request(0); reference.setFileSha256(uploaded.fileSha256());
     assertThatThrownBy(() -> service.save(productId, reference, WANG)).hasMessageContaining("不能带入上传");
     assertThat(repository.findProduct(productId).orElseThrow().getCurrentEditVersionId()).isNull();
+  }
+
+  @Test void adminUploadsAndSavesAssignedSalaryAndTechnicianCanReadIt() throws Exception {
+    assertThat(service.get(productId, null, ADMIN).editable()).isTrue();
+    var original = TechnicalDataSalaryUploadParserTest.original();
+    var upload = service.preview(productId, "工时.xlsx", original, ADMIN);
+    var saved = service.save(productId, uploadRequest(0, upload.fileSha256()), ADMIN);
+    assertThat(service.get(productId, null, ADMIN).draftVersionId()).isEqualTo(saved.draftVersionId());
+    assertThat(service.get(productId, null, WANG).totalAmount()).isEqualByComparingTo("0.625634");
+    assertThat(service.file(productId, null, ADMIN).bytes()).isEqualTo(original);
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
+    assertThat(service.get(productId, null, ADMIN).editable()).isFalse();
+    assertThatThrownBy(() -> service.save(productId, uploadRequest(saved.expectedVersion(), upload.fileSha256()), ADMIN)).isInstanceOf(TechnicalDataTaskException.class);
+    assertThat(repository.findVersion(frozen.getId()).orElseThrow().getSalaryTotalAmount()).isEqualByComparingTo("0.625634");
+  }
+
+  @Test void pdfIsSavedIndependentlyWithProductNameAndNeverCompletesOrPricesSalary() throws Exception {
+    byte[] pdf = TechnicalDataSalaryPdfStoreTest.pdf(1);
+    assertThat(service.pdf(productId, ADMIN)).isNull();
+    assertThatThrownBy(() -> service.savePdf(productId, 0, null, pdf, LI)).hasMessageContaining("不可编辑");
+    var saved = service.savePdf(productId, 0, null, pdf, ADMIN);
+    assertThat(saved.fileName()).matches(java.util.regex.Pattern.quote(key) + "工时_\\d{14}(?:_\\d+)?\\.pdf");
+    assertThat(service.pdfFile(productId, WANG).bytes()).isEqualTo(pdf);
+    assertThat(service.pdf(productId, ADMIN)).isEqualTo(saved);
+    var salary = service.get(productId, null, ADMIN);
+    assertThat(salary.items()).isEmpty(); assertThat(salary.totalAmount()).isNull();
+    assertThat(salary.moduleStatus()).isEqualTo("PENDING"); assertThat(salary.expectedVersion()).isZero();
+    assertThat(repository.findProduct(productId).orElseThrow().getCurrentEditVersionId()).isNull();
+    assertThatThrownBy(() -> service.savePdf(productId, 0, null, pdf, WANG)).hasMessageContaining("其他会话");
+    assertThat(service.savePdf(productId, 0, saved.sha256(), pdf, WANG)).isEqualTo(saved);
   }
 
   @Test void returnedUnchangedSalaryPreservesOriginalAmountsEvenWhenReferenceIsRemoved() {

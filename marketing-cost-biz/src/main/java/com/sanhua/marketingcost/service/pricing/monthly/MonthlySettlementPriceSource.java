@@ -26,6 +26,10 @@ public final class MonthlySettlementPriceSource {
     var codes=new TreeMap<String,List<MonthlyPriceRequest>>();
     for(var request:requested.keySet()){
       if(!context.businessUnitType().equals(request.family().businessUnitType()) || !context.month().equals(request.family().month()) || requested.get(request)==null)throw new MonthlyPriceProblem(Failure.INVALID_INPUT,"Settlement source scope or price type differs from request");
+      if (request.materialCode().isBlank()) {
+        problems.put(request,new Problem(Failure.MISSING,"该型号／规格未匹配到有料号的结算来源，继续查找其他适用价格"));
+        continue;
+      }
       codes.computeIfAbsent(request.materialCode(),ignored->new ArrayList<>()).add(request);
     }
     var materials=new ArrayList<>(codes.keySet());

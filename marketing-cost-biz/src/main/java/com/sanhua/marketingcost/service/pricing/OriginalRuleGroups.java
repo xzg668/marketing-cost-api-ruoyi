@@ -38,7 +38,7 @@ public final class OriginalRuleGroups {
     } catch (java.io.IOException failure) { throw new IllegalArgumentException("无法保存规则组来源", failure); }
   }
   public static List<PriceRangeFactorRule> ranges(Collection<PriceRangeFactorRule> rows) {
-    return current(rows, row -> row.getRuleIdentityKey() == null ? "LEGACY:" + row.getId() : row.getRuleIdentityKey(), OriginalRuleGroups::revision);
+    return current(rows, row -> row.getRuleIdentityKey() == null ? "LEGACY:" + row.getId() : row.getRuleIdentityKey(), OriginalRuleGroups::revision).stream().filter(row -> !"VOIDED".equals(row.getRuleStatus())).toList();
   }
   public static <T> List<T> current(Collection<T> rows, Function<T, String> identity, ToIntFunction<T> revision) {
     Map<String, List<T>> groups = new LinkedHashMap<>();

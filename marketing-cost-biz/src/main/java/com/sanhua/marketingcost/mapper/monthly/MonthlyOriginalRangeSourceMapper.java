@@ -8,7 +8,7 @@ import org.apache.ibatis.annotations.*;
 public interface MonthlyOriginalRangeSourceMapper {
   @Select("""
     <script>SELECT * FROM lp_price_range_factor_rule WHERE business_unit_type=#{unit} AND org_code=#{org}
-      AND pricing_month=#{month} AND rule_status IN ('LEGACY','PUBLISHED') AND material_code IN
+      AND pricing_month=#{month} AND rule_status IN ('LEGACY','PUBLISHED','VOIDED') AND material_code IN
       <foreach collection="codes" item="code" open="(" separator="," close=")">#{code}</foreach>
       </script>
     """)
@@ -20,7 +20,7 @@ public interface MonthlyOriginalRangeSourceMapper {
         .thenComparing(PriceRangeFactorRule::getId, Comparator.nullsLast(Comparator.reverseOrder()))).toList();
   }
   @Select("""
-    <script>SELECT * FROM lp_price_range_item WHERE factor_rule_id IN
+    <script>SELECT * FROM lp_price_range_item WHERE row_voided=0 AND factor_rule_id IN
       <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
       ORDER BY factor_rule_id,id</script>
     """)

@@ -37,25 +37,25 @@ class CuBandMaterialScenarioTest {
   static FactorPriceSnapshot.FactorValue value(String amount){return new FactorPriceSnapshot.FactorValue(1L,1L,"因素","因素",d(amount),"CNY/KG",true,List.of(new FactorPriceSnapshot.Source(1L,"原表","AD11",amount,"元/公斤",null,"0.0000","SCHEME_VALUE")));}
   PriceFactorContext context(){return new PriceFactorContext("PART",new PriceMonthSelection("2026-11","2026-11"),financial(),null);}
   @ParameterizedTest @CsvSource({"80000,CU_90000","90000,CU_90000","95000,CU_90000","99999.99,CU_90000","100000,CU_100000","105000,CU_100000","110000,CU_110000","115000,CU_110000","120000,CU_120000","125000,CU_120000"})
-  void exactBoundariesUseActualCuAndFloorBandForTwoSupplementalFactors(String copper,String band) {
+  void exactBoundariesUseOneFloorBandForAllFiveRows(String copper,String band) {
     var original=context();var quoted=original.withCustomerMaterials(CustomerMaterialPrices.copperAndZinc(d(copper),null));
     assertThat(quoted.customerBand().schemeCode()).isEqualTo(band);
-    assertThat(quoted.requiredPrice(PriceFactorContext.COPPER,FactorPriceUnit.CNY_TON,true)).isEqualByComparingTo(copper);
-    for(String factor:List.of(BRASS,H65)) {
-      assertThat(quoted.requiredPrice(factor,FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo(quoted.customerBand().factors().get(factor).price());
+    assertThat(quoted.requiredPrice(PriceFactorContext.COPPER,FactorPriceUnit.CNY_TON,true)).isEqualByComparingTo(quoted.customerBand().copperPerTon());
+    for(String factor:List.of(BRASS,H65,PriceFactorContext.COPPER,PriceFactorContext.ZINC,"AVG|Cu")) {
+      assertThat(quoted.requiredPrice(factor,FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo(quoted.customerBand().factors().get(CustomerMaterialPrices.canonicalKey(factor)).price());
       assertThat(quoted.inputSource(factor)).isEqualTo("FINANCE_CU_BAND");
     }
-    assertThat(quoted.requiredPrice(PriceFactorContext.ZINC,FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("20.8310629161179");
-    assertThat(quoted.inputSource(PriceFactorContext.ZINC)).isEqualTo("FINANCE_FACTOR");
+    assertThat(quoted.requiredPrice(PriceFactorContext.ZINC,FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo(quoted.customerBand().factors().get(PriceFactorContext.ZINC).price());
+    assertThat(quoted.inputSource(PriceFactorContext.ZINC)).isEqualTo("FINANCE_CU_BAND");
     assertThat(quoted.financial()).isSameAs(original.financial());assertThat(quoted.financialOnly()).isEqualTo(original);
   }
-  @Test void explicitZincWinsAndMissingCuDoesNotInventACustomerBand() throws Exception {
+  @Test void bandZincWinsEvenIfQuotationZincIsWrongAndMissingCuDoesNotInventABand() throws Exception {
     var quoted=context().withCustomerMaterials(CustomerMaterialPrices.copperAndZinc(d("125000"),d("24000")));
-    assertThat(quoted.requiredPrice(PriceFactorContext.ZINC,FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("24");
-    assertThat(quoted.inputSource(PriceFactorContext.ZINC)).isEqualTo("OA_LOCKED");
+    assertThat(quoted.requiredPrice(PriceFactorContext.ZINC,FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("27.7747505548238");
+    assertThat(quoted.inputSource(PriceFactorContext.ZINC)).isEqualTo("FINANCE_CU_BAND");
     var restored=json.readValue(json.writeValueAsString(quoted.evidenceForFactors(Set.of(BRASS,PriceFactorContext.ZINC))),PriceFactorContext.class);
     assertThat(restored.requiredPrice(BRASS,FactorPriceUnit.CNY_KG,true)).isEqualByComparingTo("70.1643721920502");
-    assertThat(restored.customerBand().factors()).containsOnlyKeys(BRASS,PriceFactorContext.ZINC,PriceFactorContext.COPPER);
+    assertThat(restored.customerBand().factors()).containsOnlyKeys(BRASS,H65,PriceFactorContext.ZINC,PriceFactorContext.COPPER);
     assertThat(context().withCustomerMaterials(CustomerMaterialPrices.copperAndZinc(null,d("24000"))).customerBand()).isNull();
   }
   @Test void missingFactorInSelectedBandIsNotBorrowedFromBaseline() {
@@ -63,6 +63,72 @@ class CuBandMaterialScenarioTest {
     bands.add(new FactorPriceSnapshot.CuBand(last.schemeCode(),last.copperPerTon(),Map.of(PriceFactorContext.COPPER,last.factors().get(PriceFactorContext.COPPER))));
     var ctx=new PriceFactorContext("PART",context().months(),base.withCuBands(bands),null).withCustomerMaterials(CustomerMaterialPrices.copperAndZinc(d("125000"),null));
     assertThatThrownBy(()->ctx.requiredPrice(BRASS,FactorPriceUnit.CNY_KG,true)).hasMessageContaining(BRASS).hasMessageContaining("CU_120000");
+  }
+
+  @Test void historicalCapturedContextKeepsOldCopperAndZincButNewProjectionUsesTheBand() throws Exception {
+    var current = context().withCustomerMaterials(CustomerMaterialPrices.copperAndZinc(d("105000"), d("24000")));
+    var oldJson = (com.fasterxml.jackson.databind.node.ObjectNode) json.valueToTree(current);
+    oldJson.remove("substitutionVersion");
+    var old = json.treeToValue(oldJson, PriceFactorContext.class);
+    assertThat(old.requiredPrice("AVG|Cu", FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("105");
+    assertThat(old.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("24");
+    assertThat(old.evidenceForFactors(Set.of(PriceFactorContext.ZINC)).substitutionVersion()).isNull();
+    assertThat(current.requiredPrice("AVG|Cu", FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("100");
+    assertThat(current.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("23.1456254623532");
+    assertThat(old.withCustomerMaterials(current.customerMaterialPrices()).requiredPrice("AVG|Cu", FactorPriceUnit.CNY_KG, true))
+        .isEqualByComparingTo("100");
+  }
+
+  @ParameterizedTest @CsvSource({"固定", "销售价格固定"})
+  void fixedSalesUseTheFinancialBandDespiteQuotationCopperAndZinc(String mode) {
+    var form = new com.sanhua.marketingcost.entity.OaForm();
+    form.setCopperPrice(d("105000")); form.setZincPrice(d("999999")); form.setPriceLinkMode(mode);
+    var quote = context().withCustomerMaterials(CustomerMaterialPrices.fromQuotation(form));
+    assertThat(quote.customerBand()).isNull();
+    for (String key : List.of("AVG|Cu", PriceFactorContext.COPPER, PriceFactorContext.ZINC, BRASS, H65))
+      assertThat(quote.requiredPrice(key, FactorPriceUnit.CNY_KG, true))
+          .isEqualByComparingTo(context().requiredPrice(key, FactorPriceUnit.CNY_KG, true));
+  }
+
+  @ParameterizedTest @CsvSource({"联动", "销售价格联动"})
+  void linkedSalesPreferCustomerValuesAndUseTheBandOnlyForUnfilledFactors(String mode) {
+    var form = new com.sanhua.marketingcost.entity.OaForm();
+    form.setCopperPrice(d("105000")); form.setZincPrice(d("24000")); form.setPriceLinkMode(mode);
+    var quote = context().withCustomerMaterials(CustomerMaterialPrices.fromQuotation(form));
+    assertThat(quote.requiredPrice("AVG|Cu", FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("105");
+    assertThat(quote.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("24");
+    assertThat(quote.requiredPrice(BRASS, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("58.4703101600419");
+    form.setZincPrice(null);
+    assertThat(context().withCustomerMaterials(CustomerMaterialPrices.fromQuotation(form))
+        .requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true)).isEqualByComparingTo("23.1456254623532");
+  }
+
+  @Test void copperOnlyFormulaDoesNotRequireOrIncludeAnyOtherBandFactor() {
+    var original = financial();
+    var band = original.cuBands().get(1);
+    var base = original.withCuBands(List.of(new FactorPriceSnapshot.CuBand(band.schemeCode(), band.copperPerTon(),
+        Map.of(PriceFactorContext.COPPER, band.factors().get(PriceFactorContext.COPPER)))));
+    var calculation = Map.of("priceType", "联动价", "expression", "[cu]*2+5", "inputs", Map.of("cu", d("90")),
+        "factors", Map.of("cu", "AVG|Cu"), "financeFactors", Map.of("AVG|Cu", base.required(PriceFactorContext.COPPER)), "financial", base);
+    var selected = new Selection(1L, coverage(), PriceFact.normal(d("185"), evidence(Map.of("snapshotSchema", 1,
+        "sourceKind", "INQUIRY", "source", Map.of("selected", Map.of("price", d("185"), "calculation", calculation)))), Set.of()));
+    var pair = scenarios.calculate(Map.of(request("PART", "只"), selected), d("105000")).get(1L);
+    assertThat(pair.financialPrice()).isEqualByComparingTo("185");
+    assertThat(pair.customerPrice()).isEqualByComparingTo("205");
+    assertThat(pair.customerPrice().subtract(pair.financialPrice())).isEqualByComparingTo("20");
+  }
+
+  @Test void zincOnlyFormulaUsesCopperBandEvenWhenDemandZincConflicts() {
+    var base = financial();
+    var p0 = base.required(PriceFactorContext.ZINC).price();
+    var calculation = Map.of("priceType", "联动价", "expression", "[zn]", "inputs", Map.of("zn", p0),
+        "factors", Map.of("zn", PriceFactorContext.ZINC), "financeFactors", base.factors(), "financial", base);
+    var selected = new Selection(1L, coverage(), PriceFact.normal(p0, evidence(Map.of("snapshotSchema", 1,
+        "sourceKind", "INQUIRY", "source", Map.of("selected", Map.of("price", p0, "calculation", calculation)))), Set.of()));
+    var pair = scenarios.calculateMaterials(Map.of(request("PART", "只"), selected),
+        CustomerMaterialPrices.copperAndZinc(d("105000"), d("999999")), Map.of()).get(1L);
+    assertThat(pair.financialPrice()).isEqualByComparingTo(p0);
+    assertThat(pair.customerPrice()).isEqualByComparingTo("23.1456254623532");
   }
 
   @Test void oneFormulaSubstitutesCustomerCopperAndBothBandFactorsTogether() {
@@ -77,7 +143,7 @@ class CuBandMaterialScenarioTest {
     var requests = Map.of(request("PART", "只"), selected);
     var quoted = scenarios.calculate(requests, d("105000")).get(1L);
     assertThat(quoted.financialPrice()).isEqualByComparingTo(p0);
-    assertThat(quoted.customerPrice()).isEqualByComparingTo("224.4666474207459");
+    assertThat(quoted.customerPrice()).isEqualByComparingTo("219.4666474207459");
     var withoutCustomer = scenarios.calculate(requests, null).get(1L);
     assertThat(withoutCustomer.customerPrice()).isEqualByComparingTo(p0);
   }

@@ -45,7 +45,7 @@ class FinanceEffectivePriceIntegrationTest {
           "V311__original_linked_expression_capacity.sql",
           "V325__finance_effective_price.sql",
           "V326__original_workbook_source.sql",
-          "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql", "V356__inquiry_price_sources.sql");
+          "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql", "V356__inquiry_price_sources.sql", "V394__inquiry_import_void.sql");
   static SqlSessionTemplate sql;
   static DataSourceTransactionManager manager;
   static JdbcTemplate jdbc;
@@ -495,7 +495,7 @@ class FinanceEffectivePriceIntegrationTest {
             rangeCalculator,
             finance,
             sql.getMapper(FactorUploadBatchMapper.class),
-            service);
+            service,sql.getMapper(PriceRangeItemMapper.class));
     var auth =
         new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
             "efp-test", "", List.of());

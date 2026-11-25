@@ -14,8 +14,13 @@ final class UnadoptedPriceSourceRevision {
   UnadoptedPriceSourceRevision(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
   String invoices(String unit,Collection<String> materials) {
-    if(materials.isEmpty())return hash(jdbc.queryForList("SELECT material_code,MAX(batch_id) revision FROM lp_invoice_price WHERE business_unit_type=? GROUP BY material_code ORDER BY material_code",unit));
-    return hash(scoped("lp_invoice_price","material_code",materials,"business_unit_type=?",unit));
+    String liveBatch="row_voided=0 AND NOT EXISTS (SELECT 1 FROM lp_invoice_import_batch b WHERE b.id=lp_invoice_price.batch_id AND b.voided_at IS NOT NULL)";
+    if(materials.isEmpty())return hash(jdbc.queryForList(
+        "SELECT material_code,MAX(batch_id) revision FROM lp_invoice_price WHERE business_unit_type=? AND "
+            +liveBatch+" GROUP BY material_code ORDER BY material_code",unit));
+    var rows=scoped("lp_invoice_price","material_code",materials,"business_unit_type=? AND "+liveBatch,unit);
+    rows.forEach(row->row.remove("row_voided"));
+    return hash(rows);
   }
 
   String inquiries(String unit,String month,Collection<String> materials) {
@@ -37,7 +42,8 @@ final class UnadoptedPriceSourceRevision {
     }
     var rules=jdbc.queryForList("SELECT r.id,r.identity_key,r.batch_id,r.price_month,MAX(p.id) effective_revision "
         +"FROM lp_inquiry_rule r LEFT JOIN lp_inquiry_effective_price p ON p.rule_id=r.id AND p.price_month=? "
-        +"WHERE r.business_unit_type=? AND r.price_month<=?"+matching
+        +"WHERE r.business_unit_type=? AND r.price_month<=? AND r.row_voided=0"
+        +" AND NOT EXISTS (SELECT 1 FROM lp_inquiry_import_batch b WHERE b.id=r.batch_id AND b.status='VOIDED')"+matching
         +" GROUP BY r.id,r.identity_key,r.batch_id,r.price_month ORDER BY r.id",args.toArray());
     observed.add(rules);
     if(!rules.isEmpty())observed.add(jdbc.queryForList("SELECT DISTINCT supplier_code,supplier_name FROM lp_supplier_supply_ratio "

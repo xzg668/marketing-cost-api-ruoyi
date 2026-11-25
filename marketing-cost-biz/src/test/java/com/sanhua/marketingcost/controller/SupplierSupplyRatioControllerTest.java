@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.sanhua.marketingcost.dto.*;
 import com.sanhua.marketingcost.service.*;
 import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioEditService;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioVoidService;
 import java.io.InputStream;
 import java.util.*;
 import org.junit.jupiter.api.*;
@@ -18,7 +19,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class SupplierSupplyRatioControllerTest {
   SupplierSupplyRatioEditService edits;SupplierSupplyRatioService service;SupplierSupplyRatioImportService imports;SupplierSupplyRatioController controller;
-  @BeforeEach void setup(){service=mock(SupplierSupplyRatioService.class);imports=mock(SupplierSupplyRatioImportService.class);edits=mock(SupplierSupplyRatioEditService.class);controller=new SupplierSupplyRatioController(service,imports,edits);var a=new UsernamePasswordAuthenticationToken("finance",null);a.setDetails(Map.of("businessUnitType","COMMERCIAL"));SecurityContextHolder.getContext().setAuthentication(a);}
+  SupplierSupplyRatioVoidService voids;
+  @BeforeEach void setup(){service=mock(SupplierSupplyRatioService.class);imports=mock(SupplierSupplyRatioImportService.class);edits=mock(SupplierSupplyRatioEditService.class);voids=mock(SupplierSupplyRatioVoidService.class);controller=new SupplierSupplyRatioController(service,imports,edits,voids);var a=new UsernamePasswordAuthenticationToken("finance",null);a.setDetails(Map.of("businessUnitType","COMMERCIAL"));SecurityContextHolder.getContext().setAuthentication(a);}
   @AfterEach void clear(){SecurityContextHolder.clearContext();}
   @Test void importUsesSelectedUnitAndAuthenticatedOperator() {
     var result=new SupplierSupplyRatioImportResponse();result.setBatchNo("batch");when(imports.importExcel(any(InputStream.class),eq("ratio.xlsx"),eq("COMMERCIAL"),eq("finance"),isNull())).thenReturn(result);
@@ -39,7 +41,27 @@ class SupplierSupplyRatioControllerTest {
   @Test void readsAndImportsKeepExistingPermissions() {
     for(var method:SupplierSupplyRatioController.class.getDeclaredMethods()) {
       var permission=method.getAnnotation(PreAuthorize.class);if(permission==null)continue;
-      assertThat(permission.value()).isEqualTo("@ss.hasPermi('base:supplier-supply-ratio:"+(Set.of("importExcel","update").contains(method.getName())?"import":"list")+"')");
+      assertThat(permission.value()).isEqualTo("@ss.hasPermi('base:supplier-supply-ratio:"
+          +(Set.of("importExcel","update","voidBatch","groupChoices","group","voidGroup").contains(method.getName())?"import":"list")+"')");
+    }
+  }
+  @Test void voidHttpUsesExpectedCountAndAuthenticatedOperator() throws Exception {
+    var mvc = MockMvcBuilders.standaloneSetup(controller).build();
+    var path = "/api/v1/supplier-supply-ratios/import-batches";
+    when(voids.voidBatch("COMMERCIAL", "SSR-EXCEL-test", 2, "finance"))
+        .thenReturn(new SupplierSupplyRatioVoidService.Result(2));
+    mvc.perform(get(path).param("businessUnitType", "COMMERCIAL"));
+    verify(voids).list("COMMERCIAL", 1, 20);
+    var response = mvc.perform(post(path + "/SSR-EXCEL-test/void")
+        .principal(SecurityContextHolder.getContext().getAuthentication())
+        .contentType("application/json")
+        .content("{\"businessUnitType\":\"COMMERCIAL\",\"expectedActiveRows\":2}"))
+        .andReturn().getResponse();
+    assertThat(response.getContentAsString()).contains("\"voidedRows\":2");
+    verify(voids).voidBatch("COMMERCIAL", "SSR-EXCEL-test", 2, "finance");
+    for (String suffix : List.of("rollback", "rollback-preview")) {
+      assertThat(mvc.perform(post(path + "/SSR-EXCEL-test/" + suffix)).andReturn()
+          .getResponse().getStatus()).isIn(404, 405);
     }
   }
   @Test void invalidOrEmptyWorkbookCannotReachAWrite() {

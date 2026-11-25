@@ -24,6 +24,9 @@ public class HouseholdInquiryService {
   @org.springframework.beans.factory.annotation.Autowired(required=false)
   private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
 
+  @Autowired
+  private VoidedSourceMonthlyPrices voidedMonthlyPrices;
+
   private static final PriceContext IMPORT_PRICE_CONTEXT=new PriceContext("件","CNY",TaxBasis.EXCLUDED);
   private final HouseholdInquiryQueryMapper queries;
   private final HouseholdInquiryStorage storage;
@@ -58,7 +61,7 @@ public class HouseholdInquiryService {
     if(!key.equals(unit+"/"+workbook.sha256()))throw new IllegalStateException("解析原件与已归档原件摘要不一致");
     var current=new HashMap<String,HouseholdInquiryPriceRow>();
     var materials=workbook.rows().stream().map(HouseholdInquiryWorkbookParser.SourceRow::matchKey).toList();
-    storage.currentByKeys(unit,materials).forEach(row->current.put(row.getMatchKey(),row));
+    storage.currentByKeys(unit,materials,true).forEach(row->current.put(row.getMatchKey(),row));
     var fingerprints=new HashMap<String,String>();
     for(var row:workbook.rows()) fingerprints.put(row.matchKey(),fingerprint(new RecordIdentity(row.businessRow(),context,sourceMonth)));
     var historical=new HashSet<String>();
@@ -72,7 +75,7 @@ public class HouseholdInquiryService {
       var previous=current.get(row.matchKey());
       String pricing=fingerprint(new PricingIdentity(row.materialCode(),row.unitPrice(),row.householdRate(),row.copperGrams(),row.zincGrams(),context));
       String record=fingerprints.get(row.matchKey());
-      var action=previous==null?Action.CREATE:record.equals(previous.getRecordFingerprint())?Action.UNCHANGED:Action.NEW_VERSION;
+      var action=previous==null?Action.CREATE:!"VOIDED".equals(previous.getBatchStatus())&&record.equals(previous.getRecordFingerprint())?Action.UNCHANGED:Action.NEW_VERSION;
       rows.add(new PlannedRow(row,previous==null?null:previous.getId(),action,
           action==Action.NEW_VERSION&&historical.contains(row.matchKey()+"/"+record),
           previous==null||!pricing.equals(previous.getPricingFingerprint()),pricing,record));
@@ -116,7 +119,8 @@ public class HouseholdInquiryService {
         var current=lockCurrent(unit,content.rows());
         for(var row:content.rows()) {
           var existing=current.get(row.source().matchKey());Long id=existing==null?null:existing.getId();
-          if(!Objects.equals(id,row.expectedCurrentId())) throw fail("STALE_PREVIEW",409,"目标来源已变化，请重新预览");
+          if(!Objects.equals(id,row.expectedCurrentId()) || (id!=null && row.action()==Action.UNCHANGED
+              && "VOIDED".equals(queries.priceBatchStatus(unit,id)))) throw fail("STALE_PREVIEW",409,"目标来源已变化，请重新预览");
         }
         var saved=publishRows(unit,batch,content,current);
         storage.completePublication(unit,batch.getId(),write(saved));
@@ -220,12 +224,44 @@ public class HouseholdInquiryService {
     scope(unit);var row=savedPrice(unit,id);var batch=queries.batch(unit,row.getImportBatchId());
     return new OriginalFile(batch.getFileName(),batch.getFileSha256(),files.read(unit,batch.getFileSha256()));
   }
+  public ImportPage imports(String unit,int page,int size) {
+    scope(unit);pagination(page,size);
+    return new ImportPage(queries.imports(unit,size,(page-1)*size),queries.importCount(unit));
+  }
+
+  public void voidRow(String unit,String actor,long id) {
+    scope(unit);actor(actor);
+    transaction.executeWithoutResult(status->{
+      var price=savedPrice(unit,id);
+      queries.lockCurrent(unit,List.of(price.getMatchKey()));
+      if ("VOIDED".equals(queries.priceBatchStatus(unit,id)) || queries.voidRow(unit,id)==0) return;
+      voidedMonthlyPrices.household(unit,List.of(id));
+      if (pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(
+          Set.of("PRICE"),unit,Set.of(),Set.of()));
+    });
+  }
+
+  public void voidImport(String unit,String actor,long batchId) {
+    scope(unit);actor(actor);
+    transaction.executeWithoutResult(status->{
+      var batch=queries.batch(unit,batchId);
+      if(batch==null || batch.getPublishedAt()==null)throw fail("IMPORT_NOT_FOUND",404,"已导入的询价批次不存在");
+      if("VOIDED".equals(batch.getStatus()))return;
+      var keys=queries.batchKeys(unit,batchId);
+      for(int start=0;start<keys.size();start+=256)
+        queries.lockCurrent(unit,keys.subList(start,Math.min(start+256,keys.size())));
+      if(queries.voidBatch(unit,batchId,actor)==0)return;
+      voidedMonthlyPrices.household(unit,queries.batchSourceIds(unit,batchId));
+      if(pendingState!=null)pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(Set.of("PRICE"),unit,Set.of(),Set.of()));
+    });
+  }
+
   public ImportView importDetails(String unit,String actor,long batchId) {
     scope(unit);actor(actor);var batch=queries.batch(unit,batchId);
     if(batch==null)throw fail("PREVIEW_NOT_FOUND",404,"导入批次不存在");
-    if(!"PUBLISHED".equals(batch.getStatus()))owner(batch,actor);
+    if(batch.getPublishedAt()==null)owner(batch,actor);
     return new ImportView(previewView(batch,codec.decode(batch.getPreviewJson(),PreviewContent.class)),
-        "PUBLISHED".equals(batch.getStatus())?result(batch):null,batch.getCreatedBy(),batch.getPublishedAt());
+        batch.getPublishedAt()!=null?result(batch):null,batch.getCreatedBy(),batch.getPublishedAt());
   }
   public OriginalFile importOriginal(String unit,String actor,long batchId) {
     importDetails(unit,actor,batchId);var batch=queries.batch(unit,batchId);
@@ -236,9 +272,9 @@ public class HouseholdInquiryService {
   }
   private PriceView view(HouseholdInquiryPriceRow row) {
     var coordinates=read(row.getSourceRowsJson(),Integer[].class);
-    return new PriceView(row.getId(),row.getMaterialCode(),row.getMaterialName(),row.getSpecification(),row.getRevisionNo(),row.getCurrentFlag()==1,
+    return new PriceView(row.getId(),row.getMaterialCode(),row.getMaterialName(),row.getSpecification(),row.getRevisionNo(),row.getCurrentFlag()==1&&!"VOIDED".equals(row.getBatchStatus()),
         plain(row.getUnitPrice()),plain(row.getHouseholdRate()),row.getSourceMonth(),new PriceContext(row.getPricingUnit(),row.getCurrency(),TaxBasis.valueOf(row.getTaxBasis())),
-        row.getImportBatchId(),row.getCreatedAt(),List.of(coordinates));
+        row.getImportBatchId(),row.getCreatedAt(),List.of(coordinates),"VOIDED".equals(row.getBatchStatus()));
   }
   private Preview previewView(HouseholdInquiryBatchRow batch,PreviewContent content) {
     Instant expiry=batch.getExpiresAt().toInstant(ZoneOffset.UTC);String state=batch.getStatus();

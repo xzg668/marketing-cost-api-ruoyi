@@ -73,15 +73,45 @@ class CostRunPublicInputPreparationIntegrationTest {
         CostRunManufacturingSourcesIntegrationTest.auxiliary, mock(CostRunPartItemMapper.class),
         mapper(QualityLossRateMapper.class), mapper(ManufactureRateMapper.class), mapper(ThreeExpenseRateMapper.class),
         mapper(OtherExpenseRateMapper.class), mock(MaterialMasterMapper.class), mapper(MaterialMasterRawMapper.class),
-        mock(BomRawHierarchyMapper.class), cache,
+        mapper(BomRawHierarchyMapper.class), cache,
         new CostBusinessRuleProviderImpl(mapper(CostBusinessRuleMapper.class), unit -> year + "-10"));
     technical = mock(EffectiveTechnicalDataQueryService.class);
     preparation = new CostRunPublicInputPreparation(costing, CostRunFeeSourcesIntegrationTest.reader,
         CostRunManufacturingSourcesIntegrationTest.reader, technical,
-        new NetLossRateQuery(mapper(MaterialMasterRawMapper.class), mapper(QualityLossRateMapper.class)), unit -> year + "-10");
+        new NetLossRateQuery(mapper(MaterialMasterRawMapper.class), mapper(QualityLossRateMapper.class),
+            mapper(BomRawHierarchyMapper.class)), unit -> year + "-10");
   }
   @AfterAll static void stop() { CostRunFeeSourcesIntegrationTest.stop(); }
   @BeforeEach void resetProvider() { reset(technical); clearInvocations(forms, items); }
+
+  @Test void singleAndPreparedCostUseTheBareBodyRateFromTheFinishedProductBom() {
+    var fixture = fixture();
+    String product = fixture.product();
+    String bare = product + "-BARE";
+    CostRunFeeSourcesIntegrationTest.jdbc.update(
+        "UPDATE lp_material_master_raw SET main_category_code='10' WHERE material_code=?", product);
+    for (String child : List.of(bare, product + "-PKG")) {
+      insert("lp_bom_raw_hierarchy", Map.of("top_product_code", product, "parent_code", product,
+          "material_code", child, "level", 1, "price_org_code", "210", "source_type", "U9",
+          "bom_purpose", "主制造", "bom_status", "已核准", "effective_from", "2020-01-01",
+          "material_category_1", child.equals(bare) ? "111041064" : "151551519"));
+    }
+    insert("lp_quality_loss_rate", Map.of("rate_year", year, "bare_product_code", bare,
+        "business_unit_type", "COMMERCIAL", "loss_rate", "0.012"));
+    var requests = requests(fixture, 2);
+    var serial = requests.stream().map(request -> calculate(request.context())).toList();
+    assertThat(serial).allSatisfy(rows -> assertThat(rows).filteredOn(row -> "LOSS".equals(row.getCostCode()))
+        .singleElement().satisfies(loss -> {
+          assertThat(loss.getRate()).isEqualByComparingTo("0.012");
+          assertThat(loss.getRemark()).contains(bare);
+        }));
+    var prepared = preparation.prepare(requests);
+    for (int i = 0; i < requests.size(); i++) {
+      var context = requests.get(i).context();
+      context.setPreparedInputs(prepared.get(i));
+      assertThat(calculate(context)).usingRecursiveComparison().isEqualTo(serial.get(i));
+    }
+  }
 
   @Test void differentCustomersKeepTheirOwnFeesWhileOriginalAlgorithmReadsNoLivePublicSources() {
     var fixture = fixture(); var requests = requests(fixture, 16);

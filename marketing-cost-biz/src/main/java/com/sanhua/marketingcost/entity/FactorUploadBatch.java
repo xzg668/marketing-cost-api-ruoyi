@@ -26,6 +26,8 @@ public class FactorUploadBatch {
   private Long technicalVersionId;
   private String technicalResultJson;
   private String batchNo;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private String rangeWorkbookGroup;
   private String importType;
   private String importPurpose;
   private String effectiveStrategy;

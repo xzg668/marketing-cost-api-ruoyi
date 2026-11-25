@@ -195,7 +195,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.departmentFundRateMapper = departmentFundRateMapper;
     this.auxCostItemMapper = auxCostItemMapper;
     this.costRunPartItemMapper = costRunPartItemMapper;
-    this.netLossRates = new com.sanhua.marketingcost.service.NetLossRateQuery(materialMasterRawMapper, qualityLossRateMapper);
+    this.netLossRates = new com.sanhua.marketingcost.service.NetLossRateQuery(
+        materialMasterRawMapper, qualityLossRateMapper, bomRawHierarchyMapper);
     this.manufactureRateMapper = manufactureRateMapper;
     this.threeExpenseRateMapper = threeExpenseRateMapper;
     this.otherExpenseRateMapper = otherExpenseRateMapper;
@@ -1435,7 +1436,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
     String remark = "TECH_SUPPLEMENTAL".equals(selected.sourceType())
         ? "公共净损失率缺失，采用已审批补录版本 " + technicalData.sourceVersionId("NET_LOSS")
-        : "AVAILABLE".equals(selected.status()) ? null : selected.message();
+        : com.sanhua.marketingcost.service.NetLossRateQuery.BOM_SOURCE_AVAILABLE.equals(source.reasonCode())
+            ? source.message()
+            : "AVAILABLE".equals(selected.status()) ? null : selected.message();
     return new RateLookup(selected.rate(), remark);
   }
 

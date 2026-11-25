@@ -52,7 +52,7 @@ class TechnicalDataSourceCheckServiceTest {
         TechnicalDataAvailability.UNCONFIRMED, "PACKAGE_PENDING", "由包装专用检查验证", null, context.scanAt()));
     workspace = new QuoteCostingWorkspace(); workspace.setCurrentBomBuildBatchId("BOM-1");
     when(u9.read(any())).thenReturn(CurrentU9BomResult.available("U9", "V1", "BOM-1", 2));
-    when(salary.read(anyString(), anyInt(), anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(), null));
+    when(salary.read(anyString(), anyInt(), anyString())).thenReturn(List.of());
     when(prices.calculate(any())).thenReturn(priceResult(List.of(), "READY"));
   }
 
@@ -127,8 +127,8 @@ class TechnicalDataSourceCheckServiceTest {
 
   @Test void noOriginalBomRequiresProductDrawingAuxiliaryAndSolderEvenWhenReferenceDataExists() {
     when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
-    when(salary.read(anyString(), anyInt(), anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(
-        List.of(wage(1,"SALARY_DIRECT","2.5"),wage(2,"SALARY_INDIRECT","0.08")),1L));
+    when(salary.read(anyString(), anyInt(), anyString())).thenReturn(List.of(
+        wage(1,"SALARY_DIRECT","2.5"), wage(2,"SALARY_INDIRECT","0.08")));
     var requirements = new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts());
     assertThat(requirements).filteredOn(TechnicalDataModuleRequirement::required)
         .extracting(TechnicalDataModuleRequirement::moduleType).containsExactly("PROFILE","DRAWING_BOM","AUXILIARY","SOLDER");
@@ -264,28 +264,12 @@ class TechnicalDataSourceCheckServiceTest {
         true, true, "NEED_TECH", stage, null, null, fingerprint);
   }
 
-  @Test void confirmedSingleWageIncludingZeroIsUsableWithoutInventingSecondWage() {
+  @Test void singleEffectiveWageIncludingZeroIsUsable() {
     for (String type : List.of("SALARY_DIRECT","SALARY_INDIRECT")) {
-      when(salary.read(anyString(),anyInt(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(wage(1,type,"0")),5L));
+      when(salary.read(anyString(),anyInt(),anyString())).thenReturn(List.of(wage(1,type,"0")));
       assertThat(fact(TechnicalDataModuleType.SALARY).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
     }
     verify(salary, times(2)).read("PRODUCT",2026,"COMMERCIAL");
-  }
-
-  @Test void unapprovedOrUnconfirmedSalaryEntersTechnicalSalarySupplement() {
-    for (var rows : List.of(List.<CmsCostSourceEffective>of(), List.of(wage(1,"SALARY_INDIRECT","0.1715")))) {
-      when(salary.read(anyString(),anyInt(),anyString()))
-          .thenReturn(new TechnicalDataSalarySourceQuery.Source(rows, null));
-      var requirements = new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts());
-      assertThat(requirements).filteredOn(row -> row.moduleType().equals("SALARY"))
-          .allSatisfy(row -> {
-            assertThat(row.required()).as("工资未审批也应进入技术补录").isTrue();
-            assertThat(row.availability()).isEqualTo(TechnicalDataAvailability.MISSING);
-            assertThat(row.reasonCode()).isEqualTo("SALARY_SOURCE_UNCONFIRMED");
-            assertThat(row.reason()).contains("补录", "审批");
-            assertThat(row.sourceReference()).contains("cms_cost_source_effective");
-          });
-    }
   }
 
   @Test void salaryReadFailureCannotCreateTechnicalSalarySupplement() {
@@ -298,15 +282,15 @@ class TechnicalDataSourceCheckServiceTest {
         });
   }
 
-  @Test void bothWagesConfirmedAbsentProduceOnlySalaryGapWhenU9Exists() {
-    when(salary.read(anyString(),anyInt(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(List.of(),7L));
+  @Test void bothEffectiveWagesAbsentProduceOnlySalaryGapWhenU9Exists() {
+    when(salary.read(anyString(),anyInt(),anyString())).thenReturn(List.of());
     assertThat(service.check(context,workspace).facts()).filteredOn(row -> row.availability()==TechnicalDataAvailability.MISSING)
         .extracting(TechnicalDataSourceFact::moduleType).containsExactly(TechnicalDataModuleType.SALARY);
   }
 
   @Test void duplicateWageTypeAndInvalidMoneyRemainErrors() {
     for (var values : List.of(List.of(wage(1,"SALARY_DIRECT","-1")),List.of(wage(1,"SALARY_DIRECT","1"),wage(2,"SALARY_DIRECT","2")))) {
-      when(salary.read(anyString(),anyInt(),anyString())).thenReturn(new TechnicalDataSalarySourceQuery.Source(values,7L));
+      when(salary.read(anyString(),anyInt(),anyString())).thenReturn(values);
       assertThat(fact(TechnicalDataModuleType.SALARY).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
     }
   }

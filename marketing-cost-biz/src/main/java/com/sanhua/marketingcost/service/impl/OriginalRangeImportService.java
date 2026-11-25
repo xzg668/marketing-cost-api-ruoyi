@@ -73,7 +73,7 @@ public class OriginalRangeImportService {
   }
 
   public PublishedRule detail(Long id) {
-    var item = requireOriginal(id);
+    var item = requireOriginal(id, true);
     var saved = snapshots.read(item);
     return new PublishedRule(
         item.getId(),
@@ -97,7 +97,7 @@ public class OriginalRangeImportService {
         .eq(PriceRangeFactorRule::getBusinessUnitType, businessUnit)
         .eq(PriceRangeFactorRule::getPricingMonth, month)
         .eq(PriceRangeFactorRule::getMaterialCode, code)
-        .eq(PriceRangeFactorRule::getRuleStatus, "PUBLISHED")
+        .in(PriceRangeFactorRule::getRuleStatus, List.of("PUBLISHED", "VOIDED"))
         .isNotNull(PriceRangeFactorRule::getSourceUploadBatchId)
         .orderByDesc(PriceRangeFactorRule::getId));
     return OriginalRuleGroups.ranges(candidates).stream()
@@ -134,8 +134,13 @@ public class OriginalRangeImportService {
   }
 
   private PriceRangeFactorRule requireOriginal(Long id) {
+    return requireOriginal(id, false);
+  }
+
+  private PriceRangeFactorRule requireOriginal(Long id, boolean history) {
     var item = rules.selectById(id);
-    if (!OriginalRangeRuleSnapshot.isOriginal(item))
+    if (!OriginalRangeRuleSnapshot.isOriginal(item)
+        && !(history && item != null && item.getSourceUploadBatchId() != null && "VOIDED".equals(item.getRuleStatus())))
       throw new IllegalArgumentException("区间原稿规则不存在");
     String current = BusinessUnitContext.getCurrentBusinessUnitType();
     if (current != null
@@ -180,7 +185,7 @@ public class OriginalRangeImportService {
                   replay.stream()
                       .map(FactorUploadBatch::getId)
                       .collect(java.util.stream.Collectors.toSet());
-              if (!replay.isEmpty()
+              if (checked.voidedBands().isEmpty() && !replay.isEmpty()
                   && replay.size() == organizations(checked).size()
                   && checked.sources().values().stream().map(rows -> rows.getFirst().identity().identityKey())
                       .allMatch(
@@ -224,9 +229,9 @@ public class OriginalRangeImportService {
     if (checked.preview().businessRowCount() != selectedRows.size())
       throw new IllegalArgumentException("所选来源行包含无价或缺失定位，未发布");
     var selectedKeys = checked.sources().values().stream().map(rows -> rows.getFirst().identity().identityKey()).collect(java.util.stream.Collectors.toSet());
-    boolean replay = selectedKeys.stream().allMatch(key -> {
+    boolean replay = checked.voidedBands().isEmpty() && selectedKeys.stream().allMatch(key -> {
       var prior = checked.previous().get(key);
-      return prior != null && checked.inputFingerprint().equals(snapshots.read(prior).inputFingerprint());
+      return prior != null && !"VOIDED".equals(prior.getRuleStatus()) && checked.inputFingerprint().equals(snapshots.read(prior).inputFingerprint());
     });
     if (replay) return new Publication(checked.previous().values().stream()
         .filter(r -> selectedKeys.contains(r.getRuleIdentityKey()))
@@ -282,7 +287,7 @@ public class OriginalRangeImportService {
                   .eq(PriceRangeFactorRule::getBusinessUnitType, scope.businessUnit())
                   .eq(PriceRangeFactorRule::getPricingMonth, scope.month())
                   .in(PriceRangeFactorRule::getRuleIdentityKey, incomingIdentities)
-                  .in(PriceRangeFactorRule::getRuleStatus, selectedRows != null ? List.of("PUBLISHED", "STAGED") : List.of("PUBLISHED")))) {
+                  .in(PriceRangeFactorRule::getRuleStatus, selectedRows != null ? List.of("PUBLISHED", "VOIDED", "STAGED") : List.of("PUBLISHED", "VOIDED")))) {
         // 不让MySQL对大JSON来源快照做文件排序；只读取本次身份并显式选最高修订。
         previous.merge(
             item.getRuleIdentityKey(),
@@ -296,7 +301,8 @@ public class OriginalRangeImportService {
       String key = rule.identity().identityKey();
       var group = sources.computeIfAbsent(key + ":" + signatures.range(rule), ignored -> new ArrayList<>());
       group.add(rule);
-      previousIds.put(key, previous.containsKey(key) ? previous.get(key).getId() : 0L);
+      var prior = previous.get(key);
+      previousIds.put(key, prior == null ? 0L : ("VOIDED".equals(prior.getRuleStatus()) ? -prior.getId() : prior.getId()));
       OriginalRangeRuleCalculator.Result result = null;
       String issue = null;
       try {
@@ -330,11 +336,15 @@ public class OriginalRangeImportService {
                     context.financial().batchId(),
                     context.financial().revision(),
                     context.financial().scope())));
-    boolean replay = unchangedImport(sources, previous, fileHash);
+    List<Long> voidedBands=previous.isEmpty()?List.of():bands.selectList(Wrappers.lambdaQuery(PriceRangeItem.class)
+        .select(PriceRangeItem::getId).apply("row_voided=1")
+        .in(PriceRangeItem::getFactorRuleId,previous.values().stream().map(PriceRangeFactorRule::getId).toList())
+        .orderByAsc(PriceRangeItem::getId)).stream().map(PriceRangeItem::getId).toList();
+    boolean replay = voidedBands.isEmpty() && unchangedImport(sources, previous, fileHash);
     var preview =
         new Preview(
             fileHash,
-            hash(List.of(inputFingerprint, previousIds, financeVersions)),
+            hash(List.of(inputFingerprint, previousIds, financeVersions, voidedBands)),
             scope.month(),
             parsed.rules().size() + parsed.errors().size(),
             sources.size(),
@@ -351,7 +361,7 @@ public class OriginalRangeImportService {
                 .toList(),
             List.copyOf(errors),
             Collections.unmodifiableMap(financial), parsed.notices());
-    return new Prepared(preview, sources, previous, financial, inputFingerprint);
+    return new Prepared(preview, sources, previous, financial, inputFingerprint,voidedBands);
   }
 
   private OriginalRangeWorkbookParser.ParsedWorkbook prepareSupplement(
@@ -380,7 +390,7 @@ public class OriginalRangeImportService {
         .eq(PriceRangeFactorRule::getBusinessUnitType, reference.getBusinessUnitType())
         .eq(PriceRangeFactorRule::getPricingMonth, reference.getPricingMonth())
         .eq(PriceRangeFactorRule::getRuleIdentityKey, reference.getRuleIdentityKey())
-        .eq(PriceRangeFactorRule::getRuleStatus, "PUBLISHED"));
+        .in(PriceRangeFactorRule::getRuleStatus, List.of("PUBLISHED", "VOIDED")));
   }
 
   private static boolean containsRule(List<PriceRangeFactorRule> candidates, Long id) {
@@ -427,10 +437,12 @@ public class OriginalRangeImportService {
     var revisions = com.sanhua.marketingcost.service.pricing.OriginalRuleRevisions.ranges(rules, scope.businessUnit(), scope.month());
     var groupRevisions = new java.util.HashMap<String, Integer>();
     Map<String, FactorUploadBatch> saved = new LinkedHashMap<>();
+    String workbookGroup = UUID.randomUUID().toString();
     for (String org : organizations(prepared)) {
       var batch = new FactorUploadBatch();
       batch.setBatchNo("RANGE-ORIGINAL-" + UUID.randomUUID());
       batch.setImportType("RANGE_ORIGINAL");
+      batch.setRangeWorkbookGroup(workbookGroup);
       batch.setImportPurpose("MATERIAL_RULE");
       batch.setBusinessUnitType(scope.businessUnit());
       batch.setPriceOrgCode(org);
@@ -671,5 +683,5 @@ public class OriginalRangeImportService {
       Map<String, List<Rule>> sources,
       Map<String, PriceRangeFactorRule> previous,
       Map<String, PriceFactorContext> financial,
-      String inputFingerprint) {}
+      String inputFingerprint,List<Long> voidedBands) {}
 }

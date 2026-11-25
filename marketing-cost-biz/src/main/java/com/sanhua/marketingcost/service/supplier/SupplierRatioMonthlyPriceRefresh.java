@@ -35,7 +35,18 @@ public class SupplierRatioMonthlyPriceRefresh {
         """, String.class, event.businessUnitType(), CostPricingPeriodUtils.currentPricingDate(),
         CostPricingPeriodUtils.currentPricingDate()));
     actual.retainAll(event.materialCodes());
-    if (actual.isEmpty()) return;
+    retireSelections(event.businessUnitType(), actual, CostPricingPeriodUtils.currentPricingMonth());
+  }
+
+  @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+  public void voided(SupplierSupplyRatioVoidService.Voided event) {
+    // Finance may be correcting a prior accounting month. Retire reusable selections in every
+    // month while keeping the original amounts and saved costing snapshots readable by ID.
+    retireSelections(event.businessUnitType(), event.materialCodes(), "0000-00");
+  }
+
+  private void retireSelections(String unit, Set<String> materials, String fromMonth) {
+    if (materials.isEmpty()) return;
     // Keep the existing month's saved costs and immutable price evidence. Only future selection
     // stops reusing the old supplier choice; the next costing adopts the actual-ratio price.
     var rows = jdbc.query("""
@@ -49,10 +60,10 @@ public class SupplierRatioMonthlyPriceRefresh {
           .forEach(value -> dependencies.add(value.path("monthlyPriceId").asLong()));
       return new Saved(rs.getLong("id"), rs.getString("material_code"),
           codec.decode(rs.getString("source_evidence_json"), JsonNode.class), dependencies);
-    }, event.businessUnitType(), CostPricingPeriodUtils.currentPricingMonth());
+    }, unit, fromMonth);
     var retired = new LinkedHashSet<Long>();
     for (var row : rows)
-      if (actual.contains(row.material()) && row.source().path("source").hasNonNull("selectionRule"))
+      if (materials.contains(row.material()) && row.source().path("source").hasNonNull("selectionRule"))
         retired.add(row.id());
     boolean changed;
     do {

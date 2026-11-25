@@ -9,6 +9,20 @@ import com.sanhua.marketingcost.entity.QuoteTechModule;
 import org.junit.jupiter.api.Test;
 
 class TechnicalDataActorTest {
+  @Test void adminCanMaintainAssignedSalaryWithoutGrantingOtherModulesOrFrozenEdits() {
+    var admin = actor("*:*:*");
+    var task = new QuoteTechTask(); task.setTaskStatus("PENDING"); task.setActiveFlag(1); task.setAssigneeUserId(101L);
+    task.setOaAssignmentVersion(1); task.setExternalTaskStatus("PUBLISHED");
+    var salary = new QuoteTechModule(); salary.setModuleType("SALARY"); salary.setRequiredFlag(1);
+    salary.setModuleStatus("PENDING"); salary.setAssigneeUserId(101L); salary.setOaEditAllowed(1);
+    assertThat(admin.canEditModule(task, salary)).isTrue();
+    assertThat(admin.assignedModules(task, List.of(salary))).containsExactly("SALARY");
+    assertThat(actor("ingest:quote:cost-run:execute").canEditModule(task, salary)).isFalse();
+    salary.setModuleStatus("FROZEN"); assertThat(admin.canEditModule(task, salary)).isFalse();
+    salary.setModuleStatus("SUBMITTED"); assertThat(admin.canEditModule(task, salary)).isFalse();
+    salary.setModuleStatus("RETURNED"); assertThat(admin.canEditModule(task, salary)).isTrue();
+    salary.setModuleType("MANUFACTURING"); assertThat(admin.canEditModule(task, salary)).isFalse();
+  }
   @Test void adminCanOnlyEditUnassignedProductsWithoutAnyOaDispatch() {
     var admin = actor("*:*:*");
     var task = new QuoteTechTask(); task.setTaskStatus("UNASSIGNED"); task.setActiveFlag(1);

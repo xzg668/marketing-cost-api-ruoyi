@@ -113,17 +113,18 @@ public class FinanceEffectivePriceService {
                 .eq(PriceLinkedItem::getDeleted, 0)
                 .eq(PriceLinkedItem::getRuleStatus, "PUBLISHED")
                 .eq(PriceLinkedItem::getExpressionVersion, OriginalLinkedRuleSnapshot.VERSION));
-    var rangeRules =
+    var rangeRulesByMonth =
         ranges
             .selectList(
                 Wrappers.lambdaQuery(PriceRangeFactorRule.class)
                     .eq(PriceRangeFactorRule::getBusinessUnitType, businessUnit)
                     .eq(PriceRangeFactorRule::getOrgCode, organization)
-                    .eq(PriceRangeFactorRule::getRuleStatus, "PUBLISHED")
+                    .in(PriceRangeFactorRule::getRuleStatus, List.of("PUBLISHED", "VOIDED"))
                     .isNotNull(PriceRangeFactorRule::getPricingMonth))
             .stream()
-            .filter(OriginalRangeRuleSnapshot::isOriginal)
-            .toList();
+            .collect(java.util.stream.Collectors.groupingBy(PriceRangeFactorRule::getPricingMonth));
+    var rangeRules = rangeRulesByMonth.values().stream().flatMap(month -> OriginalRuleGroups.ranges(month).stream())
+        .filter(OriginalRangeRuleSnapshot::isOriginal).toList();
     var batches =
         publications.selectList(
             Wrappers.lambdaQuery(FactorUploadBatch.class)

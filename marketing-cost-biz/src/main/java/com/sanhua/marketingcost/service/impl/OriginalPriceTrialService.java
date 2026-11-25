@@ -2,6 +2,8 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.dto.FinanceFactorImportContext;
 import com.sanhua.marketingcost.entity.FinanceEffectivePrice;
+import com.sanhua.marketingcost.entity.PriceRangeItem;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.mapper.FactorUploadBatchMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
@@ -29,6 +31,7 @@ public class OriginalPriceTrialService {
   private final FinanceFactorPriceReader finance;
   private final FactorUploadBatchMapper batches;
   private final FinanceEffectivePriceService effectivePrices;
+  private final com.sanhua.marketingcost.mapper.PriceRangeItemMapper rangeBands;
 
   public OriginalPriceTrialService(
       PriceLinkedItemMapper linkedItems,
@@ -38,7 +41,8 @@ public class OriginalPriceTrialService {
       OriginalRangeRuleCalculator rangeCalculator,
       FinanceFactorPriceReader finance,
       FactorUploadBatchMapper batches,
-      FinanceEffectivePriceService effectivePrices) {
+      FinanceEffectivePriceService effectivePrices,
+      com.sanhua.marketingcost.mapper.PriceRangeItemMapper rangeBands) {
     this.linkedItems = linkedItems;
     this.rangeRules = rangeRules;
     this.rangeSnapshots = rangeSnapshots;
@@ -47,6 +51,7 @@ public class OriginalPriceTrialService {
     this.finance = finance;
     this.batches = batches;
     this.effectivePrices = effectivePrices;
+    this.rangeBands=rangeBands;
   }
 
   public LinkedTrial linked(Long id, Request request) {
@@ -115,6 +120,9 @@ public class OriginalPriceTrialService {
                 == 0
             ? p0
             : rangeCalculator.calculate(rule, customerContext);
+    var active=activeBands(java.util.List.of(id)).getOrDefault(id,java.util.List.of());
+    if(!OriginalRangePriceRuntime.hasBand(active,p0) || !OriginalRangePriceRuntime.hasBand(active,p1))
+      throw new IllegalArgumentException("本次行情命中的区间价格已失效");
     return new RangeTrial(
         summary(
             rule.identity(),
@@ -131,6 +139,12 @@ public class OriginalPriceTrialService {
   }
 
   public record BatchRequest(java.util.List<Long> originalIds, String pricingMonth) {}
+
+  private java.util.Map<Long,java.util.List<PriceRangeItem>> activeBands(java.util.Collection<Long> ids) {
+    return rangeBands.selectList(Wrappers.lambdaQuery(PriceRangeItem.class).apply("row_voided=0")
+        .in(PriceRangeItem::getFactorRuleId,ids)).stream().collect(
+            java.util.stream.Collectors.groupingBy(PriceRangeItem::getFactorRuleId));
+  }
 
   public record EffectiveRow(
       Long originalId,
@@ -187,6 +201,7 @@ public class OriginalPriceTrialService {
                     r -> new Scope(r.key().businessUnitType(), r.key().orgCode()),
                     java.util.LinkedHashMap::new,
                     java.util.stream.Collectors.toList()));
+    var active="RANGE".equals(type)?activeBands(ids):java.util.Map.<Long,java.util.List<PriceRangeItem>>of();
     for (var group : groups.values()) {
       java.util.Map<Long, FinanceEffectivePrice> prices;
       try {
@@ -210,6 +225,10 @@ public class OriginalPriceTrialService {
         try {
           var price = effectivePrices.require(rule, prices);
           var saved = "RANGE".equals(type) ? effectivePrices.calculation(price).range() : null;
+          if("RANGE".equals(type) && !OriginalRangePriceRuntime.hasBand(active.getOrDefault(rule.id(),java.util.List.of()),saved)) {
+            result.add(unavailable(rule,"ERROR","当前行情命中的区间价格已失效"));
+            continue;
+          }
           result.add(
               new EffectiveRow(
                   rule.id(),

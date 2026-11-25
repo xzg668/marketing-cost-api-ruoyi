@@ -101,10 +101,11 @@ public record TechnicalDataActor(
         && task.getExternalTaskId() == null && task.getExternalTaskStatus() == null;
   }
 
-  /** 技术员填写本人模块；管理员仅填写未分派产品。 */
+  /** 技术员填写本人模块；管理员也可维护当前可编辑的工资补录。 */
   public boolean canEditModule(QuoteTechTask task, QuoteTechModule module) {
     boolean unassigned = canFillUnassigned(task);
-    if (userId == null || canViewSupplementOverview() && !unassigned) return false;
+    boolean salaryAdmin = admin() && !oaSession() && module != null && "SALARY".equals(module.getModuleType());
+    if (userId == null || canViewSupplementOverview() && !unassigned && !salaryAdmin) return false;
     if (task == null || module == null || Integer.valueOf(0).equals(module.getOaEditAllowed())
         || !canEdit() || !canAccessTask(task)
         || !Integer.valueOf(1).equals(task.getActiveFlag())
@@ -114,12 +115,12 @@ public record TechnicalDataActor(
         || (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0
             && !"PUBLISHED".equals(task.getExternalTaskStatus()))) return false;
     Long owner = module.getAssigneeUserId() == null ? task.getAssigneeUserId() : module.getAssigneeUserId();
-    return unassigned ? owner == null : Objects.equals(owner, userId);
+    return salaryAdmin || (unassigned ? owner == null : Objects.equals(owner, userId));
   }
 
   public List<String> assignedModules(QuoteTechTask task, Collection<QuoteTechModule> modules) {
     if (userId == null) return List.of();
-    if (canFillUnassigned(task)) return modules.stream().filter(module -> canEditModule(task, module))
+    if (canFillUnassigned(task) || admin() && !oaSession()) return modules.stream().filter(module -> canEditModule(task, module))
         .map(QuoteTechModule::getModuleType).toList();
     return modules.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag())
         && (module.getAssigneeUserId() != null || task.getOaAssignmentVersion() == null || task.getOaAssignmentVersion() == 0)

@@ -825,6 +825,29 @@ class MonthlyMaterialPriceServiceIntegrationTest {
   }
 
   @Test
+  void anAdoptedPriceCanBeReusedWhileAnotherTransactionHoldsASharedLock() throws Exception {
+    var request = request("MPP-reuse-" + UUID.randomUUID(), "210");
+    var initial = module.adopt(context(), plan(request, new Selection(null, shared(), normal("10"))));
+    var saved = initial.plan().selections().get(request);
+    long rows = count("lp_material_monthly_price");
+    try (var reader = jdbc.getDataSource().getConnection()) {
+      reader.setAutoCommit(false);
+      try (var statement = reader.prepareStatement(
+          "SELECT id FROM lp_material_monthly_price WHERE id=? FOR SHARE")) {
+        statement.setLong(1, saved.monthlyPriceId());
+        try (var locked = statement.executeQuery()) {
+          assertThat(locked.next()).isTrue();
+        }
+        var reused = module.adopt(context(), plan(request, saved), Duration.ofSeconds(2));
+        assertThat(reused.plan().selections().get(request)).isEqualTo(saved);
+        assertThat(count("lp_material_monthly_price")).isEqualTo(rows);
+      } finally {
+        reader.rollback();
+      }
+    }
+  }
+
+  @Test
   void aHeldFamilyLockUsesTheRemainingTransactionBudgetAndRollsBack() throws Exception {
     var request = request("MPP05-lock-" + UUID.randomUUID(), "210");
     module.adopt(context(), plan(request, new Selection(null, shared(), normal("10"))));

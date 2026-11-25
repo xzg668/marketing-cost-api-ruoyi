@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.controller;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import com.sanhua.marketingcost.service.pricing.WorkbookPriceImportHistory;
+import static com.sanhua.marketingcost.service.pricing.WorkbookPriceImportHistory.Kind.SCRAP_PRICE;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.annotation.OperationLog;
 import com.sanhua.marketingcost.annotation.OperationType;
@@ -18,6 +20,9 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/v1/scrap-prices")
 public class ScrapPriceController {
+  @org.springframework.beans.factory.annotation.Autowired
+  private WorkbookPriceImportHistory importHistory;
+
   private final ScrapPriceImportService imports;
   private final ScrapPriceQueryService query;
 
@@ -40,7 +45,7 @@ public class ScrapPriceController {
         query.list(unit(), priceMonth, keyword, priceType, supplier, page, size, model));
   }
 
-  @GetMapping("/{id}")
+  @GetMapping("/{id:[0-9]+}")
   @PreAuthorize("@ss.hasPermi('price:scrap:list')")
   public CommonResult<ScrapPrice> detail(@PathVariable long id) {
     return CommonResult.success(query.detail(unit(), id));
@@ -99,4 +104,37 @@ public class ScrapPriceController {
     if (principal == null) throw new IllegalArgumentException("请登录后维护废料价格");
     return principal.getName();
   }
+  @PostMapping("/rows/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:scrap:import')")
+  @com.sanhua.marketingcost.annotation.OperationLog(module="废料价格",operationType=com.sanhua.marketingcost.annotation.OperationType.UPDATE)
+  public CommonResult<Void> voidRow(@PathVariable long id,@RequestParam long version) {
+    importHistory.withdrawScrapRow(unit(),id,version);
+    return CommonResult.success(null);
+  }
+
+  @GetMapping("/imports")
+  @PreAuthorize("@ss.hasPermi('price:scrap:import')")
+  public CommonResult<WorkbookPriceImportHistory.Page> importHistory(
+      @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) {
+    return CommonResult.success(importHistory.list(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),
+        SCRAP_PRICE,page,size));
+  }
+
+  @GetMapping("/imports/{id}/original")
+  @PreAuthorize("@ss.hasPermi('price:scrap:import')")
+  public org.springframework.http.ResponseEntity<byte[]> importOriginalFile(@PathVariable long id) {
+    var original=importHistory.original(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),SCRAP_PRICE,id);
+    return org.springframework.http.ResponseEntity.ok().contentType(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM)
+        .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,org.springframework.http.ContentDisposition.attachment()
+            .filename(original.fileName(),java.nio.charset.StandardCharsets.UTF_8).build().toString()).body(original.bytes());
+  }
+
+  @PostMapping("/imports/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:scrap:import')")
+  @com.sanhua.marketingcost.annotation.OperationLog(module="废料价格",operationType=com.sanhua.marketingcost.annotation.OperationType.UPDATE)
+  public CommonResult<Void> voidImport(@PathVariable long id,java.security.Principal principal) {
+    importHistory.withdraw(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),SCRAP_PRICE,id,principal.getName());
+    return CommonResult.success(null);
+  }
+
 }

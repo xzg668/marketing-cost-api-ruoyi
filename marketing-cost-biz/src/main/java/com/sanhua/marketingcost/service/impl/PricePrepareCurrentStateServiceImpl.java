@@ -22,6 +22,7 @@ import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.PricePrepareCurrentStateService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
+import com.sanhua.marketingcost.service.pricing.MaterialPriceSourceCatalog.Key;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -192,9 +193,10 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
       var made=itemMapper.selectList(Wrappers.<PricePrepareItem>lambdaQuery()
           .eq(PricePrepareItem::getPrepareNo,batch.getPrepareNo()).eq(PricePrepareItem::getItemType,"MAKE_PART")
           .eq(PricePrepareItem::getStatus,"READY"));
-      var published=new java.util.HashSet<String>();
-      for(var item:made) if(item.getUnitPrice()!=null && published.add(item.getPriceOrgCode()+"|"+item.getMaterialCode()))
-        publicPriceSources.includeCalculatedMake(batch.getBusinessUnitType(),batch.getPeriodMonth(),item.getPriceOrgCode(),item.getMaterialCode());
+      var materials = made.stream().filter(item -> item.getUnitPrice() != null)
+          .map(item -> new Key(item.getMaterialCode(), item.getPriceOrgCode(), "MAKE"))
+          .toList();
+      publicPriceSources.includeCalculatedMakes(batch.getBusinessUnitType(), batch.getPeriodMonth(), materials);
     }
   }
 

@@ -50,6 +50,13 @@ public final class OriginalRangePriceRuntime {
   public record PreparedInputs(
       OaForm form, java.util.Map<Long, java.util.List<PriceRangeItem>> bands) {}
 
+  public static boolean hasBand(java.util.List<PriceRangeItem> rows,OriginalRangeRuleCalculator.Result result) {
+    if(result==null || result.sourceBand()==null || result.sourceBand().address()==null)return false;
+    var address=result.sourceBand().address();
+    return rows.stream().anyMatch(row->address.sheet().equals(row.getSourceSheetName())
+        && address.cell().equals(row.getSourceCellRef()));
+  }
+
   public PriceResolveResult resolve(
       PriceRangeFactorRule item,
       String oaNo,
@@ -154,6 +161,7 @@ public final class OriginalRangePriceRuntime {
               : bands.selectList(
                   Wrappers.lambdaQuery(PriceRangeItem.class)
                       .eq(PriceRangeItem::getFactorRuleId, item.getId())
+                      .apply("row_voided=0")
                       .eq(PriceRangeItem::getSourceSheetName, result.sourceBand().address().sheet())
                       .eq(PriceRangeItem::getSourceCellRef, result.sourceBand().address().cell()));
       if (selected.size() != 1) throw new IllegalArgumentException("发布的区间来源行不存在或重复");

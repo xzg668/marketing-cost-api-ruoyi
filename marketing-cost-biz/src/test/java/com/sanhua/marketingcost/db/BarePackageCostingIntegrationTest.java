@@ -231,12 +231,27 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     jdbc.update("DELETE FROM cms_cost_source_effective WHERE parent_code=?",product);
     jdbc.update("DELETE FROM lp_quality_loss_rate WHERE bare_product_code=?",product);
     jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",material);
-    org.mockito.Mockito.doReturn(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataSalarySourceQuery.Source(List.of(),51L))
+    org.mockito.Mockito.doReturn(List.of())
         .when(salarySources).read(product,date.getYear(),"COMMERCIAL");
     var result=pipeline.prepare(new ProductCostingRequest(product,item,month,"bare-package-test",true));
     assertThat(trees.getEffectiveBom(product,item).nodes()).hasSize(2);
     assertThat(result.getTechnicalDataCheck().modules().stream().filter(m -> m.required()).map(m -> m.moduleType()))
         .contains("PACKAGE","SALARY","NET_LOSS","PRICE");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?",Integer.class,item)).isZero();
+  }
+
+  @Test void missingNetLossExplainsWhyTheProductCannotBeCostedAndHowToContinue() {
+    approvePackaging();
+    jdbc.update("DELETE FROM lp_quality_loss_rate WHERE bare_product_code=?", product);
+    var result = pipeline.execute(new ProductCostingRequest(product, item, month, "net-loss-message-test", true));
+    String message = "未取到净损失率，无法计算成本。请补齐净损失率后重新核算。";
+    assertThat(result.getBlockingStatus()).isEqualTo("WAIT_TECH_DATA");
+    assertThat(result.getMessage()).contains(message);
+    assertThat(result.getTechnicalDataCheck().modules()).filteredOn(module -> "NET_LOSS".equals(module.moduleType()))
+        .singleElement().satisfies(module -> {
+          assertThat(module.required()).isTrue();
+          assertThat(module.reason()).isEqualTo(message);
+        });
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE oa_form_item_id=?", Integer.class, item)).isZero();
   }
 }

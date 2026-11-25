@@ -97,6 +97,8 @@ public class ScrapPrice {
   @TableField(updateStrategy = FieldStrategy.ALWAYS)
   private LocalDateTime calculatedAt;
 
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT)
+  private int voided;
   private String importBatchNo;
   private String sourceFileName;
   private String sourceFileSha256;

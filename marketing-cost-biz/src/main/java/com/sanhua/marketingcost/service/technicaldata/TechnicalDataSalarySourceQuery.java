@@ -13,29 +13,21 @@ import com.sanhua.marketingcost.service.costing.CmsSourcePeriod;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** 生效工资与整批发布证据分开查询，空结果不能自行证明 CMS 已核实无资料。 */
+/** 读取当前生效工资，发布信号只用于更新生效表。 */
 @Repository
 public class TechnicalDataSalarySourceQuery {
-  public record Source(List<CmsCostSourceEffective> rows, Long confirmedBatchId) {}
   private final CmsCostSourceEffectiveMapper sources;
-  private final JdbcTemplate jdbc;
-  private final NamedParameterJdbcTemplate namedJdbc;
   private final TechnicalDataSalaryReferenceMapper search;
   private final MaterialMasterRawMapper materials;
   private final OaMessageCodec json;
 
-  public TechnicalDataSalarySourceQuery(CmsCostSourceEffectiveMapper sources, JdbcTemplate jdbc,
+  public TechnicalDataSalarySourceQuery(CmsCostSourceEffectiveMapper sources,
       TechnicalDataSalaryReferenceMapper search, MaterialMasterRawMapper materials, OaMessageCodec json) {
     this.sources = sources;
-    this.jdbc = jdbc;
-    this.namedJdbc = new NamedParameterJdbcTemplate(jdbc);
     this.search = search;
     this.materials = materials;
     this.json = json;
@@ -109,40 +101,7 @@ public class TechnicalDataSalarySourceQuery {
   private static boolean blank(String value) { return value == null || value.isBlank(); }
   private static String materialOrg(QuoteTechTask task) { return MaterialOrganization.fromPriceOrgCode(task.getApplicableOrgCode()).getCode(); }
 
-  public Source read(String productCode, int year, String businessUnit) {
-    var rows = sources.selectSalarySources(year, businessUnit, List.of(productCode));
-    var batches = jdbc.query("""
-        SELECT id,status FROM cms_sync_publish_signal
-         WHERE cost_year=? AND (business_unit_type=? OR business_unit_type IS NULL OR business_unit_type='')
-         ORDER BY id DESC LIMIT 1
-        """, (rs, index) -> "SUCCESS".equals(rs.getString("status")) ? rs.getLong("id") : null,
-        year, businessUnit);
-    Long confirmed = batches.isEmpty() ? null : batches.getFirst();
-    var present = rows.stream().map(CmsCostSourceEffective::getSourceType).toList();
-    if (confirmed != null && !present.contains("SALARY_DIRECT")) {
-      Integer rawCount = namedJdbc.queryForObject("""
-          SELECT COUNT(*) FROM cms_workshop_labor_raw
-           WHERE parent_code=:code AND period IN (:periods) AND business_unit_type=:unit
-          """, Map.of("code", productCode, "periods", CmsSourcePeriod.months(year), "unit", businessUnit), Integer.class);
-      if (rawCount != null && rawCount > 0) confirmed = null;
-    }
-    if (confirmed != null && !present.contains("SALARY_INDIRECT")) {
-      var subjectCodes = jdbc.queryForList("""
-          SELECT DISTINCT TRIM(second_subject_code) FROM cms_subject_setting_raw
-           WHERE TRIM(first_subject_name)='工资' AND TRIM(second_subject_name)='辅助人员工资'
-             AND business_unit_type=? AND NULLIF(TRIM(second_subject_code),'') IS NOT NULL
-          """, String.class, businessUnit);
-      if (subjectCodes.size() != 1) confirmed = null;
-      else {
-        Integer rawCount = namedJdbc.queryForObject("""
-            SELECT COUNT(*) FROM cms_product_subject_cost_raw
-             WHERE parent_code=:code AND period IN (:periods) AND business_unit_type=:unit
-               AND TRIM(second_subject_code)=:subject
-            """, Map.of("code", productCode, "periods", CmsSourcePeriod.months(year), "unit", businessUnit,
-                "subject", subjectCodes.getFirst()), Integer.class);
-        if (rawCount != null && rawCount > 0) confirmed = null;
-      }
-    }
-    return new Source(rows, confirmed);
+  public List<CmsCostSourceEffective> read(String productCode, int year, String businessUnit) {
+    return sources.selectSalarySources(year, businessUnit, List.of(productCode));
   }
 }

@@ -221,6 +221,17 @@ public class PriceLinkedItemController {
         previewFileSha256);
   }
 
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.impl.OriginalLinkedImportService originalLinkedImports;
+
+  @PostMapping("/items/rows/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:linked-item:import')")
+  @OperationLog(module = "联动价格", operationType = OperationType.UPDATE)
+  public CommonResult<Void> voidRow(@PathVariable long id,@RequestParam String businessUnitType) {
+    originalLinkedImports.voidRow(id,businessUnitType);
+    return CommonResult.success(null);
+  }
+
   /** 查询指定月份发布过的公共联动原稿文件，不加载整批规则和日志。 */
   @PreAuthorize("@ss.hasPermi('price:linked-item:import-history:list')"
       + " or @ss.hasPermi('price:linked-item:list') or @ss.hasPermi('price:linked-item:import')")

@@ -45,9 +45,10 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       String effectiveFrom,
       int page,
       int pageSize) {
-    var query = Wrappers.lambdaQuery(PriceRangeItem.class);
-    query.notExists("SELECT 1 FROM lp_price_range_factor_rule draft_rule WHERE draft_rule.id=lp_price_range_item.factor_rule_id"
-        + " AND draft_rule.rule_status IN ('STAGED','NOT_SELECTED')");
+    var query = Wrappers.lambdaQuery(PriceRangeItem.class).apply("row_voided=0");
+    query.and(q -> q.isNull(PriceRangeItem::getFactorRuleId)
+        .or().exists("SELECT 1 FROM lp_price_range_factor_rule p WHERE p.id=lp_price_range_item.factor_rule_id"
+            + " AND p.rule_status NOT IN ('STAGED','NOT_SELECTED','VOIDED') AND " + com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper.NOT_MASKED_BY_WITHDRAWAL));
     if (StringUtils.hasText(materialCode)) {
       query.like(PriceRangeItem::getMaterialCode, materialCode.trim());
     }
@@ -199,6 +200,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       PriceRangeItemImportRequest.PriceRangeItemImportRow row, String businessUnitType) {
     var query =
         Wrappers.lambdaQuery(PriceRangeItem.class)
+            .apply("row_voided=0")
             .eq(PriceRangeItem::getMaterialCode, row.getMaterialCode().trim())
             .eq(PriceRangeItem::getRangeLow, row.getRangeLow())
             .eq(PriceRangeItem::getRangeHigh, row.getRangeHigh())

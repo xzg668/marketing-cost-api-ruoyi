@@ -70,6 +70,28 @@ public class HouseholdInquiryController {
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:download')")
   public ResponseEntity<byte[]> original(@PathVariable long id) { return file(service.original(unit(),id)); }
 
+  @GetMapping("/imports")
+  @PreAuthorize("@ss.hasPermi('price:household-inquiry:import')")
+  public CommonResult<ImportPage> imports(@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) {
+    return CommonResult.success(service.imports(unit(),page,size));
+  }
+
+  @PostMapping("/rows/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:household-inquiry:import')")
+  @OperationLog(module = "家用部件询价", operationType = OperationType.UPDATE)
+  public CommonResult<Void> voidRow(@PathVariable long id,Principal principal) {
+    service.voidRow(unit(),actor(principal),id);
+    return CommonResult.success(null);
+  }
+
+  @PostMapping("/imports/{batchId}/void")
+  @PreAuthorize("@ss.hasPermi('price:household-inquiry:import')")
+  @OperationLog(module="家用部件询价",operationType=OperationType.UPDATE)
+  public CommonResult<Void> voidImport(@PathVariable long batchId,Principal principal) {
+    service.voidImport(unit(),actor(principal),batchId);
+    return CommonResult.success(null);
+  }
+
   @GetMapping("/imports/{batchId}")
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:download')")
   public CommonResult<ImportView> importDetails(@PathVariable long batchId,Principal principal) { return CommonResult.success(service.importDetails(unit(),actor(principal),batchId)); }

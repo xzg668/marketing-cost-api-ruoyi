@@ -15,6 +15,26 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 public class JjbExcelRendererTest {
+  @Test void processingFeeUsesTheRemarksColumnAndKeepsTheSavedRemarkAsComment() throws Exception {
+    var base = model(2, 0, 0);
+    var rows = new ArrayList<>(base.rows());
+    rows.set(0, rows.getFirst().toBuilder().remark("保存的原备注")
+        .processingFee(new JjbReadModel.ProcessingFee("8.5", "元/千克", "含税")).build());
+    var value = new JjbReadModel(base.identity(), base.header(), rows, base.monthlyPrices(), base.totals(), base.warnings());
+    var bytes = new ByteArrayOutputStream();
+    new JjbExcelRenderer().write(value, bytes);
+    try (var book = new XSSFWorkbook(new ByteArrayInputStream(bytes.toByteArray()))) {
+      var sheet = book.getSheetAt(0);
+      assertThat(sheet.getRow(5).getCell(14).getStringCellValue()).isEqualTo("加工费");
+      var fee = sheet.getRow(6).getCell(14);
+      assertThat(fee.getNumericCellValue()).isEqualTo(8.5);
+      assertThat(new DataFormatter(Locale.CHINA).formatCellValue(fee)).isEqualTo("8.5 元/千克（含税）");
+      assertThat(fee.getCellComment().getString().getString()).isEqualTo("保存的原备注");
+      assertThat(sheet.getRow(7).getCell(14).getCellType()).isEqualTo(CellType.BLANK);
+      assertThat(sheet.getRow(6).getCell(6).getNumericCellValue()).isEqualTo(3.086418);
+    }
+  }
+
   @Test void parentChildDisplayMatchesBomWithoutChangingSavedAmountsOrIdentity() throws Exception {
     var base=model(1,0,0);var rows=new ArrayList<>(base.rows());
     rows.set(0,rows.getFirst().toBuilder().displayCode("202445\n【33001】").displayName("母件\n【子件】").build());
@@ -368,13 +388,18 @@ public class JjbExcelRendererTest {
     var h = base.header();
     var header = new JjbReadModel.Header(h.productName(), h.productModel(), h.customerName(),
         h.customerCode(), h.customerDrawing(), h.descriptionBasis(), h.financeCuPrice(), h.customerCuPrice(),
-        h.copperUnit(), h.productProperty(), h.coefficient(), Map.of("businessType", "批量品", "copperPrice", "100000.000000", "customerCuPrice", "100.000000"));
+        h.copperUnit(), h.productProperty(), h.coefficient(), Map.of("businessType", "批量品", "copperPrice", "100000.000000", "customerCuPrice", "105.000000",
+            "zincPrice", "23146.000000", "brassPrice", "58.470000", "brassScrapPrice", "60.996000"));
     try (var wb = render(new JjbReadModel(base.identity(), header, base.rows(), base.monthlyPrices(), base.totals(), base.warnings()))) {
       var s = wb.getSheetAt(0);
       assertThat(wb.getFontAt(s.getRow(3).getCell(7).getCellStyle().getFontIndexAsInt()).getFontHeightInPoints()).isEqualTo((short) 11);
       assertThat(s.getRow(1).getCell(13).getCellComment().getString().getString()).contains("元/吨");
       amount(s.getRow(1).getCell(13), "100000.000000");
-      amount(s.getRow(4).getCell(9), "100.000000");
+      amount(s.getRow(4).getCell(9), "105.000000");
+      amount(s.getRow(2).getCell(13), "23146.000000");
+      amount(s.getRow(3).getCell(11), "58.470000");
+      amount(s.getRow(3).getCell(13), "60.996000");
+      assertThat(find(s, "美国柜装黄铜\n（元/公斤）")).isNotNull();
     }
   }
 

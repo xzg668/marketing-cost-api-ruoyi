@@ -5,12 +5,14 @@ import com.sanhua.marketingcost.dto.costing.ProductFeeCode;
 import com.sanhua.marketingcost.dto.jjb.JjbReadModel;
 import com.sanhua.marketingcost.dto.jjb.JjbReadModel.*;
 import com.sanhua.marketingcost.entity.*;
+import com.sanhua.marketingcost.mapper.FactorUploadBatchMapper;
 import com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.Stored;
 import com.sanhua.marketingcost.service.costing.MonthlyProductCost;
 import com.sanhua.marketingcost.service.costing.ProductFeeContract;
 import java.math.*;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Presentation of saved facts only. No calculator, current price, or current PROFILE dependency. */
@@ -18,9 +20,16 @@ import org.springframework.stereotype.Component;
 public class JjbProjection {
   private final ObjectMapper json;
   private final JjbRecoveryPresentation recoveries;
+  private final JjbProcessingFees processingFees;
   public JjbProjection(ObjectMapper json) {
+    this(json, null);
+  }
+
+  @Autowired
+  public JjbProjection(ObjectMapper json, FactorUploadBatchMapper linkedArchives) {
     this.json = json.copy().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
     this.recoveries = new JjbRecoveryPresentation(this.json);
+    this.processingFees = new JjbProcessingFees(this.json, linkedArchives);
   }
 
   private static String savedProductProperty(List<CostRunCostItem> adjustments) {
@@ -73,8 +82,8 @@ public class JjbProjection {
       }
     } else for (var part : stored.parts()) rows.add(part(part).build());
 
-    rows = manufacturingDetails(rows, preparations);
-    rows = explainSavedChildren(rows, traces);
+    rows = manufacturingDetails(rows, preparations, processingFees);
+    rows = explainSavedChildren(rows, traces, processingFees);
     if (calc != null) for (var line : calc.ordinaryInputs().materials()) if (line.explanationOf() != null) {
       rows.add(Row.builder().key("EXPLANATION:"+line.path()).section("ORDINARY_PARTS").kind("EXPLANATION")
           .code(line.materialCode()).name("基础料件说明").quantity(decimal(line.quantity())).amount(money(line.financeAmount()))
@@ -234,10 +243,11 @@ public class JjbProjection {
     String[] metalKeys = {"sus316lPrice","sus304Price","copperPrice","aluminumPrice","zincPrice","steelPrice","silverPrice","goldPrice"};
     for (int i=0;i<metals.length;i++) if (metals[i] != null) quotation.put(metalKeys[i],money(metals[i]));
     if (form.getCopperPrice() != null) quotation.put("customerCuPrice",money(form.getCopperPrice().movePointLeft(3)));
+    if (snapshot != null) new JjbMaterialBasePrices(json).apply(quotation, snapshot.priceScenarios(), warnings);
     var header = new Header(item.getProductName(),item.getSunlModel(),form.getCustomer(),item.getCustomerCode(),item.getCustomerDrawing(),
-        "报价信息取报价需求单；裸品码取同组织U9料品档案；核算金额、费率及财务Cu取所选保存版本",
+        "表头铜锌及两项黄铜按本版本客户Cu对应的财务影响因素档展示；公式实际代入值见保存明细；报价信息取报价需求单；裸品码取同组织U9料品档案；核算金额、费率及财务Cu取所选保存版本",
         money(v.getFinanceCuPrice()),money(v.getOaCuPrice()),"元/公斤",property,coefficient,quotation,bareCode);
-    rows = new JjbPricePresentation(json).apply(rows, calc, preparations);
+    rows = new JjbPricePresentation(json).apply(rows, calc, preparations, traces, processingFees);
     var order = new JjbBomOrder(snapshot == null || snapshot.pricingBom() == null
         ? List.of() : snapshot.pricingBom().nodes());
     rows = order.apply(rows);
@@ -252,7 +262,8 @@ public class JjbProjection {
   }
 
   /** Monthly costs already captured MAKE rows, even when no legacy trace rows were generated. */
-  private ArrayList<Row> manufacturingDetails(List<Row> rows,List<PricePrepareItem> preparations) {
+  private ArrayList<Row> manufacturingDetails(List<Row> rows, List<PricePrepareItem> preparations,
+      JjbProcessingFees processingFees) {
     var byId=new HashMap<Long,PricePrepareItem>();
     preparations.forEach(row->byId.put(row.getId(),row));
     var result=new ArrayList<Row>();
@@ -288,7 +299,7 @@ public class JjbProjection {
       row=row.toBuilder().manufacturing(manufacturing).build();
       if(children.size()==1) {
         var child=children.get(0);
-        result.add(weights(row.toBuilder(),child)
+        result.add(weights(row.toBuilder(),child).processingFee(rawProcessingFee(child, processingFees))
             .displayCode(parentChild(row.code(),text(child,"childMaterialNo")))
             .displayName(parentChild(first(row.name(),row.code()),first(text(child,"childMaterialName"),text(child,"childMaterialNo")))).build());
       } else {
@@ -296,6 +307,7 @@ public class JjbProjection {
         for(var child:children) {
           String code=text(child,"childMaterialNo");if(code==null)continue;
           result.add(weights(Row.builder(),child).key(row.key()+":MAKE:"+(++index))
+              .processingFee(rawProcessingFee(child, processingFees))
               .manufacturing(List.of(JjbManufacturingEvidence.describe(child)))
               .section("ORDINARY_PARTS").kind("EXPLANATION").code(row.code()+"\n【"+code+"】")
               .name(parentChild(first(row.name(),row.code()),first(text(child,"childMaterialName"),code))).drawingNo(text(child,"childMaterialSpec"))
@@ -310,6 +322,10 @@ public class JjbProjection {
   private Row.RowBuilder weights(Row.RowBuilder row,JsonNode saved) {
     return row.grossWeight(decimalNumber(saved,"grossWeightG")).netWeight(decimalNumber(saved,"netWeightG"))
         .rawUnitPrice(number(saved,"rawUnitPrice")).scrapUnitPrice(number(saved,"scrapUnitPrice"));
+  }
+
+  private static ProcessingFee rawProcessingFee(JsonNode detail, JjbProcessingFees processingFees) {
+    return processingFees.fromPreparation(detail.path("rawInputSnapshotJson"), text(detail, "childMaterialNo"));
   }
 
   /** 包装母件是取价依据，包装费才是含系数后的材料贡献；读取保存依据，不重算历史。 */
@@ -375,7 +391,8 @@ public class JjbProjection {
   }
 
   /** Old rollup/raw details are explanations from immutable trace JSON, never today's BOM. */
-  private ArrayList<Row> explainSavedChildren(List<Row> rows, List<CostRunTraceSnapshot> traces) {
+  private ArrayList<Row> explainSavedChildren(List<Row> rows, List<CostRunTraceSnapshot> traces,
+      JjbProcessingFees processingFees) {
     var byPart = new HashMap<Long, CostRunTraceSnapshot>();
     for (var trace : traces) if (trace.getPartItemId()!=null) byPart.putIfAbsent(trace.getPartItemId(), trace);
     var result = new ArrayList<Row>();
@@ -399,6 +416,7 @@ public class JjbProjection {
             .quantity(rollup?text(child,"childQtyPerTop"):null)
             .grossWeight(decimalNumber(child,"grossWeightG")).netWeight(decimalNumber(child,"netWeightG"))
             .manufacturing(rollup ? List.of() : List.of(JjbManufacturingEvidence.describe(child)))
+            .processingFee(rollup ? null : rawProcessingFee(child, processingFees))
             .rawUnitPrice(number(child,"rawUnitPrice")).scrapUnitPrice(number(child,"scrapUnitPrice"))
             .priceSource(text(child,rollup?"childRawPriceType":"rawPriceType"))
             .partItemIds(row.partItemIds()).sources(List.of(new Source("lp_cost_run_trace_snapshot",trace.getId(),"保存的母件／子件依据")))
@@ -457,24 +475,17 @@ public class JjbProjection {
         var customer = tree(pair.customerEvidenceJson());
         var bands = new LinkedHashSet<String>(); var factors = new LinkedHashSet<String>();
         for (var context : customer.path("customerFactorContexts")) {
-          bands.add(context.path("customerBand").path("schemeCode").asText());
+          var inputs = json.convertValue(context, com.sanhua.marketingcost.service.pricing.PriceFactorContext.class);
+          if (inputs.customerBand() != null) bands.add(inputs.customerBand().schemeCode());
           context.path("financial").path("factors").fields().forEachRemaining(entry -> {
             String key = entry.getKey(); var base = entry.getValue();
-            boolean byBand = com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.usesCopperBand(key);
-            var selectedFactor = byBand ? context.path("customerBand").path("factors").path(key) : base;
-            String value = selectedFactor.path("price").asText();
-            var explicit = switch (com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.canonicalKey(key)) {
-              case "AVG|1#CU" -> customer.path("customerMaterialPrices").path("copper");
-              case "AVG|1#ZN" -> customer.path("customerMaterialPrices").path("zinc");
-              case "AVG|1#AG" -> customer.path("customerMaterialPrices").path("silver");
-              case "AVG|1#SN" -> customer.path("customerMaterialPrices").path("tin");
-              default -> json.nullNode();
-            };
-            if (!explicit.isMissingNode() && !explicit.isNull()) value = decimal(
-                com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_TON.convert(new BigDecimal(explicit.asText()),
-                    com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(base.path("unit").asText())));
+            String source = inputs.inputSource(key);
+            if ("FINANCE_CU_BAND".equals(source) && !inputs.customerBand().factors().containsKey(key)) return;
+            var unit = com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(base.path("unit").asText());
+            String value = decimal(inputs.requiredPrice(key, unit, true));
             if (!value.isBlank()) factors.add(base.path("factorName").asText(key) + "：" + base.path("price").asText()
-                + " → " + value + " " + base.path("unit").asText() + (explicit.isMissingNode() || explicit.isNull() ? byBand ? "（按Cu档）" : "（基准因素）" : "（需求单填写）"));
+                + " → " + value + " " + base.path("unit").asText() + ("FINANCE_CU_BAND".equals(source)
+                    ? "（按Cu档）" : "FINANCE_FACTOR".equals(source) ? "（基准因素）" : "（需求单填写）"));
           });
         }
         if (!bands.isEmpty()) {

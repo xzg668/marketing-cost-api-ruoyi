@@ -57,10 +57,14 @@ public class HouseholdInquiryStorage {
   }
 
   public List<HouseholdInquiryPriceRow> currentByKeys(String unit,Collection<String> materials) {
+    return currentByKeys(unit,materials,false);
+  }
+
+  public List<HouseholdInquiryPriceRow> currentByKeys(String unit,Collection<String> materials,boolean includeVoided) {
     MonthlyPriceStorage.requireBusinessUnit(unit);
     var unique=new ArrayList<>(new LinkedHashSet<>(materials)); var result=new ArrayList<HouseholdInquiryPriceRow>();
     for (int start=0;start<unique.size();start+=256) {
-      mapper.current(unit,unique.subList(start,Math.min(start+256,unique.size()))).forEach(row -> result.add(decode(row)));
+      mapper.current(unit,unique.subList(start,Math.min(start+256,unique.size())),includeVoided).forEach(row -> result.add(decode(row)));
     }
     return List.copyOf(result);
   }

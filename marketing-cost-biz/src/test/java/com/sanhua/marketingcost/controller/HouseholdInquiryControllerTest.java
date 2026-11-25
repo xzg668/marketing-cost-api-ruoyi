@@ -38,6 +38,16 @@ class HouseholdInquiryControllerTest {
     mvc.perform(post(BASE+"/import-publish").contentType(MediaType.APPLICATION_JSON).content("{\"previewId\":\"a\",\"publishRequestId\":\"b\",\"previewFingerprint\":\"c\"}").principal(auth)).andExpect(status().isForbidden());
     mvc.perform(post(BASE+"/import-previews/a/cancel").principal(auth)).andExpect(status().isForbidden());verifyNoInteractions(service);
   }
+  @Test void importHistoryAndWithdrawalUseAuthenticatedScopeAndImportPermission() throws Exception {
+    var reader=login("price:household-inquiry:list");
+    mvc.perform(get(BASE+"/imports").principal(reader)).andExpect(status().isForbidden());
+    mvc.perform(post(BASE+"/imports/12/void").principal(reader)).andExpect(status().isForbidden());
+    verifyNoInteractions(service);
+    var finance=login("price:household-inquiry:import");
+    mvc.perform(post(BASE+"/imports/12/void").param("businessUnitType","HOUSEHOLD").principal(finance))
+        .andExpect(status().isOk());
+    verify(service).voidImport("COMMERCIAL","finance",12);
+  }
   @Test void ordinaryQueryPermissionCannotReadFinancialReferencesOrOriginalBytes() throws Exception {
     var auth=login("price:household-inquiry:query");
     mvc.perform(get(BASE+"/12/financial-reference").principal(auth)).andExpect(status().isForbidden());mvc.perform(get(BASE+"/12/original").principal(auth)).andExpect(status().isForbidden());verifyNoInteractions(service);
@@ -87,6 +97,9 @@ class HouseholdInquiryControllerTest {
     mvc.perform(get(BASE+"/12/original").principal(auth)).andExpect(status().isOk()).andExpect(content().bytes(original)).andExpect(header().string("X-File-SHA256","a".repeat(64))).andExpect(header().string("Content-Disposition",org.hamcrest.Matchers.containsString("attachment")));
   }
   @Configuration @EnableMethodSecurity static class Config {
+    @Bean com.sanhua.marketingcost.service.pricing.monthly.VoidedSourceMonthlyPrices voidedPrices() {
+      return mock(com.sanhua.marketingcost.service.pricing.monthly.VoidedSourceMonthlyPrices.class);
+    }
     @Bean("ss") PermissionService permissions(){return new PermissionService();}
     @Bean HouseholdInquiryService service(){return mock(HouseholdInquiryService.class);}
     @Bean HouseholdInquiryController controller(HouseholdInquiryService service){return new HouseholdInquiryController(service);}

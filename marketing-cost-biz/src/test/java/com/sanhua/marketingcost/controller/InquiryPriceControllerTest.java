@@ -22,7 +22,7 @@ class InquiryPriceControllerTest {
     when(service.original(any(), eq(7L)))
         .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "询价导入记录不存在"));
     var mvc =
-        MockMvcBuilders.standaloneSetup(new InquiryPriceController(service))
+        MockMvcBuilders.standaloneSetup(new InquiryPriceController(service, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.inquiry.InquiryImportVoidService.class)))
             .setControllerAdvice(new GlobalExceptionHandler())
             .build();
     for (String suffix : new String[] {"", "/original"})

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.*;
 
 import com.baomidou.mybatisplus.core.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.db.PriceWithdrawalTestSchema;
 import com.sanhua.marketingcost.dto.FinanceFactorImportContext;
 import com.sanhua.marketingcost.mapper.*;
 import com.sanhua.marketingcost.service.financefactor.*;
@@ -51,7 +52,7 @@ public final class InquiryDatabaseTestSupport implements AutoCloseable {
             "V330__scrap_price_monthly.sql",
             "V332__settlement_price_versions.sql",
             "V341__settlement_effective_price.sql",
-            "V356__inquiry_price_sources.sql")) {
+            "V356__inquiry_price_sources.sql", "V394__inquiry_import_void.sql")) {
       mysql.copyFileToContainer(
           MountableFile.forClasspathResource("db/" + script), "/tmp/inquiry-schema.sql");
       var result =
@@ -65,6 +66,7 @@ public final class InquiryDatabaseTestSupport implements AutoCloseable {
     var data =
         new DriverManagerDataSource(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword());
     jdbc = new JdbcTemplate(data);
+    PriceWithdrawalTestSchema.apply(jdbc, "lp_factor_upload_batch", "lp_scrap_price");
     manager = new DataSourceTransactionManager(data);
     assertThat(jdbc.queryForObject("SELECT @@version", String.class))
         .startsWith(System.getProperty("mpp.mysql.expected-version", "8.4"));

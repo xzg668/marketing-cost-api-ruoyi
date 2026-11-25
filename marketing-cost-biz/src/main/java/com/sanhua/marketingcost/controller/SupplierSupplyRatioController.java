@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.dto.SupplierSupplyRatioChangePage;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioUpdateRequest;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
 import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioEditService;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioVoidService;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioImportService;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioService;
@@ -33,13 +34,16 @@ public class SupplierSupplyRatioController {
   private final SupplierSupplyRatioService service;
   private final SupplierSupplyRatioImportService importService;
   private final SupplierSupplyRatioEditService editService;
+  private final SupplierSupplyRatioVoidService voidService;
 
   public SupplierSupplyRatioController(
       SupplierSupplyRatioService service,
-      SupplierSupplyRatioImportService importService, SupplierSupplyRatioEditService editService) {
+      SupplierSupplyRatioImportService importService, SupplierSupplyRatioEditService editService,
+      SupplierSupplyRatioVoidService voidService) {
     this.service = service;
     this.importService = importService;
     this.editService = editService;
+    this.voidService = voidService;
   }
 
   @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:import')")
@@ -118,6 +122,58 @@ public class SupplierSupplyRatioController {
       @RequestParam(defaultValue="20") int pageSize) {
     return CommonResult.success(service.changes(materialCode,supplierCode,batchNo,page,pageSize,
         resolveBusinessUnitType(businessUnitType)));
+  }
+
+  @GetMapping("/import-batches")
+  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:list')")
+  public CommonResult<SupplierSupplyRatioVoidService.Page> importBatches(
+      @RequestParam(required = false) String businessUnitType,
+      @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int pageSize) {
+    try {
+      return CommonResult.success(voidService.list(businessUnitType, page, pageSize));
+    } catch (IllegalArgumentException ex) {
+      return badRequest(ex);
+    }
+  }
+
+  public record BatchVoidRequest(String businessUnitType, int expectedActiveRows) {}
+  public record GroupVoidRequest(java.util.List<Long> expectedIds) {}
+
+  @GetMapping("/material-groups")
+  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:import')")
+  public CommonResult<java.util.List<SupplierSupplyRatioVoidService.Group>> groupChoices(
+      @RequestParam(required=false) String materialCode,@RequestParam(required=false) String specModel) {
+    try { return CommonResult.success(voidService.groups(null,materialCode,specModel)); }
+    catch (IllegalArgumentException error) { return badRequest(error); }
+  }
+
+  @GetMapping("/material-groups/{materialCode}")
+  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:import')")
+  public CommonResult<java.util.List<SupplierSupplyRatio>> group(@PathVariable String materialCode) {
+    try { return CommonResult.success(voidService.group(null,materialCode)); }
+    catch (IllegalArgumentException error) { return badRequest(error); }
+  }
+
+  @PostMapping("/material-groups/{materialCode}/void")
+  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:import')")
+  public CommonResult<SupplierSupplyRatioVoidService.Result> voidGroup(@PathVariable String materialCode,
+      @RequestBody GroupVoidRequest request,Authentication authentication) {
+    try {
+      return CommonResult.success(voidService.voidGroup(null,materialCode,request.expectedIds(),currentUsername(authentication)));
+    } catch (IllegalArgumentException error) { return badRequest(error); }
+  }
+
+  @PostMapping("/import-batches/{batchNo}/void")
+  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:import')")
+  public CommonResult<SupplierSupplyRatioVoidService.Result> voidBatch(
+      @PathVariable String batchNo, @RequestBody BatchVoidRequest request,
+      Authentication authentication) {
+    try {
+      return CommonResult.success(voidService.voidBatch(request.businessUnitType(), batchNo,
+          request.expectedActiveRows(), currentUsername(authentication)));
+    } catch (IllegalArgumentException ex) {
+      return badRequest(ex);
+    }
   }
 
   private String resolveBusinessUnitType(String businessUnitType) {

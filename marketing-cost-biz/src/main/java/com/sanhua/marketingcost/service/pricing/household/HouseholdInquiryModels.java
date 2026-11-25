@@ -35,10 +35,18 @@ public final class HouseholdInquiryModels {
     public PublishResult { rows=List.copyOf(rows); }
   }
   public record ImportView(Preview preview,PublishResult publication,String createdBy,java.time.LocalDateTime publishedAt) {}
+  public record ImportPage(List<Map<String,Object>> rows,long total) {}
   public record StoredEvidence(SourceRow source,PriceContext priceContext,String sourceMonth) {}
   public record PriceView(long id,String materialCode,String materialName,String specification,int revisionNo,
       boolean current,String unitPrice,String householdRate,String sourceMonth,PriceContext priceContext,
-      long importBatchId,java.time.LocalDateTime createdAt,List<Integer> sourceRows) {}
+      long importBatchId,java.time.LocalDateTime createdAt,List<Integer> sourceRows,boolean voided) {
+    public PriceView(long id,String materialCode,String materialName,String specification,int revisionNo,boolean current,
+        String unitPrice,String householdRate,String sourceMonth,PriceContext priceContext,long importBatchId,
+        java.time.LocalDateTime createdAt,List<Integer> sourceRows) {
+      this(id,materialCode,materialName,specification,revisionNo,current,unitPrice,householdRate,sourceMonth,priceContext,
+          importBatchId,createdAt,sourceRows,false);
+    }
+  }
   public record PricePage(List<PriceView> rows,long total,int page,int size) { public PricePage { rows=List.copyOf(rows); } }
   public record FinancialView(PriceView price,StoredEvidence evidence,String fileName,String fileSha256) {}
   public record OriginalFile(String fileName,String sha256,byte[] bytes) {}

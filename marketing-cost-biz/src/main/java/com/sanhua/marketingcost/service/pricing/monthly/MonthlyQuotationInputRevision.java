@@ -84,9 +84,14 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
         extraFields.selectAnnualVolumeUnit(item.getId())).piecesIfKnown() : null;
     var canonical = new TreeSet<String>();
     if (quantityRevision != null) canonical.add(quantityRevision);
-    if (!CustomerMaterialPrices.fromQuotation(form).isEmpty()
+    var customer = CustomerMaterialPrices.fromQuotation(form);
+    if (!customer.isEmpty()
         && saved.values().stream().anyMatch(this::mayNeedQuotationBinding))
       canonical.add(OriginalLinkedPublicationSource.QUOTATION_FACTOR_REVISION);
+    if ((customer.copper() != null || customer.zinc() != null)
+        && saved.values().stream().anyMatch(price -> appliesHouseholdDemandPolicy(price, customer))) {
+      canonical.add(HouseholdMetalCalculation.DEMAND_PRICE_POLICY);
+    }
     var unresolved = new TreeSet<String>();
     var suppressed = new HashSet<String>();
     var boundNodes = new HashSet<String>();
@@ -166,6 +171,14 @@ public final class MonthlyQuotationInputRevision implements QuotationMonthlyPric
   private static Scope unprepared(String quantityRevision) {
     return quantityRevision == null ? Scope.unprepared()
         : new Scope("UNPREPARED:" + quantityRevision, Set.of(), Set.of(), false);
+  }
+
+  private boolean appliesHouseholdDemandPolicy(MonthlyAdoptionPlan.Selection selection, CustomerMaterialPrices customer) {
+    if (selection.fact().type() != MonthlyAdoptionPlan.PricingType.HOUSEHOLD_INQUIRY) return false;
+    var evidence = codec.decode(codec.wrap(selection.fact().evidence().json()), JsonNode.class).path("metalInputs");
+    // A supplied Cu could also have selected Zn from a band under the previous policy.
+    return customer.copper() != null && evidence.path("copperGrams").decimalValue().signum() != 0
+        || evidence.path("zincGrams").decimalValue().signum() != 0;
   }
 
   private boolean mayNeedQuotationBinding(MonthlyAdoptionPlan.Selection selection) {

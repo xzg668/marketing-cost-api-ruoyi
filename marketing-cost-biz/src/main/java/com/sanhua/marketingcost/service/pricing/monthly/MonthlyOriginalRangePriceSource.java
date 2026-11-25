@@ -85,7 +85,7 @@ public final class MonthlyOriginalRangePriceSource {
                   : identity;
             }, OriginalRuleGroups::revision);
             // Historical expression versions do not invalidate the selected latest revision.
-            if(heads.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"原稿没有符合本次料号和指定供应商的价格"));continue;}
+            if(heads.stream().allMatch(row->"VOIDED".equals(row.getRuleStatus()))){problems.put(request,new Problem(Failure.MISSING,"原稿没有符合本次料号和指定供应商的价格"));continue;}
             var applicable=heads.stream().filter(OriginalRangeRuleSnapshot::isOriginal).toList();
             if(applicable.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"没有已发布原稿区间价"));continue;}
             if(!"CNY".equals(request.family().currency()) || request.family().taxBasis()!=TaxBasis.EXCLUDED){
@@ -109,8 +109,23 @@ public final class MonthlyOriginalRangePriceSource {
             });
             if(publication.error()!=null)throw publication.error();
             var prices=new LinkedHashMap<String,FinanceEffectivePrice>();boolean missing=false;
-            for(var row:applicable){var saved=publication.prices().get(row.getId());var identity=FinanceEffectivePriceService.SourceRule.range(row);if(saved==null || !identity.fingerprint().equals(saved.getRuleFingerprint()) || !Objects.equals(identity.revision(),saved.getOriginalRevision())){missing=true;break;}effective.require(identity,publication.prices());if(saved.getUnitPrice()==null || saved.getInputFingerprint()==null)throw new IllegalArgumentException("已发布联动价缺少金额或依据身份");prices.put(saved.getInputFingerprint(),saved);}
+            var activeRules=new ArrayList<PriceRangeFactorRule>();
+            for(var row:applicable) {
+              var saved=publication.prices().get(row.getId());
+              var identity=FinanceEffectivePriceService.SourceRule.range(row);
+              if(saved==null || !identity.fingerprint().equals(saved.getRuleFingerprint())
+                  || !Objects.equals(identity.revision(),saved.getOriginalRevision())) { missing=true; break; }
+              effective.require(identity,publication.prices());
+              if(saved.getUnitPrice()==null || saved.getInputFingerprint()==null)
+                throw new IllegalArgumentException("已发布区间价缺少金额或依据身份");
+              if(!OriginalRangePriceRuntime.hasBand(bands.getOrDefault(row.getId(),List.of()),effective.calculation(saved).range()))
+                continue;
+              prices.put(saved.getInputFingerprint(),saved);
+              activeRules.add(row);
+            }
             if(missing){problems.put(request,new Problem(Failure.WAITING,"原稿/财务发布的完整联动有效价尚未就绪"));continue;}
+            if(activeRules.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"当前行情命中的区间价格已失效"));continue;}
+            applicable=List.copyOf(activeRules);
             var candidatePrices=prices.values().stream().map(row->new SupplierPriceCandidate(row.getInputFingerprint(),row.getSupplierCode(),row.getSupplierName(),row.getUnitPrice(),null,null)).toList();
             var scope=scope(context,request.priceOrgCode(),code);var actualRatios=ratios.getOrDefault(code,List.of());var chosen=suppliers.selectPrepared(scope,candidatePrices,actualRatios,decisions.get(SupplierPriceSelectionService.scopeKey(scope)),context.supplierReviews().packagingHighestFallback());
             if(chosen.review()!=null)context.supplierReviews().forOrganization(request.priceOrgCode()).add(chosen.review());

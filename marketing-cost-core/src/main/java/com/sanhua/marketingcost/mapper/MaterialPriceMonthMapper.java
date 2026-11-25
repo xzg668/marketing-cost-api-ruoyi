@@ -18,7 +18,7 @@ public interface MaterialPriceMonthMapper {
         UNION ALL
         SELECT pricing_month FROM lp_price_range_factor_rule FORCE INDEX (idx_range_scope_month)
         WHERE business_unit_type=#{businessUnit} AND COALESCE(org_code,'')=#{orgCode}
-          AND rule_status IN ('LEGACY','PUBLISHED') AND pricing_month<=#{requestedMonth}
+          AND rule_status IN ('LEGACY','PUBLISHED','VOIDED') AND pricing_month<=#{requestedMonth}
       ) available_months
       """)
   String findLatestMonth(

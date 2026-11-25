@@ -29,6 +29,32 @@ class HouseholdMetalCalculationTest {
     var missing=HouseholdMetalCalculation.calculate(d("18.9343"),inputs(),CustomerMaterialPrices.copperAndZinc(null,null));
     assertThat(missing.copperFromCustomer()).isFalse();assertThat(missing.zincFromCustomer()).isFalse();
   }
+  @Test void coilUsesDemandCuAndZnEvenWhenSalesPriceIsFixed() {
+    var base = finance("2026-11", "90", "20.8310629161179");
+    var coil = new HouseholdMetalCalculation.Inputs(d("72.2"), d("1.3"), base);
+    for (String mode : List.of("固定", "销售价格固定", "联动", "")) {
+      var demand = new CustomerMaterialPrices(d("120000"), d("27775"), null, null, null, null, mode);
+      var result = HouseholdMetalCalculation.calculate(d("17.8903"), coil, demand);
+      assertThat(result.calculatedW()).as(mode).isEqualByComparingTo("19.815102759477032504");
+      assertThat(result.customerCopper()).isEqualByComparingTo("120");
+      assertThat(result.customerZinc()).isEqualByComparingTo("27.775");
+      assertThat(result.copperFromCustomer()).isTrue();
+      assertThat(result.zincFromCustomer()).isTrue();
+    }
+  }
+
+  @Test void missingDemandZincUsesBaseEvenWhenTheCopperBandContainsZinc() {
+    var base = finance("2026-11", "90", "22");
+    var market = finance("2026-11", "120", "27.775");
+    var bands = List.of(new FactorPriceSnapshot.CuBand("CU_120000", d("120000"), market.financial().factors()));
+    var input = new HouseholdMetalCalculation.Inputs(d("72.2"), d("1.3"),
+        base.withFinancialSnapshot(base.financial().withCuBands(bands)));
+    var demand = new CustomerMaterialPrices(d("120000"), null, null, null, null, null, "联动");
+    var result = HouseholdMetalCalculation.calculate(d("17.8903"), input, demand);
+    assertThat(result.customerZinc()).isEqualByComparingTo("22");
+    assertThat(result.zincDifference()).isZero();
+    assertThat(result.zincFromCustomer()).isFalse();
+  }
   @Test void eachMissingMetalFallsBackIndependentlyAndNegativeDifferencesSurvive() {
     var cu=HouseholdMetalCalculation.calculate(d("18.9343"),inputs(),CustomerMaterialPrices.copperAndZinc(d("80000"),null));
     assertThat(cu.calculatedW()).isEqualByComparingTo("18.426335398230088496");assertThat(cu.zincDifference()).isZero();

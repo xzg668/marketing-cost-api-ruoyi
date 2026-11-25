@@ -35,11 +35,27 @@ public class InvoicePriceController {
     return CommonResult.success(service.current(unit(),orgCode,materialCode,page,size,model));
   }
   @GetMapping("/history")
-  @PreAuthorize("@ss.hasPermi('price:invoice:query')")
+  @PreAuthorize("@ss.hasPermi('price:invoice:query') || @ss.hasPermi('price:invoice:import')")
   public CommonResult<InvoicePriceService.Page> history(@RequestParam String orgCode,@RequestParam(required=false) String materialCode,
       @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) {
     return CommonResult.success(service.history(unit(),orgCode,materialCode,page,size));
   }
+  @PostMapping("/rows/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:invoice:import')")
+  @OperationLog(module="发票价格",operationType=OperationType.UPDATE)
+  public CommonResult<Void> voidRow(@PathVariable long id,@RequestParam String orgCode,@RequestParam long batchId) {
+    service.voidRow(unit(),orgCode,id,batchId);
+    return CommonResult.success(null);
+  }
+
+  @PostMapping("/imports/{id}/void")
+  @PreAuthorize("@ss.hasPermi('price:invoice:import')")
+  @OperationLog(module="发票价格",operationType=OperationType.UPDATE)
+  public CommonResult<Void> voidImport(@PathVariable long id,@RequestParam String orgCode,Principal principal) {
+    service.voidImport(unit(),orgCode,id,principal.getName());
+    return CommonResult.success(null);
+  }
+
   @GetMapping("/imports/{id}")
   @PreAuthorize("@ss.hasPermi('price:invoice:query')")
   public CommonResult<List<InvoiceWorkbookParser.Price>> batch(@PathVariable long id) { return CommonResult.success(service.batchRows(unit(),id)); }

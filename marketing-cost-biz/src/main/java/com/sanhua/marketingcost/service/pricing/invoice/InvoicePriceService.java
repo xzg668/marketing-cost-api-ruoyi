@@ -5,7 +5,9 @@ import com.sanhua.marketingcost.service.pricing.PriceModelSearch;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -16,6 +18,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 public final class InvoicePriceService {
   @org.springframework.beans.factory.annotation.Autowired(required=false)
   private com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState pendingState;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.pricing.monthly.VoidedSourceMonthlyPrices monthlyPrices;
 
   public record Published(long batchId, int rows, int duplicates, String fileName) {}
   public record Page(List<Map<String,Object>> records, long total) {}
@@ -46,10 +51,12 @@ public final class InvoicePriceService {
   private Published store(String unit, String org, String actor, String requestId, String name, byte[] bytes,
       String hash, InvoiceWorkbookParser.Parsed parsed) {
     // Lock the business-unit range before assigning a batch ID, so successful imports have a total order.
-    jdbc.queryForList("SELECT id FROM lp_invoice_import_batch FORCE INDEX (idx_invoice_import_scope) WHERE business_unit_type=? ORDER BY org_code,id FOR UPDATE", unit);
+    lockImports(unit);
     var replay = jdbc.queryForList("SELECT * FROM lp_invoice_import_batch WHERE business_unit_type=? AND request_id=?", unit,requestId);
     if (!replay.isEmpty()) {
       var saved = replay.getFirst();
+      if (saved.get("voided_at") != null)
+        throw new IllegalArgumentException("该导入批次已失效，请重新选择文件发起导入");
       if (!org.equals(saved.get("org_code")) || !hash.equals(saved.get("file_hash")) || !actor.equals(saved.get("created_by")))
         throw new IllegalArgumentException("导入请求已用于不同文件、组织或账号");
       return new Published(((Number)saved.get("id")).longValue(),((Number)saved.get("row_count")).intValue(),
@@ -72,7 +79,8 @@ public final class InvoicePriceService {
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE supplier_name=VALUES(supplier_name),
           material_name=VALUES(material_name),specification=VALUES(specification),pricing_unit=VALUES(pricing_unit),
           unit_price=VALUES(unit_price),currency=VALUES(currency),voucher_no=VALUES(voucher_no),business_type=VALUES(business_type),
-          document_type=VALUES(document_type),price_type=VALUES(price_type),sheet_name=VALUES(sheet_name),source_row=VALUES(source_row),batch_id=VALUES(batch_id)
+          document_type=VALUES(document_type),price_type=VALUES(price_type),sheet_name=VALUES(sheet_name),source_row=VALUES(source_row),batch_id=VALUES(batch_id),
+          row_voided=0
         """;
     var arguments = parsed.rows().stream().map(p -> new Object[]{unit,org,p.materialCode(),p.documentNo(),p.supplierCode(),p.supplierName(),
         p.materialName(),p.specification(),p.unit(),p.unitPrice(),p.currency(),p.voucherNo(),p.businessType(),p.documentType(),p.priceType(),p.sheetName(),p.sourceRow(),batchId}).toList();
@@ -81,18 +89,57 @@ public final class InvoicePriceService {
     return new Published(batchId,parsed.rows().size(),parsed.duplicateCount(),name);
   }
 
+  private void lockImports(String unit) {
+    jdbc.queryForList("SELECT id FROM lp_invoice_import_batch FORCE INDEX (idx_invoice_import_scope) WHERE business_unit_type=? ORDER BY org_code,id FOR UPDATE", unit);
+  }
+
+  public void voidRow(String unit,String org,long id,long expectedBatch) {
+    scope(unit,org);
+    transaction.executeWithoutResult(status->{
+      lockImports(unit);
+      var rows=jdbc.queryForList("""
+          SELECT p.batch_id,p.row_voided,p.material_code,b.voided_at FROM lp_invoice_price p
+          JOIN lp_invoice_import_batch b ON b.id=p.batch_id WHERE p.business_unit_type=? AND p.org_code=? AND p.id=?
+          """,unit,org,id);
+      if(rows.isEmpty() || ((Number)rows.getFirst().get("batch_id")).longValue()!=expectedBatch)
+        throw new ResponseStatusException(HttpStatus.CONFLICT,"发票价格已更新，请刷新后重试");
+      var row=rows.getFirst();
+      if(((Number)row.get("row_voided")).intValue()==1 || row.get("voided_at")!=null)return;
+      jdbc.update("UPDATE lp_invoice_price SET row_voided=1 WHERE id=?",id);
+      monthlyPrices.invoiceRow(unit,id,expectedBatch);
+      if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(
+          Set.of("PRICE"),unit,Set.of(row.get("material_code").toString()),Set.of()));
+    });
+  }
+
+  public void voidImport(String unit,String org,long id,String actor) {
+    scope(unit,org);
+    if (actor==null || actor.isBlank() || actor.length()>64) throw new IllegalArgumentException("缺少有效操作人");
+    transaction.executeWithoutResult(status->{
+      lockImports(unit);
+      var rows=jdbc.queryForList("SELECT voided_at FROM lp_invoice_import_batch WHERE business_unit_type=? AND org_code=? AND id=?",unit,org,id);
+      if(rows.isEmpty()) throw new ResponseStatusException(
+          HttpStatus.NOT_FOUND,"发票导入记录不存在");
+      if(rows.getFirst().get("voided_at")!=null)return;
+      jdbc.update("UPDATE lp_invoice_import_batch SET voided_by=?,voided_at=CURRENT_TIMESTAMP(6) WHERE id=?",actor,id);
+      monthlyPrices.invoice(unit,id);
+      if(pendingState!=null) pendingState.changed(new com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.Change(
+          Set.of("PRICE"),unit,Set.copyOf(jdbc.queryForList("SELECT DISTINCT material_code FROM lp_invoice_price WHERE batch_id=?",String.class,id)),Set.of()));
+    });
+  }
+
   public Page current(String unit,String org,String material,int page,int size) {
     return current(unit, org, material, page, size, null);
   }
 
   public Page current(String unit,String org,String material,int page,int size,String model) {
     scope(unit,org); pagination(page,size); material = material(material);
-    String where = "p.business_unit_type=? AND p.org_code=?"; var args = new ArrayList<Object>(List.of(unit,org));
+    String where = "p.business_unit_type=? AND p.org_code=? AND p.row_voided=0 AND b.voided_at IS NULL"; var args = new ArrayList<Object>(List.of(unit,org));
     if (material != null) { where += " AND p.material_code=?"; args.add(material); }
     String modelKey = PriceModelSearch.normalize(model);
     if (!modelKey.isEmpty()) { where += " AND " + PriceModelSearch.condition("?", "p.specification"); args.add(modelKey); }
     where += " AND p.batch_id=(SELECT MAX(v.batch_id) FROM lp_invoice_price v WHERE v.business_unit_type=p.business_unit_type AND v.org_code=p.org_code AND v.material_code=p.material_code)";
-    long total = Objects.requireNonNull(jdbc.queryForObject("SELECT COUNT(*) FROM lp_invoice_price p WHERE " + where,Long.class,args.toArray()));
+    long total = Objects.requireNonNull(jdbc.queryForObject("SELECT COUNT(*) FROM lp_invoice_price p JOIN lp_invoice_import_batch b ON b.id=p.batch_id WHERE " + where,Long.class,args.toArray()));
     args.add(size); args.add((page-1)*size);
     var rows = jdbc.queryForList("SELECT p.*,b.created_at imported_at,b.created_by FROM lp_invoice_price p JOIN lp_invoice_import_batch b ON b.id=p.batch_id WHERE " + where + " ORDER BY p.material_code,p.unit_price DESC,p.document_no,p.supplier_code LIMIT ? OFFSET ?",args.toArray());
     rows.forEach(row->row.replaceAll((key,value)->value instanceof java.math.BigDecimal decimal?decimal.toPlainString():value));
@@ -104,7 +151,7 @@ public final class InvoicePriceService {
     if (material != null) { where += " AND JSON_CONTAINS(rows_json,JSON_OBJECT('materialCode',?))"; args.add(material); }
     long total = Objects.requireNonNull(jdbc.queryForObject("SELECT COUNT(*) FROM lp_invoice_import_batch WHERE " + where,Long.class,args.toArray()));
     args.add(size); args.add((page-1)*size);
-    return new Page(jdbc.queryForList("SELECT id,file_name,row_count,duplicate_count,created_at,created_by FROM lp_invoice_import_batch WHERE " + where + " ORDER BY id DESC LIMIT ? OFFSET ?",args.toArray()),total);
+    return new Page(jdbc.queryForList("SELECT id,file_name,row_count,duplicate_count,created_at,created_by,voided_at,voided_by FROM lp_invoice_import_batch WHERE " + where + " ORDER BY id DESC LIMIT ? OFFSET ?",args.toArray()),total);
   }
   public List<InvoiceWorkbookParser.Price> batchRows(String unit,long id) {
     var row = batch(unit,id,"rows_json");

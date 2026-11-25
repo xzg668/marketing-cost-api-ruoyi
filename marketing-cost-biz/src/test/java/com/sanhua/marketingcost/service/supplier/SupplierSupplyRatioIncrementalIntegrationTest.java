@@ -51,6 +51,17 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
       return new SupplierSupplyRatioEditService(sql.getMapper(SupplierSupplyRatioMapper.class),
           sql.getMapper(BusinessChangeLogMapper.class), new SupplierSupplyRatioImportLock(ds), events, new ObjectMapper());
     }
+    @Bean SupplierSupplyRatioVoidService voids(ApplicationEventPublisher events) {
+      return new SupplierSupplyRatioVoidService(sql.getMapper(SupplierSupplyRatioMapper.class),
+          sql.getMapper(SupplierSupplyRatioImportBatchMapper.class), sql.getMapper(BusinessChangeLogMapper.class),
+          new SupplierSupplyRatioImportLock(ds), org.mockito.Mockito.mock(
+              com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingState.class),
+          events, new ObjectMapper());
+    }
+    @Bean SupplierRatioMonthlyPriceRefresh monthlyPriceRefresh() {
+      return new SupplierRatioMonthlyPriceRefresh(jdbc,
+          new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(new ObjectMapper()));
+    }
     @Bean CommitObserver observer(){return new CommitObserver();}
   }
   static class CommitObserver {
@@ -61,8 +72,16 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
     MYSQL.start();ds=new HikariDataSource();ds.setJdbcUrl(MYSQL.getJdbcUrl());ds.setUsername(MYSQL.getUsername());ds.setPassword(MYSQL.getPassword());ds.setMaximumPoolSize(12);jdbc=new JdbcTemplate(ds);
     assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     new ResourceDatabasePopulator(new ClassPathResource("supplier-ratio/schema.sql")).execute(ds);
+    jdbc.execute("""
+        CREATE TABLE lp_material_monthly_price (
+          id BIGINT PRIMARY KEY, material_code VARCHAR(64), business_unit_type VARCHAR(32),
+          pricing_month CHAR(7), family_hash VARCHAR(64), applicability_hash VARCHAR(64),
+          disabled TINYINT DEFAULT 0, superseded_by_finance_batch_id BIGINT,
+          source_evidence_json TEXT, first_use_json TEXT
+        )
+        """);
     var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
-    for(var type:List.of(SupplierSupplyRatioMapper.class,BusinessChangeLogMapper.class,SupplierSupplyRatioHistoryMapper.class))config.addMapper(type);
+    for(var type:List.of(SupplierSupplyRatioMapper.class,BusinessChangeLogMapper.class,SupplierSupplyRatioHistoryMapper.class,SupplierSupplyRatioImportBatchMapper.class))config.addMapper(type);
     var global=new com.baomidou.mybatisplus.core.config.GlobalConfig();global.setDbConfig(new com.baomidou.mybatisplus.core.config.GlobalConfig.DbConfig());global.setMetaObjectHandler(new com.sanhua.marketingcost.config.MetaObjectHandlerConfig());com.baomidou.mybatisplus.core.toolkit.GlobalConfigUtils.setGlobalConfig(config,global);
     var pagination=new MybatisPlusInterceptor();pagination.addInnerInterceptor(new PaginationInnerInterceptor(DbType.MYSQL));config.addInterceptor(pagination);
     var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);sql=new SqlSessionTemplate(factory.getObject());
@@ -70,7 +89,7 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
     assertThat(org.springframework.aop.support.AopUtils.isAopProxy(imports)).isTrue();
   }
   @AfterAll static void stop(){if(context!=null)context.close();if(ds!=null)ds.close();if(!Boolean.getBoolean("mpp.mysql.retain"))MYSQL.stop();}
-  @BeforeEach void clean(){jdbc.update("DELETE FROM lp_business_change_log");jdbc.update("DELETE FROM lp_supplier_supply_ratio");observer.committed.clear();auth("COMMERCIAL");}
+  @BeforeEach void clean(){jdbc.update("DELETE FROM lp_business_change_log");jdbc.update("DELETE FROM lp_supplier_supply_ratio");jdbc.update("DELETE FROM lp_material_monthly_price");observer.committed.clear();auth("COMMERCIAL");}
   @AfterEach void logout(){SecurityContextHolder.clearContext();}
   static void auth(String unit){var a=new UsernamePasswordAuthenticationToken("mrp02-finance",null);a.setDetails(Map.of("businessUnitType",unit));SecurityContextHolder.getContext().setAuthentication(a);}
   static SupplierSupplyRatioExcelRow row(String supplier,String ratio){return row("000M",supplier,ratio);}
@@ -85,6 +104,106 @@ class SupplierSupplyRatioIncrementalIntegrationTest {
         com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(), "finance-editor");
   }
   static long currentId(String supplier) { return ((Number)current(supplier).get("id")).longValue(); }
+
+  @Test void discardedImportNeverRestoresOldRatiosAndCannotSelectUntilCorrected() {
+    var highest = row("000C", null);
+    highest.setSelectionRule("无供货比例取最高价");
+    save(row("000A", "0.6"), row("000B", "0"), highest);
+    String batch = save(row("000A", "0.2"), row("000B", "0.8"), row("NEW", "ONLY", "1")).getBatchNo();
+    save(row("OTHER", "OUT", "1"));
+    var untouched = jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE material_code='OTHER'");
+    var service = context.getBean(SupplierSupplyRatioVoidService.class);
+    var selector = new com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService(sql.getMapper(SupplierSupplyRatioMapper.class), null);
+    var scope = new com.sanhua.marketingcost.service.pricing.SupplierPriceScope("COMMERCIAL", "TEST", null, "2026-10", java.time.LocalDate.of(2026,10,8), "210", "000M", "FIXED");
+    var candidates = List.of(new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("A", "000A", "供应商000A", new BigDecimal("10"), null, null),
+        new com.sanhua.marketingcost.service.pricing.SupplierPriceCandidate("B", "000B", "供应商000B", new BigDecimal("20"), null, null));
+    assertThat(selector.select(scope, candidates).candidate().unitPrice()).isEqualByComparingTo("20");
+    var before = all();
+    assertThat(service.list("COMMERCIAL", 1, 20).total()).isEqualTo(3);
+    assertThat(all()).isEqualTo(before);
+    observer.committed.clear();
+    assertThat(service.voidBatch("COMMERCIAL", batch, 3, "finance").voidedRows()).isEqualTo(3);
+    assertThat(all()).hasSameSizeAs(before);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_supplier_supply_ratio WHERE is_active=1 AND material_code IN ('000M','NEW')", Integer.class)).isZero();
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_supplier_supply_ratio WHERE material_code='OTHER'")).isEqualTo(untouched);
+    assertThat(selector.select(scope, candidates).candidate()).isNull();
+    assertThat(selector.selectPrepared(scope, candidates,
+        selector.prepareRatios("COMMERCIAL", Set.of("000M"), scope.pricingDate()).getOrDefault("000M", List.of()), null).candidate()).isNull();
+    assertThat(sql.getMapper(SupplierSupplyRatioMapper.class).currentRelations("COMMERCIAL", scope.pricingDate(), List.of("000M", "NEW"))).isEmpty();
+    assertThat(service.list("COMMERCIAL", 1, 20).records().stream().filter(r -> r.batchNo().equals(batch)).findFirst().orElseThrow().voided()).isTrue();
+    assertThat(observer.committed).isEmpty(); // Discarding must not launch an automatic costing retry.
+    var after = all();
+    assertThatThrownBy(() -> service.voidBatch("COMMERCIAL", batch, 3, "finance")).hasMessageContaining("已无生效数据");
+    assertThat(all()).isEqualTo(after);
+    var corrected = save(row("000A", "0.9"), row("000B", "0.1"));
+    assertThat(corrected.getInsertedRows()).isEqualTo(2);
+    assertThat(corrected.getBatchNo()).isNotEqualTo(batch);
+    assertThat(selector.select(scope, candidates).candidate().unitPrice()).isEqualByComparingTo("10");
+  }
+
+  @Test void voidDisablesReusableSelectionsIncludingPriorMonthAndTheirDependencies() {
+    String batch = save(row("NEW", "ONLY", "1")).getBatchNo();
+    String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    var codec = new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(new ObjectMapper());
+    String selected = codec.encode(Map.of("source", Map.of("selectionRule", "RATIO_MAX", "ratios", List.of())));
+    String plain = codec.encode(Map.of("source", Map.of()));
+    String none = codec.encode(Map.of("dependencies", List.of()));
+    String dependency = codec.encode(Map.of("dependencies", List.of(Map.of("monthlyPriceId", 1))));
+    for (var price : List.of(
+        List.of(1, "NEW", "COMMERCIAL", month, selected, none),
+        List.of(2, "PARENT", "COMMERCIAL", month, plain, dependency),
+        List.of(3, "OTHER", "COMMERCIAL", month, selected, none),
+        List.of(4, "NEW", "HOUSEHOLD", month, selected, none),
+        List.of(5, "NEW", "COMMERCIAL", java.time.YearMonth.parse(month).minusMonths(1).toString(), selected, none),
+        List.of(6, "NEW", "COMMERCIAL", java.time.YearMonth.parse(month).plusMonths(1).toString(), selected, none))) {
+      jdbc.update("INSERT INTO lp_material_monthly_price (id,material_code,business_unit_type,pricing_month,source_evidence_json,first_use_json) VALUES (?,?,?,?,?,?)", price.toArray());
+    }
+    var evidenceBefore = jdbc.queryForList("SELECT id,source_evidence_json,first_use_json FROM lp_material_monthly_price ORDER BY id");
+    context.getBean(SupplierSupplyRatioVoidService.class).voidBatch("COMMERCIAL", batch, 1, "finance");
+    assertThat(jdbc.queryForList("SELECT disabled FROM lp_material_monthly_price ORDER BY id", Integer.class)).containsExactly(1, 1, 0, 0, 1, 1);
+    assertThat(jdbc.queryForList("SELECT id,source_evidence_json,first_use_json FROM lp_material_monthly_price ORDER BY id")).isEqualTo(evidenceBefore);
+  }
+
+  @Test void sameFilenameLaterImportAndManualUpdatesRemainWhileLegacyBatchCanBeDiscarded() {
+    String old = save(row("000A", "0.6"), row("000B", "0.4"), row("NEW", "ONLY", "1")).getBatchNo();
+    String later = save(row("000A", "0.9"), row("000B", "0.1")).getBatchNo();
+    var current = current("000A");
+    var service = context.getBean(SupplierSupplyRatioVoidService.class);
+    assertThat(service.list("COMMERCIAL", 1, 20).records()).hasSize(2);
+    assertThat(service.list("COMMERCIAL", 1, 1).records().getFirst().batchNo()).isEqualTo(later);
+    var before = all();
+    assertThatThrownBy(() -> service.voidBatch("COMMERCIAL", old, 3, "finance")).hasMessageContaining("条数已变化");
+    assertThat(all()).isEqualTo(before);
+    jdbc.update("DELETE FROM lp_business_change_log"); // Old imports have batch ownership but no audit history.
+    service.voidBatch("COMMERCIAL", old, 1, "finance");
+    assertThat(current("000A")).isEqualTo(current);
+    edit(currentId("000A"), "0.8", null);
+    var manuallyEdited = current("000A");
+    service.voidBatch("COMMERCIAL", later, 1, "finance");
+    assertThat(current("000A")).isEqualTo(manuallyEdited);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_supplier_supply_ratio WHERE is_active=1", Integer.class)).isEqualTo(1);
+    auth("HOUSEHOLD");
+    assertThatThrownBy(() -> service.list("COMMERCIAL", 1, 20)).hasMessageContaining("其他业务单元");
+    assertThat(service.list("HOUSEHOLD", 1, 20).total()).isZero();
+    assertThatThrownBy(() -> service.voidBatch("HOUSEHOLD", later, 1, "finance")).hasMessageContaining("已无生效数据");
+  }
+
+  @Test void voidRollsBackAllRowsWhenSecondAuditWriteFails() {
+    String batch = save(row("000A", "0.6"), row("000B", "0.4")).getBatchNo();
+    var service = context.getBean(SupplierSupplyRatioVoidService.class);
+    var before = all();
+    int beforeLogs = logs();
+    jdbc.execute("""
+        CREATE TRIGGER ssr_void_fail BEFORE INSERT ON lp_business_change_log FOR EACH ROW
+        BEGIN IF NEW.change_source='FINANCE_VOID' AND JSON_UNQUOTE(JSON_EXTRACT(NEW.after_value,'$.supplierCode'))='000B'
+          THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='void audit failure'; END IF; END
+        """);
+    try {
+      assertThatThrownBy(() -> service.voidBatch("COMMERCIAL", batch, 2, "finance")).hasStackTraceContaining("void audit failure");
+    } finally { jdbc.execute("DROP TRIGGER ssr_void_fail"); }
+    assertThat(all()).isEqualTo(before);
+    assertThat(logs()).isEqualTo(beforeLogs);
+  }
 
   @Test void manualCorrectionKeepsOtherSuppliersAndOldValuesWithOneAuditedVersion() throws Exception {
     save(row("000A", "0.2"), row("000B", "0.8"), row("OTHER", "000C", "1"));

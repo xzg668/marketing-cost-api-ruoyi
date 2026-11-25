@@ -309,12 +309,11 @@ public class TechnicalDataPublicSourceCheck {
 
   private TechnicalDataSourceFact checkSalary(QuoteBomReadContext context) {
     try {
-      var source =
+      var rows =
           salary.read(
               context.productCode(),
               YearMonth.parse(context.accountingMonth()).getYear(),
               context.businessUnitType());
-      var rows = source.rows();
       boolean invalid =
           rows.stream()
                   .anyMatch(row -> row.getAmountYuan() == null || row.getAmountYuan().signum() < 0)
@@ -324,8 +323,6 @@ public class TechnicalDataPublicSourceCheck {
               Map.of(
                   "source",
                   "cms_cost_source_effective",
-                  "publishedBatchId",
-                  Objects.toString(source.confirmedBatchId(), ""),
                   "rows",
                   rows.stream()
                       .map(
@@ -348,29 +345,21 @@ public class TechnicalDataPublicSourceCheck {
             "SALARY_SOURCE_INVALID",
             "工资来源金额异常或同类重复，请财务核实",
             reference);
-      if (rows.size() == 2 || (!rows.isEmpty() && source.confirmedBatchId() != null)) {
+      if (!rows.isEmpty()) {
         return fact(
             context,
             TechnicalDataModuleType.SALARY,
             TechnicalDataAvailability.AVAILABLE,
             "SALARY_SOURCE_AVAILABLE",
-            rows.size() == 1 ? "沿用已有单项工资，CMS 已确认另一项不存在" : "沿用本产品已有直接、辅助人工工资",
+            rows.size() == 1 ? "沿用本产品已有单项生效工资" : "沿用本产品已有直接、辅助人工工资",
             reference);
       }
-      if (source.confirmedBatchId() == null)
-        return fact(
-            context,
-            TechnicalDataModuleType.SALARY,
-            TechnicalDataAvailability.MISSING,
-            "SALARY_SOURCE_UNCONFIRMED",
-            TechnicalDataSalarySupplement.REASON,
-            reference);
       return fact(
           context,
           TechnicalDataModuleType.SALARY,
           TechnicalDataAvailability.MISSING,
           "SALARY_SOURCE_MISSING",
-          "CMS 已完成核实，本产品两项工资均不存在",
+          "本成品没有生效的直接人工或辅助人员工资，请补录并送审",
           reference);
     } catch (RuntimeException exception) {
       return fact(

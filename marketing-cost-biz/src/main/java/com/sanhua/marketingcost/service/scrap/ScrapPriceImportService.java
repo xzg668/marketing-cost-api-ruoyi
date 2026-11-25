@@ -255,7 +255,7 @@ public class ScrapPriceImportService {
 
   private boolean unchanged(ScrapPrice prior, ScrapPriceRule rule) {
     // 对沿用行显式导入，即使金额未变也建立该月规则，后续旧月修改才有正确截止点。
-    return prior != null
+    return prior != null && prior.getVoided() == 0
         && !"CARRY_FORWARD".equals(prior.getOriginType())
         && Objects.equals(prior.getContentHash(), rules.hash(rule));
   }
@@ -275,6 +275,7 @@ public class ScrapPriceImportService {
       LocalDateTime now) {
     boolean inserted = row.getId() == null;
     rules.write(rule, row);
+    row.setVoided(0);
     row.setBusinessUnitType(unit);
     row.setPriceMonth(month);
     row.setOriginType(origin);
@@ -330,6 +331,7 @@ public class ScrapPriceImportService {
     batch.setParserVersion("SCRAP_PRICE_V1");
     batch.setUploadedBy(actor);
     batch.setStatus("SUCCESS");
+    batch.setLinkedRowCount(parsed.rows().size());
     batch.setStartedAt(now);
     batch.setFinishedAt(now);
     batch.setCreatedAt(now);

@@ -38,7 +38,7 @@ class MonthlyPriceFolderIntegrationTest {
       "V311__original_linked_expression_capacity.sql", "V325__finance_effective_price.sql",
       "V326__original_workbook_source.sql", "V330__scrap_price_monthly.sql",
       "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql",
-      "V356__inquiry_price_sources.sql", "V359__monthly_price_folder_import.sql"};
+      "V356__inquiry_price_sources.sql", "V394__inquiry_import_void.sql", "V359__monthly_price_folder_import.sql"};
   private static SqlSessionTemplate sql;
   private static DataSourceTransactionManager transactions;
   private static JdbcTemplate jdbc;

@@ -23,7 +23,14 @@ public final class InquiryPriceRepository {
       InquiryWorkbookParser.Rule rule,
       String fileName,
       String importedBy,
-      LocalDateTime importedAt) {}
+      LocalDateTime importedAt,
+      String batchStatus) {
+    public Source { batchStatus = Objects.toString(batchStatus, "PUBLISHED"); }
+    public Source(long id, long batchId, String sourceMonth, String identityKey, InquiryWorkbookParser.Rule rule,
+        String fileName, String importedBy, LocalDateTime importedAt) {
+      this(id, batchId, sourceMonth, identityKey, rule, fileName, importedBy, importedAt, "PUBLISHED");
+    }
+  }
 
   public record Original(String name, byte[] bytes) {}
 
@@ -67,7 +74,7 @@ public final class InquiryPriceRepository {
   public Map<String, Object> replay(String unit, String requestId) {
     var found =
         jdbc.queryForList(
-            "SELECT id,price_month,file_hash,created_by,row_count FROM lp_inquiry_import_batch"
+            "SELECT id,price_month,file_hash,created_by,row_count,status FROM lp_inquiry_import_batch"
                 + " WHERE business_unit_type=? AND request_id=?",
             unit,
             requestId);
@@ -157,7 +164,7 @@ public final class InquiryPriceRepository {
     return heads(
         jdbc.query(
             select()
-                + " WHERE r.business_unit_type=? AND r.price_month<=? AND ("
+                + " WHERE b.status<>'VOIDED' AND r.business_unit_type=? AND r.price_month<=? AND ("
                 + String.join(" OR ", clauses)
                 + ") AND NOT EXISTS (SELECT 1 FROM lp_inquiry_rule newer WHERE"
                 + " newer.business_unit_type=r.business_unit_type AND"
@@ -172,7 +179,7 @@ public final class InquiryPriceRepository {
     var result = new ArrayList<Source>();
     for (var row : rows) {
       Long batch = batches.putIfAbsent(row.identityKey(), row.batchId());
-      if (batch == null || batch == row.batchId()) result.add(row);
+      if ((batch == null || batch == row.batchId()) && !"VOIDED".equals(row.batchStatus())) result.add(row);
     }
     return List.copyOf(result);
   }
@@ -191,7 +198,7 @@ public final class InquiryPriceRepository {
       if(!months.computeIfAbsent(code,ignored->row.sourceMonth()).equals(row.sourceMonth()))continue;
       selected.putIfAbsent(row.identityKey(),row);
     }
-    return List.copyOf(selected.values());
+    return selected.values().stream().filter(row -> !"VOIDED".equals(row.batchStatus())).toList();
   }
 
   public Map<Long, Map<String, Object>> effective(String unit, String month, Collection<Long> ids) {
@@ -244,7 +251,7 @@ public final class InquiryPriceRepository {
 
   public List<Map<String, Object>> history(String unit, int page, int size) {
     return jdbc.queryForList(
-        "SELECT id,price_month,file_name,row_count,created_by,created_at FROM"
+        "SELECT id,price_month,file_name,row_count,created_by,created_at,status,voided_by,voided_at FROM"
             + " lp_inquiry_import_batch WHERE business_unit_type=? ORDER BY id DESC LIMIT ? OFFSET"
             + " ?",
         unit,
@@ -307,14 +314,15 @@ public final class InquiryPriceRepository {
           documents.decode(row.getString("rule_json"), InquiryWorkbookParser.Rule.class),
           row.getString("file_name"),
           row.getString("created_by"),
-          row.getTimestamp("created_at").toLocalDateTime());
+          row.getTimestamp("created_at").toLocalDateTime(), row.getString("batch_status"));
     } catch (IllegalArgumentException invalid) {
       throw new IllegalStateException("询价来源记录损坏", invalid);
     }
   }
 
   private static String select() {
-    return "SELECT r.*,b.file_name,b.created_by,b.created_at FROM lp_inquiry_rule r JOIN"
+    return "SELECT r.*,b.file_name,b.created_by,b.created_at,"
+               + " CASE WHEN r.row_voided=1 THEN 'VOIDED' ELSE b.status END AS batch_status FROM lp_inquiry_rule r JOIN"
                + " lp_inquiry_import_batch b ON b.id=r.batch_id";
   }
 
@@ -324,7 +332,7 @@ public final class InquiryPriceRepository {
             ? "SPEC:" + InquiryNames.normalize(rule.specification())
             : "CODE:" + InquiryNames.normalize(rule.materialCode());
     return MonthlyPriceDocumentCodec.sha256(
-        item + "\u0000" + InquiryNames.normalize(rule.supplierName()));
+        item + "\u0000" + InquiryNames.normalize(rule.supplierCode().isBlank() ? rule.supplierName() : "CODE:" + rule.supplierCode()));
   }
 
   private static String placeholders(int size) {

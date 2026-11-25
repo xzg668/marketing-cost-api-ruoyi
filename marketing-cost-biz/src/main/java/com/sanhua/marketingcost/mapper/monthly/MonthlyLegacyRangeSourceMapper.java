@@ -29,7 +29,7 @@ public interface MonthlyLegacyRangeSourceMapper {
         .thenComparing(PriceRangeFactorRule::getId, Comparator.nullsLast(Comparator.reverseOrder()))).toList();
   }
   @Select("""
-    <script>SELECT * FROM lp_price_range_item WHERE range_basis='FACTOR' AND factor_rule_id IN
+    <script>SELECT * FROM lp_price_range_item WHERE row_voided=0 AND range_basis='FACTOR' AND factor_rule_id IN
       <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
       ORDER BY effective_from DESC,created_at DESC,id DESC</script>
     """)

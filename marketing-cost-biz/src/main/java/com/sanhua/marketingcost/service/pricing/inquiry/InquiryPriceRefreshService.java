@@ -64,7 +64,7 @@ public final class InquiryPriceRefreshService {
     if (sources.isEmpty()) return new Result(0, 0, 0);
     FactorPriceSnapshot financial = null;
     String financialError = null;
-    if (sources.stream().anyMatch(source -> source.rule().priceType().equals("联动价"))) {
+    if (sources.stream().anyMatch(source -> !source.rule().priceType().equals("固定价"))) {
       try {
         financial =
             finance.read(
@@ -78,7 +78,8 @@ public final class InquiryPriceRefreshService {
     int ready = 0, waiting = 0, invalid = 0;
     for (var source : sources) {
       var rule = source.rule();
-      boolean linked = rule.priceType().equals("联动价");
+      boolean ranged = rule.range() != null;
+      boolean linked = rule.priceType().equals("联动价") || ranged;
       String state = "READY", message = null;
       BigDecimal price = null;
       var inputs = new LinkedHashMap<String, BigDecimal>();
@@ -87,6 +88,14 @@ public final class InquiryPriceRefreshService {
         if (linked && financial == null) {
           state = "WAITING_BASE";
           message = financialError;
+        } else if (ranged) {
+          var value = financial.required(rule.range().factorKey());
+          if (!value.taxIncluded()) throw new IllegalArgumentException("区间行情因素须为含税基价");
+          var market = com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(value.unit())
+              .convert(value.price(), com.sanhua.marketingcost.service.pricing.FactorPriceUnit.require(rule.range().marketUnit()));
+          inputs.put("rangeMarket", market);
+          factors.put(rule.range().factorKey(), value);
+          price = rule.range().price(market);
         } else if (linked) {
           for (var binding : rule.factors().entrySet()) {
             var value = financial.required(binding.getValue());
@@ -106,7 +115,7 @@ public final class InquiryPriceRefreshService {
       var basis =
           new Calculation(
               rule.priceType(),
-              linked ? rule.compiled().expression() : null,
+              linked && !ranged ? rule.compiled().expression() : null,
               Map.copyOf(inputs),
               rule.factors(),
               linked && financial != null ? financial.batchId() : null,
