@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 
@@ -50,6 +51,9 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecognitionService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private final QuotePricingPeriod pricingPeriods;
 
   static final String OBJECT_NORMAL = "NORMAL";
@@ -144,13 +148,14 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
   private Scope requireScope(String oaNo, Long oaFormItemId, String requestedPeriodMonth) {
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, oaFormItemId);
+    QuoteBomStatus bomStatus = latestBomStatus(form.getOaNo(), item.getId());
+    String periodMonth =
+        firstText(requestedPeriodMonth, resolvePeriodMonth(form, bomStatus));
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, periodMonth);
     String productCode =
         requireText(
             QuoteProductIdentityUtils.resolveCostingCode(item),
             "当前产品行料号、型号或图号");
-    QuoteBomStatus bomStatus = latestBomStatus(form.getOaNo(), item.getId());
-    String periodMonth =
-        firstText(requestedPeriodMonth, resolvePeriodMonth(form, bomStatus));
     List<BomCostingRow> bomRows =
         bomCostingRowMapper.selectQuoteCostingSnapshot(
             form.getOaNo(), item.getId(), productCode, periodMonth);

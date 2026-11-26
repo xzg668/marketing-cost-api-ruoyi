@@ -7,7 +7,7 @@ import java.util.Objects;
 /** Captured Cu/Zn inputs reproduce the inquiry W value without changing original E. */
 public final class HouseholdMetalCalculation {
   public static final String FORMULA = "W = E + ((客户Cu - 基价Cu) × 铜重/1000 + (客户Zn - 基价Zn) × 锌重/1000) / 1.13";
-  static final String DEMAND_PRICE_POLICY = "HOUSEHOLD_INQUIRY_DEMAND_METALS_V1";
+  static final String DEMAND_PRICE_POLICY = "HOUSEHOLD_INQUIRY_QUOTE_FACTORS_V2";
   private HouseholdMetalCalculation() {}
   public record Inputs(BigDecimal copperGrams,BigDecimal zincGrams,PriceFactorContext financial) {
     public Inputs {
@@ -27,18 +27,15 @@ public final class HouseholdMetalCalculation {
       BigDecimal baseCopper,BigDecimal baseZinc,BigDecimal customerCopper,BigDecimal customerZinc,
       boolean copperFromCustomer,boolean zincFromCustomer,BigDecimal copperDifference,
       BigDecimal zincDifference,BigDecimal calculatedW,String pricingMonth,String financeMonth) {}
-  public static Trace calculate(BigDecimal original,Inputs input,CustomerMaterialPrices customer) {
-    return calculateQuoted(original, input, demandContext(input, customer));
-  }
-
-  static PriceFactorContext demandContext(Inputs input, CustomerMaterialPrices customer) {
+  /** Manual inquiry trials take the explicitly entered metal prices. */
+  public static Trace calculateTrial(BigDecimal original,Inputs input,CustomerMaterialPrices customer) {
     var base = input.financial();
-    if (base == null) return null;
-    // The inquiry W formula compares demand Cu/Zn against the financial base, independent of finished-product sales mode.
+    if (base == null) return calculateQuoted(original, input, null);
     var copper = input.copperGrams().signum() == 0 ? null : customer.copper();
     var zinc = input.zincGrams().signum() == 0 ? null : customer.zinc();
-    return new PriceFactorContext(base.materialCode(), base.months(), base.financial(), copper,
-        base.boardInputs(), zinc, null, null, DEMAND_PRICE_POLICY, base.materialSpecification());
+    var direct = new PriceFactorContext(base.materialCode(), base.months(), base.financial(), copper,
+        base.boardInputs(), zinc, null, null, "HOUSEHOLD_INQUIRY_DEMAND_METALS_V1", base.materialSpecification());
+    return calculateQuoted(original, input, direct);
   }
 
   static Trace calculateQuoted(BigDecimal original, Inputs input, PriceFactorContext projected) {

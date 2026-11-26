@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
@@ -28,6 +29,9 @@ import org.springframework.transaction.annotation.Transactional;
 /** 只读取报价来源和已发生的核算检查；不接受浏览器自报的来源结论。 */
 @Component
 public class TechnicalDataQuoteSourceReader {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private final OaFormItemExtraFieldMapper extraFields;
   private final OaFormItemMapper itemMapper;
   private final OaFormMapper formMapper;
@@ -40,6 +44,9 @@ public class TechnicalDataQuoteSourceReader {
   private final OaMessageCodec codec;
   private final TechnicalDataRequirementRefreshService taskRefresh;
   private final TechnicalDataSharedModuleQuery sharedSources;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  private BareQuoteMaterialPreparation bareMaterials;
 
   public TechnicalDataQuoteSourceReader(
       OaFormItemMapper itemMapper, OaFormMapper formMapper, OaFormItemExtraFieldMapper extraFields,
@@ -69,7 +76,11 @@ public class TechnicalDataQuoteSourceReader {
   @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
   public Source lockAndRead(Long itemId, String month) {
     var context = lockContext(itemId, month);
-    return check(context.form(), context.item(), context.month(), context.workspace());
+    var workspace = context.workspace();
+    if (bareMaterials != null && bareMaterials.recover(context.form(), context.item(), workspace, context.product())) {
+      workspace = workspaceMapper.selectByItemAndMonthForUpdate(itemId, month);
+    }
+    return check(context.form(), context.item(), context.month(), workspace);
   }
 
   /** 待办列表只复核原缺项；混合价格异常保留完整检查和原指纹规则。 */
@@ -165,6 +176,7 @@ public class TechnicalDataQuoteSourceReader {
 
   private Inspection inspect(OaForm form, OaFormItem item, String month, QuoteCostingWorkspace workspace,
       java.util.Set<TechnicalDataModuleType> selected, boolean technicalPreview) {
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, month);
     TechnicalDataProductSource product = product(form, item);
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var context = new QuoteBomReadContext(form.getId(), item.getId(), form.getOaNo(), month,

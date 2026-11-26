@@ -12,6 +12,17 @@ public interface SupplierPriceDecisionMapper extends BaseMapper<SupplierPriceDec
 
   @Select("""
       SELECT d.* FROM lp_supplier_price_decision d
+      WHERE d.oa_no=#{oaNo} AND d.oa_form_item_id=#{itemId} AND d.period_month=#{month}
+        AND d.retry_status='REPRICE_PENDING'
+        AND NOT EXISTS (SELECT 1 FROM lp_supplier_price_decision n
+                        WHERE n.scope_key=d.scope_key AND n.id>d.id)
+      ORDER BY d.id DESC
+      """)
+  List<SupplierPriceDecision> pendingReprice(@Param("oaNo") String oaNo,
+      @Param("itemId") Long itemId, @Param("month") String month);
+
+  @Select("""
+      SELECT d.* FROM lp_supplier_price_decision d
       WHERE d.business_unit_type=#{businessUnit} AND d.decision='WAIT_IMPORT'
         AND d.period_month=#{month} AND d.retry_status IN ('WAITING','FAILED')
         AND NOT EXISTS (SELECT 1 FROM lp_supplier_price_decision n
@@ -24,7 +35,8 @@ public interface SupplierPriceDecisionMapper extends BaseMapper<SupplierPriceDec
   @Select("""
       SELECT d.* FROM lp_supplier_price_decision d
       WHERE d.business_unit_type=#{businessUnit} AND d.period_month=#{month}
-        AND (d.decision='FALLBACK_HIGH' OR (d.decision='WAIT_IMPORT' AND d.retry_status IN ('WAITING','FAILED')))
+        AND (d.decision='FALLBACK_HIGH'
+          OR (d.decision='WAIT_IMPORT' AND d.retry_status IN ('WAITING','FAILED','REPRICE_PENDING')))
         AND NOT EXISTS (SELECT 1 FROM lp_supplier_price_decision n
                         WHERE n.scope_key=d.scope_key AND n.id>d.id)
       ORDER BY d.id

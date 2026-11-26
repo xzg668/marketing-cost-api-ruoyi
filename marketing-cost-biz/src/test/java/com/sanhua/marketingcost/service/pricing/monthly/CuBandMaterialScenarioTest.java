@@ -6,6 +6,11 @@ import com.sanhua.marketingcost.service.pricing.*;
 import com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.*;
 import com.sanhua.marketingcost.service.scrap.*;
 import com.sanhua.marketingcost.entity.ScrapPrice;
+import com.sanhua.marketingcost.entity.FinanceEffectivePrice;
+import com.sanhua.marketingcost.entity.PriceLinkedItem;
+import com.sanhua.marketingcost.service.impl.OriginalLinkedWorkbookParser;
+import com.sanhua.marketingcost.formula.workbook.WorkbookFormulaCompiler.Address;
+import com.sanhua.marketingcost.formula.workbook.WorkbookFormulaCompiler.CompiledFormula;
 import java.math.*;
 import java.time.*;
 import java.util.*;
@@ -80,14 +85,47 @@ class CuBandMaterialScenarioTest {
   }
 
   @ParameterizedTest @CsvSource({"固定", "销售价格固定"})
-  void fixedSalesUseTheFinancialBandDespiteQuotationCopperAndZinc(String mode) {
+  void fixedSalesUseAllReferencedFactorsFromTheDemandCopperBand(String mode) {
     var form = new com.sanhua.marketingcost.entity.OaForm();
     form.setCopperPrice(d("105000")); form.setZincPrice(d("999999")); form.setPriceLinkMode(mode);
     var quote = context().withCustomerMaterials(CustomerMaterialPrices.fromQuotation(form));
-    assertThat(quote.customerBand()).isNull();
+    assertThat(quote.customerBand().schemeCode()).isEqualTo("CU_100000");
     for (String key : List.of("AVG|Cu", PriceFactorContext.COPPER, PriceFactorContext.ZINC, BRASS, H65))
       assertThat(quote.requiredPrice(key, FactorPriceUnit.CNY_KG, true))
-          .isEqualByComparingTo(context().requiredPrice(key, FactorPriceUnit.CNY_KG, true));
+          .isEqualByComparingTo(financial().cuBands().get(1).factors().get(CustomerMaterialPrices.canonicalKey(key)).price());
+  }
+
+  @Test void fixedSaleReplaysTheAdoptedOrdinaryCoilFormulaOnBothSides() throws Exception {
+    String code = "208200162";
+    var key = new MaterialPriceRuleKey("COMMERCIAL", "210", code, "SUPPLIER", "供应商", null, "只");
+    String formula = "ROUND(((((cu)+8.9)*(83.8)/1000+6.1407)*1.02+(1.921452))*1.18/1.13,4)";
+    var input = new OriginalLinkedWorkbookParser.FactorInput(PriceFactorContext.COPPER, new Address("影响因素", "E7"),
+        FactorPriceUnit.CNY_KG, "CNY/KG", PriceFactorContext.COPPER, "SAME_CANONICAL_FACTOR");
+    var rule = new OriginalLinkedWorkbookParser.Rule(key, "线圈", "ImportData", 208, "O208", formula, formula,
+        "0.0000", false, new CompiledFormula(formula, List.of(), Map.of()), Map.of("cu", input), d("17.3748"));
+    var ctx = new PriceFactorContext(code, context().months(), financial(), null);
+    var published = new FinanceEffectivePrice();
+    published.setCalculationJson(json.writeValueAsString(new FinanceEffectivePriceService.Calculation(ctx, null, null, rule)));
+    var source = new MonthlyOriginalLinkedPriceSource.Source("2026-11", new PriceLinkedItem(), List.of(), published,
+        List.of(), List.of(), "SINGLE", json.writeValueAsString(Map.of("context", ctx)));
+    var snapshot = new MonthlyOriginalLinkedPriceSource.Snapshot(1, "LINKED", source, null);
+    var adopted = Map.of(request(code, "只"), new Selection(1L, coverage(), PriceFact.normal(d("17.3748"), evidence(snapshot), Set.of())));
+    var demand = new CustomerMaterialPrices(d("120000"), d("27775"), null, null, null, null, "固定");
+    var pair = scenarios.calculateMaterials(adopted, demand, Map.of()).get(1L);
+    assertThat(pair.financialPrice()).isEqualByComparingTo("17.3748");
+    assertThat(pair.customerPrice()).isEqualByComparingTo("20.0525");
+    assertThat(pair.customerPrice().subtract(pair.financialPrice())).isEqualByComparingTo("2.6777");
+    assertThat(scenarios.previewMaterials(adopted, demand, Map.of()).get(request(code, "只")).customerPrice())
+        .isEqualByComparingTo(pair.customerPrice());
+  }
+
+  @Test void fixedCopperNeedsAnActualBandWhenAFormulaRequestsCopper() {
+    var base = new PriceFactorContext("PART", context().months(), financial().withCuBands(List.of()), null);
+    var fixed = base.withCustomerMaterials(new CustomerMaterialPrices(d("105000"), null, null, null, null, null, "固定"));
+    assertThatThrownBy(() -> fixed.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true))
+        .hasMessageContaining("档位");
+    assertThat(fixed.financialOnly().requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true))
+        .isEqualByComparingTo("90");
   }
 
   @ParameterizedTest @CsvSource({"联动", "销售价格联动"})

@@ -65,6 +65,13 @@ public class TechnicalDataPackageController {
   }
 
   @PreAuthorize(EDIT_PERMISSION)
+  @org.springframework.web.bind.annotation.PostMapping("/price-preview")
+  public CommonResult<com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceRequirementsResponse> previewPrices(
+      @PathVariable Long productId, @RequestBody java.util.List<String> codes) {
+    return execute(() -> applicationService.previewPrices(productId, codes, actorProvider.current()));
+  }
+
+  @PreAuthorize(EDIT_PERMISSION)
   @PutMapping
   public CommonResult<TechnicalDataPackageResponse> save(
       @PathVariable Long productId,

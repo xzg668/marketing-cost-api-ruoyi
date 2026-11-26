@@ -137,6 +137,26 @@ class BomHierarchySubtreeQueryTest {
         new PlateCommercialMakeBomExpansionService(mapper, mock(MaterialMasterRawMapper.class)));
   }
 
+  @Test void costingBareBodyNeverCombinesDifferentUsagesAndRejectsConflictingStructures() {
+    var a = tree("A", "3");
+    var b = tree("B", "7");
+    for (var row : a) row.setBuildBatchId("BUILD");
+    for (var row : b) row.setBuildBatchId("BUILD");
+    var mapper = mock(BomRawHierarchyMapper.class);
+    when(mapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(a.get(1), b.get(1)), a, b);
+    var body = BareProductBomSubtree.read(mapper, "MAKE", "210", DATE);
+    assertThat(body).extracting(BomRawHierarchy::getMaterialCode).containsExactly("MAKE", "SUB", "RAW");
+    assertThat(body.getLast().getQtyPerTop()).isEqualByComparingTo("0.5");
+    assertThat(body.getFirst().getBomVersion()).isNull();
+    assertThat(a.get(1).getBomVersion()).isEqualTo("F001");
+
+    b.get(2).setQtyPerParent(BigDecimal.TEN);
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(a.get(1), b.get(1)), a, b);
+    assertThatThrownBy(() -> BareProductBomSubtree.read(mapper, "MAKE", "210", DATE))
+        .hasMessageContaining("不同的有效主制造 BOM");
+  }
+
   private BomHierarchyTreeDto query(BomRawHierarchyMapper mapper) {
     return service(mapper).getHierarchyTree("MAKE", "主制造", DATE, "U9", "210");
   }

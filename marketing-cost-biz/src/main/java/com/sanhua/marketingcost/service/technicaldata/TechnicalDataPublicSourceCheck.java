@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class TechnicalDataPublicSourceCheck {
   static final String MANUFACTURING_WAIT_FINANCE = "MANUFACTURING_WAIT_FINANCE";
+  private final com.sanhua.marketingcost.service.QuoteProductTypeResolveService productTypes;
   private final TechnicalBomSavedSourceQuery completeBoms;
   private final TechnicalBomAbsenceQuery completeBomEntry;
   private final TechnicalDataSharedModules shared;
@@ -42,7 +43,9 @@ public class TechnicalDataPublicSourceCheck {
       ElectronicDrawingSourceNodeRepository drawingSources,
       com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope repriceBom,
       com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing drawingReuse,
-      TechnicalBomSavedSourceQuery completeBoms, TechnicalBomAbsenceQuery completeBomEntry) {
+      TechnicalBomSavedSourceQuery completeBoms, TechnicalBomAbsenceQuery completeBomEntry,
+      com.sanhua.marketingcost.service.QuoteProductTypeResolveService productTypes) {
+    this.productTypes = productTypes;
     this.completeBoms = completeBoms;
     this.completeBomEntry = completeBomEntry;
     this.drawingReuse = drawingReuse;
@@ -79,8 +82,15 @@ public class TechnicalDataPublicSourceCheck {
     boolean needsBom = selected.stream().anyMatch(type -> java.util.Set.of(TechnicalDataModuleType.PROFILE,
         TechnicalDataModuleType.DRAWING_BOM, TechnicalDataModuleType.AUXILIARY, TechnicalDataModuleType.SOLDER,
         TechnicalDataModuleType.PACKAGE, TechnicalDataModuleType.MANUFACTURING).contains(type));
-    var originalBom = needsBom ? checkOriginalBom(context, facts, selected) : null;
-    if (selected.contains(TechnicalDataModuleType.PACKAGE)) facts.add(packaging.check(context, originalBom));
+    var productType = needsBom ? productTypes.resolve(context.productCode(), context.materialOrganizationCode()) : null;
+    boolean bare = productType != null && productType.productType() == com.sanhua.marketingcost.enums.QuoteProductType.BARE;
+    var originalBom = needsBom ? checkOriginalBom(context, facts, selected, bare) : null;
+    if (selected.contains(TechnicalDataModuleType.PACKAGE)) {
+      var source = packaging.check(context, originalBom);
+      facts.add(bare && source.availability() == TechnicalDataAvailability.MISSING
+          ? fact(context, TechnicalDataModuleType.PACKAGE, source.availability(), "BARE_PACKAGE_MISSING",
+              source.reason(), source.sourceReference()) : source);
+    }
     if (selected.contains(TechnicalDataModuleType.MANUFACTURING)) facts.add(checkManufacturing(context, originalBom));
     if (selected.contains(TechnicalDataModuleType.SALARY)) facts.add(checkSalary(context));
     if (selected.contains(TechnicalDataModuleType.NET_LOSS)) facts.add(checkNetLoss(context));
@@ -89,7 +99,7 @@ public class TechnicalDataPublicSourceCheck {
 
   private TechnicalDataAvailability checkOriginalBom(
       QuoteBomReadContext context, List<TechnicalDataSourceFact> facts,
-      java.util.Set<TechnicalDataModuleType> selected) {
+      java.util.Set<TechnicalDataModuleType> selected, boolean bare) {
     CurrentU9BomResult result;
     try {
       result = repriceBom.original(context, () -> u9.read(context));
@@ -132,6 +142,11 @@ public class TechnicalDataPublicSourceCheck {
             TechnicalDataModuleType.AUXILIARY,
             TechnicalDataModuleType.SOLDER)) {
       if (!selected.contains(type)) continue;
+      if (bare && type != TechnicalDataModuleType.DRAWING_BOM && availability == TechnicalDataAvailability.MISSING) {
+        facts.add(fact(context, type, TechnicalDataAvailability.AVAILABLE, "BARE_BODY_MATERIALS",
+            "已有裸品料号，本体物料和用量随 BOM 提供，无需单独补录本项", reference));
+        continue;
+      }
       if (entry != null && entry.allowsEntry()
           && java.util.Set.of(TechnicalDataModuleType.AUXILIARY, TechnicalDataModuleType.SOLDER).contains(type)) {
         facts.add(fact(context, type, TechnicalDataAvailability.UNCONFIRMED, "TECH_BOM_WAITING",

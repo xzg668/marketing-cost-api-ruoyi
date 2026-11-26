@@ -16,6 +16,8 @@ import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -34,6 +36,8 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
   @Autowired BomRawHierarchyMapper hierarchy;
   @Autowired ProductCostingPipeline pipeline;
   @Autowired QuoteEffectiveBomApplicationService trees;
+  @Autowired com.sanhua.marketingcost.service.QuoteProductBomPreparationService preparation;
+  @Autowired com.sanhua.marketingcost.service.ingest.QuoteBomStatusService bomStatus;
   @Autowired com.sanhua.marketingcost.service.CostInputRevisionService revisions;
   @Autowired com.sanhua.marketingcost.mapper.OaFormMapper forms;
   @Autowired com.sanhua.marketingcost.mapper.OaFormItemMapper items;
@@ -76,6 +80,169 @@ class BarePackageCostingIntegrationTest extends OriginalPricingIntegrationTestBa
     } finally {
       SecurityContextHolder.clearContext();
     }
+  }
+
+  @Autowired com.sanhua.marketingcost.service.QuoteCostingWorkbenchService workbench;
+  @Autowired com.sanhua.marketingcost.service.technicaldata.TechnicalDataQuoteSourceReader sourceReader;
+
+  @Test void recoveredBareWorkspaceBuildsRealRowsAndReplacesOldModuleChecklist() {
+    jdbc.update("UPDATE lp_material_master_raw SET main_category_code='110001' WHERE material_code=?",product);
+    jdbc.update("""
+        INSERT INTO lp_quote_costing_workspace(oa_no,oa_form_item_id,product_code,period_month,business_unit_type,
+            workspace_status,current_step,last_checked_at)
+        VALUES(?,?,?,?,'COMMERCIAL','WAIT_BOM','QUOTE_BOM',NOW())
+        """,product,item,"MODEL:"+product,month);
+    var checked = sourceReader.recheck(item, month);
+    assertThat(checked.modules()).filteredOn(row -> row.required()).extracting(row -> row.moduleType())
+        .doesNotContain("PROFILE", "SOLDER", "AUXILIARY", "DRAWING_BOM").contains("PACKAGE");
+    var page = workbench.getWorkbench(product,item);
+    assertThat(page.getBomRows()).isNotEmpty();
+    assertThat(page.getCostingWorkspace().getProductCode()).isEqualTo(product);
+    sourceReader.recheck(item, month);
+    assertThat(workbench.getWorkbench(product,item).getBuildBatchId()).isEqualTo(page.getBuildBatchId());
+  }
+
+  @Test void modelOnlyUsesFinishedBomAndSelectedCodeThroughoutCostingWithoutChangingOaInput() {
+    String model = product + "-MODEL";
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=?, main_category_code='10001' WHERE material_code=?", model, product);
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL, sunl_model=? WHERE id=?", model, item);
+    var match = workbench.getWorkbench(product,item).getModelBomMatch();
+    assertThat(match.candidates()).hasSize(1);
+    assertThat(match.selected()).isEqualTo(product);
+    approvePackaging();
+    workbench.prepareModelProduct(product,item,month,model,product);
+    var page = workbench.getWorkbench(product,item);
+    assertThat(page.getItem().getMaterialNo()).isEqualTo(product);
+    assertThat(page.getModelBomMatch().saved()).isTrue();
+    assertThat(page.getBomRows()).isNotEmpty();
+    assertThat(trees.getEffectiveBom(product,item).nodes()).extracting(row -> row.materialCode()).contains(product,material);
+    assertThat(items.selectById(item).getMaterialNo()).isNull();
+    assertThat(bomStatus.checkItemForCostRun(product,item,month).getProductCode()).isEqualTo(product);
+    var outcome = pipeline.execute(new ProductCostingRequest(product,item,month,"model-only-test",true));
+    assertThat(outcome.getPipelineStatus()).as(outcome.getMessage()).isEqualTo("SUCCESS");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"S60BH-126HZ-04", "S60BH-28HX-01", "S60BH-30HZ-32",
+      "S60BH-40HZ-57", "S60BH-46HZ-23"})
+  void modelOnlyFindsU9BomForPlateHeatExchangerCategory(String model) {
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL, product_name='钎焊板式换热器', sunl_model=? WHERE id=?", model, item);
+    jdbc.update("UPDATE lp_material_master_raw SET organization_code='PLATE' WHERE material_code IN (?,?)", product, material);
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=?, main_category_code='111021053' WHERE material_code=?", model, product);
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET price_org_code='220' WHERE top_product_code=?", product);
+    jdbc.update("UPDATE lp_bom_u9_source SET price_org_code='220' WHERE parent_material_no=?", product);
+
+    var match = workbench.getWorkbench(product, item).getModelBomMatch();
+    assertThat(match.organization()).isEqualTo("PLATE");
+    assertThat(match.selected()).isEqualTo(product);
+    var checked = bomStatus.checkItemForCostRun(product, item, month);
+    assertThat(checked.getProductCode()).isEqualTo(product);
+    assertThat(checked.getBomSource()).isEqualTo("U9");
+    assertThat(checked.getBomStatus()).isNotEqualTo("NO_BOM");
+    workbench.prepareModelProduct(product, item, month, model, product);
+    assertThat(trees.getEffectiveBom(product, item).nodes()).extracting(row -> row.materialCode())
+        .contains(product, material);
+    assertThat(items.selectById(item).getMaterialNo()).isNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"10001", "15001"})
+  void multipleExactMatchesRequireThisRowsFinanceSelectionAndBuildOnlyTheChosenBom(String otherCategory) {
+    String model = product + "-MODEL";
+    String other = product + "-F2", child = other + "-PART";
+    var sources = new OrdinaryCostingTestSources(jdbc, hierarchy);
+    sources.ordinarySources(other,child,form,date);
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET child_type='STANDARD' WHERE top_product_code=? AND level>0",other);
+    jdbc.update("INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,parent_material_no,child_material_no,child_material_name,stock_unit,bom_purpose,bom_version,child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to,child_type) SELECT source_import_batch_id,'U9',NOW(),price_org_code,parent_code,material_code,material_name,'件',bom_purpose,bom_version,sort_seq,qty_per_parent,1,effective_from,effective_to,'NORMAL' FROM lp_bom_raw_hierarchy WHERE top_product_code=? AND level>0",other);
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=?,main_category_code='10001' WHERE material_code=?", model, product);
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=?,main_category_code=? WHERE material_code=?", model, otherCategory, other);
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL,sunl_model=? WHERE id=?",model,item);
+    var match = workbench.getWorkbench(product,item).getModelBomMatch();
+    assertThat(match.candidates()).extracting(row -> row.materialCode()).containsExactlyInAnyOrder(product,other);
+    assertThat(match.selected()).isNull();
+    assertThat(bomStatus.checkItemForCostRun(product,item,month).getBomStatus()).isNotEqualTo("NO_BOM");
+    workbench.prepareModelProduct(product,item,month,model,other);
+    assertThat(trees.getEffectiveBom(product,item).nodes()).extracting(row -> row.materialCode()).contains(other,child).doesNotContain(product,material);
+    assertThat(items.selectById(item).getMaterialNo()).isNull();
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,product_name,sunl_model,business_unit_type,seq) VALUES(?,?,?,'COMMERCIAL',2)",form,product,model);
+    long another = jdbc.queryForObject("SELECT MAX(id) FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+    assertThat(workbench.getWorkbench(product,another).getModelBomMatch().selected()).isNull();
+  }
+
+  @Test void modelOnlyCountsEffectiveBomsInTheQuoteOrganization() {
+    String model = product + "-MODEL";
+    String otherOrganization = product + "-OR", expired = product + "-EX";
+    var sources = new OrdinaryCostingTestSources(jdbc, hierarchy);
+    sources.ordinarySources(otherOrganization, otherOrganization + "-PART", form, date);
+    sources.ordinarySources(expired, expired + "-PART", form, date);
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET price_org_code='220' WHERE top_product_code=?", otherOrganization);
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET effective_from='2000-01-01', effective_to='2000-12-31' WHERE top_product_code=?", expired);
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=?, main_category_code=NULL WHERE material_code=?", model, product);
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=?, main_category_code='10001' WHERE material_code IN (?,?)", model, otherOrganization, expired);
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL, sunl_model=? WHERE id=?", model, item);
+
+    var match = workbench.getWorkbench(product, item).getModelBomMatch();
+    assertThat(match.candidates()).extracting(row -> row.materialCode()).containsExactly(product);
+    assertThat(match.selected()).isEqualTo(product);
+  }
+
+  @Test void explicitMaterialNoUsesItsOwnBomEvenWhenTheModelMatchesAnotherMaterial() {
+    String model = product + "-MODEL";
+    jdbc.update("UPDATE lp_material_master_raw SET material_model=? WHERE material_code IN (?,?)", model, product, material);
+    jdbc.update("UPDATE oa_form_item SET material_no=?, sunl_model=? WHERE id=?", material, model, item);
+
+    var page = workbench.getWorkbench(product, item);
+    assertThat(page.getModelBomMatch()).isNull();
+    assertThat(page.getItem().getMaterialNo()).isEqualTo(material);
+    var missing = bomStatus.checkItemForCostRun(product, item, month);
+    assertThat(missing.getProductCode()).isEqualTo(material);
+    assertThat(missing.getBomStatus()).isEqualTo("NO_BOM");
+
+    jdbc.update("UPDATE oa_form_item SET material_no=? WHERE id=?", product, item);
+    var checked = bomStatus.checkItemForCostRun(product, item, month);
+    assertThat(checked.getProductCode()).isEqualTo(product);
+    assertThat(checked.getBomSource()).isEqualTo("U9");
+    assertThat(workbench.getWorkbench(product, item).getModelBomMatch()).isNull();
+  }
+
+  @Test void formalMaterialAfterMissingModelUsesNestedBareBodyAndRechecksMissingMonthlyBom() {
+    String finished = product + "-BOXED";
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL,sunl_model='S12BH-30L-16' WHERE id=?", item);
+    preparation.prepareByOaFormItem(item, date.toLocalDate(), month);
+    assertThat(jdbc.queryForObject("SELECT quote_product_code FROM lp_quote_bom_preparation_record WHERE oa_form_item_id=?",String.class,item))
+        .isEqualTo("MODEL:S12BH-30L-16");
+    jdbc.update("UPDATE oa_form_item SET material_no=? WHERE id=?", product, item);
+    // A finished assembly contains three bodies. Until the assembly root arrives the body is disconnected.
+    jdbc.update("""
+        UPDATE lp_bom_raw_hierarchy SET top_product_code=?,path=CONCAT('/',?,path),
+        parent_code=IF(level=0,?,parent_code), qty_per_parent=IF(level=0,3,qty_per_parent),
+        qty_per_top=3*qty_per_top,level=level+1 WHERE top_product_code=?
+        """, finished, finished, finished, product);
+    assertThat(bomStatus.checkItemForCostRun(product,item,month).getBomStatus()).isEqualTo("NO_BOM");
+    var outer = hierarchy.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<com.sanhua.marketingcost.entity.BomRawHierarchy>lambdaQuery()
+        .eq(com.sanhua.marketingcost.entity.BomRawHierarchy::getTopProductCode,finished)
+        .eq(com.sanhua.marketingcost.entity.BomRawHierarchy::getLevel,1)).getFirst();
+    outer.setId(null); outer.setMaterialCode(finished); outer.setPath("/"+finished+"/"); outer.setLevel(0);
+    outer.setSourceLineKey("TEST-OUTER"); outer.setQtyPerParent(BigDecimal.ONE); outer.setQtyPerTop(BigDecimal.ONE); hierarchy.insert(outer);
+    outer.setId(null); outer.setMaterialCode(finished+"-CARTON"); outer.setLevel(1);
+    outer.setSourceLineKey("TEST-CARTON"); outer.setPath("/"+finished+"/CARTON/"); hierarchy.insert(outer);
+
+    var tree = trees.getEffectiveBom(product,item);
+    assertThat(tree.state()).as("effective BOM issues %s",tree.blockIssues()).isEqualTo("DRAFT");
+    assertThat(tree.nodes()).extracting(n -> n.materialCode()).containsExactly(product,material);
+    assertThat(jdbc.queryForObject("""
+        SELECT JSON_UNQUOTE(JSON_EXTRACT(raw_node_json,'$.qtyPerTop'))
+        FROM lp_quote_bom_monthly_snapshot_detail WHERE monthly_snapshot_id=?
+        AND JSON_UNQUOTE(JSON_EXTRACT(raw_node_json,'$.materialCode'))=?
+        """,BigDecimal.class,tree.monthlySnapshotId(),material)).isEqualByComparingTo("2.5");
+    var check = pipeline.execute(new ProductCostingRequest(product,item,month,"nested-bare-test",true));
+    assertThat(check.getTechnicalDataCheck().modules()).filteredOn(m -> m.required())
+        .extracting(m -> m.moduleType()).containsExactly("PACKAGE");
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET qty_per_parent=99 WHERE top_product_code=? AND material_code=?",finished,material);
+    assertThat(trees.getEffectiveBom(product,item).monthlySnapshotId()).isEqualTo(tree.monthlySnapshotId());
+    approvePackaging();
+    var result = pipeline.execute(new ProductCostingRequest(product,item,month,"nested-bare-test",true));
+    assertThat(result.getPipelineStatus()).as(result.getMessage()).isEqualTo("SUCCESS");
   }
 
   @Test void bodyTreeAndPriceChecksExistBeforePackagingAndApprovedPackagingIsCostedExactlyOnce() {

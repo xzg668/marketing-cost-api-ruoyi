@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -46,6 +47,9 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private static final String COST_CODE_MATERIAL = "MATERIAL";
   private static final String COST_CODE_TOTAL = "TOTAL";
   private static final String STATUS_SUCCESS = "SUCCESS";
@@ -158,6 +162,7 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
       throw new IllegalArgumentException("报价产品行不属于当前报价单");
     }
     String oaNo = requireText(form.getOaNo(), "oaNo");
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, request.pricingMonth());
     String productCode =
         requireText(QuoteProductIdentityUtils.resolveCostingCode(item), "productCode");
     String pricingMonth = requireText(request.pricingMonth(), "pricingMonth");

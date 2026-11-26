@@ -43,13 +43,13 @@ public record PriceFactorContext(
       BigDecimal copper, BoardPriceInputs board, BigDecimal zinc, CustomerMaterialPrices prices,
       FactorPriceSnapshot.CuBand band) {
     this(materialCode, months, financial, copper, board, zinc, prices, band,
-        CustomerMaterialPrices.CALCULATION_VERSION);
+        prices == null ? CustomerMaterialPrices.CALCULATION_VERSION : prices.quotationVersion());
   }
 
   public PriceFactorContext(String materialCode, PriceMonthSelection months, FactorPriceSnapshot financial,
       BigDecimal copper, BoardPriceInputs board, BigDecimal zinc, CustomerMaterialPrices prices) {
     this(materialCode, months, financial, copper, board, zinc, prices,
-        financial == null ? null : financial.customerBand(prices == null ? copper : prices.copperForBand()));
+        financial == null ? null : financial.customerBand(prices == null ? copper : prices.copper()));
   }
 
   /** Existing snapshots and callers retain the captured Cu/Zn representation. */
@@ -125,8 +125,8 @@ public record PriceFactorContext(
 
   public PriceFactorContext withCustomerMaterials(CustomerMaterialPrices prices) {
     return new PriceFactorContext(materialCode, months, financial, null, boardInputs, null,
-        Objects.requireNonNull(prices), financial.customerBand(prices.copperForBand()),
-        CustomerMaterialPrices.CALCULATION_VERSION, materialSpecification);
+        Objects.requireNonNull(prices), financial.customerBand(prices.copper()),
+        prices.quotationVersion(), materialSpecification);
   }
 
   public boolean hasCustomerMaterialPrices() {
@@ -149,7 +149,9 @@ public record PriceFactorContext(
   public PriceFactorContext withFinancialSnapshot(FactorPriceSnapshot snapshot) {
     return new PriceFactorContext(materialCode, months, snapshot, customerCopperPricePerTon, boardInputs,
         customerZincPricePerTon, customerMaterialPrices,
-        snapshot.customerBand(customerMaterialPrices == null ? customerCopperPricePerTon : customerMaterialPrices.copperForBand()),
+        customerMaterialPrices != null && customerMaterialPrices.fixedSales()
+            && !CustomerMaterialPrices.FIXED_CU_BAND_VERSION.equals(substitutionVersion) ? null
+            : snapshot.customerBand(customerMaterialPrices == null ? customerCopperPricePerTon : customerMaterialPrices.copper()),
         substitutionVersion, materialSpecification);
   }
 
@@ -203,7 +205,8 @@ public record PriceFactorContext(
     if (customerBand == null || !CustomerMaterialPrices.usesCopperBand(key)) return false;
     String canonical = canonicalCopperAlias(key);
     // Saved V5 contexts retain their actual Cu and baseline Zn. Never reinterpret old costs.
-    if (!CustomerMaterialPrices.CALCULATION_VERSION.equals(substitutionVersion))
+    if (!CustomerMaterialPrices.CALCULATION_VERSION.equals(substitutionVersion)
+        && !CustomerMaterialPrices.FIXED_CU_BAND_VERSION.equals(substitutionVersion))
       return !COPPER.equals(canonical) && !ZINC.equals(canonical);
     // Linked sales prefer explicit inputs. An empty sales mode uses the complete Cu band.
     return customerMaterialPrices == null || !customerMaterialPrices.prefersCustomerPrices()
@@ -222,6 +225,10 @@ public record PriceFactorContext(
       if (!taxIncluded) throw new IllegalArgumentException("客户材料基价为含税价");
       return FactorPriceUnit.CNY_TON.convert(customerSus, targetUnit);
     }
+    if (customerMaterialPrices != null && customerMaterialPrices.fixedSales() && customerBand == null
+        && CustomerMaterialPrices.FIXED_CU_BAND_VERSION.equals(substitutionVersion)
+        && "210".equals(financial.scope().priceOrgCode()) && CustomerMaterialPrices.usesCopperBand(key))
+      throw new IllegalArgumentException("财务发布缺少需求单铜价对应的档位，物料=" + materialCode + "，因素=" + key);
     boolean byBand = usesSelectedBand(key);
     var factor = byBand ? customerBand.factors().get(key) : financial.factors().get(key);
     if (factor == null || factor.price() == null) {

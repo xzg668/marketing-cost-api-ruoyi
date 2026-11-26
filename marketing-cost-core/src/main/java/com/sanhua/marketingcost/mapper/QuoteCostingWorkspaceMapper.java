@@ -72,7 +72,7 @@ public interface QuoteCostingWorkspaceMapper extends BaseMapper<QuoteCostingWork
 
   @Update("""
       UPDATE lp_quote_costing_workspace
-         SET workspace_status = #{workspace.workspaceStatus},
+         SET product_code = #{workspace.productCode}, workspace_status = #{workspace.workspaceStatus},
              current_step = #{workspace.currentStep},
              input_fingerprint = #{workspace.inputFingerprint},
              source_revision = #{workspace.sourceRevision},

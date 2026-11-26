@@ -57,12 +57,16 @@ public class FormalU9BomGateway implements LiveU9BomGateway {
                 .map(String::trim)
                 .findFirst()
                 .orElse(null);
-        String batchId = resolveRootBatchId(lines);
+        BomRawHierarchy root = resolveRoot(lines);
+        String batchId = root == null ? null : StringUtils.hasText(root.getBuildBatchId())
+            ? root.getBuildBatchId().trim() : trimToNull(root.getSourceImportBatchId());
         if (!StringUtils.hasText(batchId)) {
           return CurrentU9BomResult.dataEmpty("U9正式BOM缺少可追溯的层级构建批次");
         }
-        return CurrentU9BomResult.available(
+        var available = CurrentU9BomResult.available(
             "U9", version, batchId, lines.size(), fingerprints.u9Structure(lines));
+        return root.getLevel() != null && root.getLevel() > 0
+            ? available.withSubtreeRoot(root.getId()) : available;
       }
       String gapMessage = trimToNull(result.gapMessage());
       if (gapMessage != null
@@ -96,19 +100,14 @@ public class FormalU9BomGateway implements LiveU9BomGateway {
     }
   }
 
-  private String resolveRootBatchId(List<QuoteBomSourceLineDto> lines) {
+  private BomRawHierarchy resolveRoot(List<QuoteBomSourceLineDto> lines) {
     Long rootId = lines.stream()
         .filter(line -> line.level() != null && line.level() == 0)
         .map(QuoteBomSourceLineDto::sourceRawHierarchyId)
         .filter(java.util.Objects::nonNull)
         .findFirst()
         .orElse(null);
-    if (rootId == null) return null;
-    BomRawHierarchy root = bomRawHierarchyMapper.selectById(rootId);
-    if (root == null) return null;
-    return StringUtils.hasText(root.getBuildBatchId())
-        ? root.getBuildBatchId().trim()
-        : trimToNull(root.getSourceImportBatchId());
+    return rootId == null ? null : bomRawHierarchyMapper.selectById(rootId);
   }
 
   private boolean existsOnlyInOtherOrganization(QuoteBomReadContext context) {

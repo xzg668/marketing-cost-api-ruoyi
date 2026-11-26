@@ -156,7 +156,7 @@ public final class MonthlyPriceScenarios {
           var metal = snapshot.metalInputs();
           var base = capturedFinancialContext(metal.financial(), customerPrices, publications);
           var inputs = new HouseholdMetalCalculation.Inputs(metal.copperGrams(), metal.zincGrams(), base);
-          var projected = HouseholdMetalCalculation.demandContext(inputs, customerPrices);
+          var projected = base == null ? null : base.withCustomerMaterials(customerPrices);
           if (projected != null) customerContexts.add(projected.evidenceForFactors(base.financial().factors().keySet()));
           householdCalculation = HouseholdMetalCalculation.calculateQuoted(financial, inputs, projected);
           customer = householdCalculation.calculatedW();
@@ -202,7 +202,8 @@ public final class MonthlyPriceScenarios {
                 calculation.path("financeRevision").intValue(), selectedRequest(id, requests, keys).family().businessUnitType(),
                 "210", calculation.path("financeMonth").asText(), calculation.path("financeScheme").asText(), FactorPriceScope.Condition.GENERAL);
           }
-          var inquiryFamily = selectedRequest(id, requests, keys).family();
+          var inquiryRequest = selectedRequest(id, requests, keys);
+          var inquiryFamily = inquiryRequest.family();
           PriceFactorContext inquiryFactors = null;
           if (inquiryBase != null) {
             var months = new PriceMonthSelection(inquiryFamily.month().toString(), inquiryBase.scope().priceMonth());
@@ -217,6 +218,9 @@ public final class MonthlyPriceScenarios {
             if (inquiryContext != null) {
               inputs.put(entry.getKey(), inquiryContext.requiredPrice(factor,
                   FactorPriceUnit.require(calculation.path("financeFactors").path(factor).path("unit").asText()), true));
+            } else if (customerPrices.fixedSales() && customerPrices.copper() != null
+                && "210".equals(inquiryRequest.priceOrgCode()) && CustomerMaterialPrices.usesCopperBand(factor)) {
+              throw new IllegalArgumentException("询价底稿缺少需求单铜价对应的财务档位：" + factor);
             } else if (customerMetal != null) {
               String unit = calculation.path("financeFactors").path(factor).path("unit").asText();
               inputs.put(entry.getKey(),com.sanhua.marketingcost.service.pricing.FactorPriceUnit.CNY_TON.convert(customerMetal,
@@ -297,6 +301,11 @@ public final class MonthlyPriceScenarios {
           zinc = rule.getZincWeightG() == null || rule.getZincWeightG().signum() == 0
               ? null : ctx.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_TON, true);
         }
+        if (base != null && base.financial() == null && customerPrices.fixedSales() && customerPrices.copper() != null
+            && settlement.mode(rule) == com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceMode.LINKED_FORMULA
+            && (rule.getCopperWeightG().signum() != 0 || rule.getZincWeightG().signum() != 0)
+            && "210".equals(selectedRequest(id, requests, keys).priceOrgCode()))
+          throw new IllegalArgumentException("结算联动价底稿缺少需求单铜价对应的财务档位：" + rule.getMaterialCode());
         var projected = base == null || (copper == null && zinc == null) ? base : new SettlementBasePrice(base.id(), base.businessUnitType(),
             base.priceMonth(), base.revisionNo(), base.active(), copper == null ? base.copperPrice() : copper.movePointLeft(3),
             zinc == null ? base.zincPrice() : zinc.movePointLeft(3), base.unit(), base.taxBasis(), base.sourceKind(), base.sourceFileSha256(),
@@ -359,7 +368,7 @@ public final class MonthlyPriceScenarios {
       evidence.put("inquirySourceMonth",root.path("source").path("evidence").path("sourceMonth").asText());
       if(root.path("match").isObject())evidence.put("householdMatch",root.path("match"));
     }
-    evidence.put("customerPrice", customer); evidence.put("projectionVersion", CustomerMaterialPrices.CALCULATION_VERSION);
+    evidence.put("customerPrice", customer); evidence.put("projectionVersion", customerPrices.quotationVersion());
     var pair = new Pair(id, fact.evidence().sha256(), financial, customer, codec.unwrap(codec.encode(evidence)));
     result.put(id, pair); visiting.remove(id); return pair;
   }

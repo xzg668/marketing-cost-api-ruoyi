@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
@@ -53,6 +54,9 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private final QuotePricingPeriod pricingPeriods;
 
   private static final String STATUS_TRIAL = "TRIAL";
@@ -673,12 +677,13 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         || (formBusinessUnit == null && itemBusinessUnit == null)) {
       throw new QuoteIngestException("当前业务单元无权访问该报价产品行");
     }
-    String productCode =
-        required("productCode", QuoteProductIdentityUtils.resolveCostingCode(item));
     String period =
         StringUtils.hasText(periodMonth)
             ? pricingPeriods.requireActiveMonth(periodMonth)
             : pricingPeriods.currentMonth();
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, period);
+    String productCode =
+        required("productCode", QuoteProductIdentityUtils.resolveCostingCode(item));
     return new Scope(form, item, oaNoValue, oaFormItemId, productCode, period, currentBusinessUnit);
   }
 

@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.costing;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest;
@@ -17,6 +18,9 @@ import org.springframework.util.StringUtils;
 /** 只负责请求归属校验和输入修订读取，不生成BOM、价格或成本。 */
 @Component
 public class ProductCostingContextResolver {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private final QuotePricingPeriod pricingPeriods;
 
   private final OaFormMapper formMapper;
@@ -46,6 +50,7 @@ public class ProductCostingContextResolver {
     }
     String period = pricingPeriods.requireActiveMonth(request.periodMonth(), form.getBusinessUnitType());
     requireOaCostingInputs(form);
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, period);
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (!StringUtils.hasText(productCode)) {
       throw new QuoteIngestException("产品料号、三花型号和客户图号至少填写一个");

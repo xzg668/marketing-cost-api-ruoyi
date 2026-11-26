@@ -10,7 +10,20 @@ public record CurrentU9BomResult(
     String structureFingerprint,
     String message,
     Long monthlySnapshotId,
-    boolean monthlySnapshotCreated) {
+    boolean monthlySnapshotCreated,
+    @com.fasterxml.jackson.annotation.JsonIgnore Long subtreeRootId) {
+
+  public CurrentU9BomResult(Status status, String source, String bomVersion, String syncBatchId,
+      int lineCount, String structureFingerprint, String message, Long monthlySnapshotId,
+      boolean monthlySnapshotCreated) {
+    this(status, source, bomVersion, syncBatchId, lineCount, structureFingerprint, message,
+        monthlySnapshotId, monthlySnapshotCreated, null);
+  }
+
+  CurrentU9BomResult withSubtreeRoot(Long id) {
+    return new CurrentU9BomResult(status, source, bomVersion, syncBatchId, lineCount,
+        structureFingerprint, message, monthlySnapshotId, monthlySnapshotCreated, id);
+  }
 
   public enum Status {
     AVAILABLE,

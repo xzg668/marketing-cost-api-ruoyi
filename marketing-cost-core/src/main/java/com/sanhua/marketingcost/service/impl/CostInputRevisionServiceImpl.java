@@ -215,6 +215,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       OaFormItem item,
       String effectiveTechnicalFingerprint,
       String pricingMonth) {
+    item = com.sanhua.marketingcost.service.quotebom.AdoptedModelProduct.forRevision(jdbcTemplate, form, item, pricingMonth);
     StringBuilder canonical = new StringBuilder(1024);
     append(
         canonical,
@@ -235,7 +236,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "productPropertyPolicy", "U9_FINISHED_TO_BARE_ANNUAL_PROPERTY_V1");
     appendBomNetLossRevision(canonical, form, item, pricingMonth);
     append(canonical, "materialDifferencePolicy",
-        com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.CALCULATION_VERSION);
+        com.sanhua.marketingcost.service.pricing.CustomerMaterialPrices.fromQuotation(form).quotationVersion());
     append(canonical, "sources", sourceRevision);
     String productCode = com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(item);
     if (oemProducts != null) {
@@ -273,6 +274,13 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "pricePriorityPolicy", "MONTH_ORG_V1");
     append(canonical, "pricePriority", priorityRevision(item, pricingMonth, monthly));
     append(canonical, "householdScope", householdRevision(item.getBusinessUnitType(), monthly.householdObservers()));
+    if (effectiveTechnicalFingerprint != null && !"NO_EFFECTIVE_TECHNICAL_DATA".equals(effectiveTechnicalFingerprint)) {
+      var acceptedPackaging = jdbcTemplate.queryForList(
+          "SELECT effective_version_id,content_fingerprint FROM lp_quote_bare_package_accepted WHERE material_code=? AND business_unit_type=? AND price_org_code=? ORDER BY product_id",
+          productCode, form.getBusinessUnitType(), MaterialOrganization.quoteDataForQuoteProduct(
+              form.getProcessCode(), form.getOaNo(), item.getBusinessUnitType(), item.getProductName(), item.getSunlModel(), productCode).priceOrgCode());
+      if (!acceptedPackaging.isEmpty()) append(canonical, "acceptedBarePackaging", acceptedPackaging);
+    }
     append(canonical, "effectiveTechnicalData", effectiveTechnicalFingerprint);
     // 下游退回要求真正生成新成本；只纳入本报价、本月的退回记录，不改旧成功版本。
     Long returned =

@@ -104,14 +104,14 @@ public class TechnicalDataBomPriceCheck {
     boolean assigned = checked.items().stream().anyMatch(row -> "ASSIGNED".equals(row.status()));
     long missing = checked.items().stream().filter(row -> row.requiresEntry()).count();
     boolean failed = !checked.issues().isEmpty();
-    boolean required = !failed && (missing > 0 || shared || assigned);
+    boolean required = missing > 0 || shared || assigned;
     boolean otherOwner = price.getAssigneeUserId() != null && !Objects.equals(price.getAssigneeUserId(), actor.userId());
     // 已有价格负责人继续办理；不会被保存制造件的其他人员抢走。
     Long user = otherOwner ? price.getAssigneeUserId() : actor.canFillUnassigned(scope.task()) ? null : actor.userId();
     String name = otherOwner ? price.getAssigneeName() : user == null ? null : actor.name();
     if (!otherOwner && scope.task().getOaAssignmentVersion() != null && scope.task().getOaAssignmentVersion() > 0)
       recipients.manufacturingPriceScope(scope.task().getId(), actor.userId(), required);
-    String availability = failed ? "ERROR" : required ? "MISSING" : "AVAILABLE";
+    String availability = required ? "MISSING" : failed ? "ERROR" : "AVAILABLE";
     String reason = failed ? "TECHNICAL_BOM_PRICE_FAILED" : shared && missing == 0 && !assigned
         ? "TECHNICAL_BOM_PRICE_SHARED" : "TECHNICAL_BOM_PRICE_CHECKED";
     String message = failed ? String.join("；", checked.issues()) : missing > 0 ? "实际计价物料中有 " + missing + " 项需补价"

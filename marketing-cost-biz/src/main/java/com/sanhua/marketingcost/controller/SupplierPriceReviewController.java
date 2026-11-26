@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -15,6 +16,8 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/v1/quote-requests/{oaNo}/items/{itemId}/supplier-price-reviews")
 public class SupplierPriceReviewController {
+  private static final org.slf4j.Logger log =
+      org.slf4j.LoggerFactory.getLogger(SupplierPriceReviewController.class);
   private final SupplierPriceReviewWorkflow workflow;
   private final SupplierPriceReviewExportService exports;
   public SupplierPriceReviewController(SupplierPriceReviewWorkflow workflow,
@@ -45,6 +48,43 @@ public class SupplierPriceReviewController {
       return CommonResult.success(workflow.repriceConfirmed(decision));
     } catch (IllegalArgumentException error) {
       return CommonResult.error(400, error.getMessage());
+    }
+  }
+
+  @PostMapping("/save")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:cost-run:execute')")
+  public CommonResult<List<SupplierPriceReviewWorkflow.SavedReview>> save(@PathVariable String oaNo,
+      @PathVariable Long itemId, @RequestBody List<SupplierPriceReviewWorkflow.Confirmation> requests,
+      Authentication authentication) {
+    try {
+      return CommonResult.success(workflow.saveReviews(oaNo, itemId, requests, authentication.getName()));
+    } catch (IllegalArgumentException error) {
+      return CommonResult.error(400, error.getMessage());
+    }
+  }
+
+  @GetMapping("/pending-reprice")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:cost-run:execute')")
+  public CommonResult<List<SupplierPriceReviewWorkflow.SavedReview>> pendingReprice(@PathVariable String oaNo,
+      @PathVariable Long itemId, @RequestParam String periodMonth) {
+    return CommonResult.success(workflow.pendingReprice(oaNo, itemId, periodMonth));
+  }
+
+  @PostMapping("/reprice-saved")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:cost-run:execute')")
+  public CommonResult<SupplierPriceConfirmationResponse> repriceSaved(@PathVariable String oaNo,
+      @PathVariable Long itemId, @RequestBody List<Long> decisions) {
+    try {
+      return CommonResult.success(workflow.repriceSaved(oaNo, itemId, decisions));
+    } catch (org.springframework.security.access.AccessDeniedException denied) {
+      throw denied;
+    } catch (IllegalArgumentException | com.sanhua.marketingcost.service.ingest.QuoteIngestException
+        | com.sanhua.marketingcost.service.EffectiveTechnicalDataException
+        | com.sanhua.marketingcost.service.reprice.MonthlyQuotationControl.QuotationBlocked blocked) {
+      return CommonResult.error(400, blocked.getMessage());
+    } catch (RuntimeException failed) {
+      log.warn("Saved supplier decisions could not complete repricing: oaNo={}, itemId={}", oaNo, itemId, failed);
+      return CommonResult.error(500, "选择已保存，重新取价暂未完成，请重试");
     }
   }
 }

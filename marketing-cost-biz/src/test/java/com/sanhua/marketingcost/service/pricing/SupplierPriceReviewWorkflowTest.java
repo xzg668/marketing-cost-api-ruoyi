@@ -69,6 +69,58 @@ class SupplierPriceReviewWorkflowTest {
     assertThat(workflow.confirm("OA-1",1L,request(true,"fingerprint"),"alice")).isSameAs(previous);
     verify(decisions,never()).insert(any(SupplierPriceDecision.class));
   }
+
+  @Test void multipleChoicesReturnSavedIdsBeforeAnyRepricingAndValidateCandidatesOnce() {
+    var other = otherReview();
+    when(prices.checkSupplierReviewCandidates(eq("OA-1"),eq(1L),any())).thenReturn(List.of(review,other));
+    var sequence = new java.util.concurrent.atomic.AtomicLong(10L);
+    when(decisions.insert(any(SupplierPriceDecision.class))).thenAnswer(call -> {
+      SupplierPriceDecision decision = call.getArgument(0);
+      assertThat(decision.getRetryStatus()).isEqualTo("REPRICE_PENDING");
+      decision.setId(sequence.incrementAndGet());
+      return 1;
+    });
+    var saved = workflow.saveReviews("OA-1",1L,List.of(request(false,"fingerprint"),
+        new SupplierPriceReviewWorkflow.Confirmation(month,"another","second",false,date)),"alice");
+    assertThat(saved).extracting(SupplierPriceReviewWorkflow.SavedReview::decisionId).containsExactly(11L,12L);
+    verify(prices,times(1)).checkSupplierReviewCandidates(eq("OA-1"),eq(1L),any());
+    verify(prices,never()).generate(any(),any(),any());
+  }
+
+  @Test void oneChangedFingerprintAbortsTheEntireBatchBeforeSaving() {
+    when(prices.checkSupplierReviewCandidates(eq("OA-1"),eq(1L),any())).thenReturn(List.of(review,otherReview()));
+    assertThatThrownBy(() -> workflow.saveReviews("OA-1",1L,List.of(request(false,"fingerprint"),
+        new SupplierPriceReviewWorkflow.Confirmation(month,"another","expired",false,date)),"alice"))
+        .hasMessageContaining("已变化");
+    verifyNoInteractions(decisions);
+  }
+
+  @Test void savedReviewsRepriceOnceAndACompletedReplayOnlyReadsTheCurrentResult() {
+    var first=decision(1L,"scope");
+    var second=decision(2L,"another");
+    first.setRetryStatus("REPRICE_PENDING");
+    second.setRetryStatus("REPRICE_PENDING");
+    first.setDecision("FALLBACK_HIGH");
+    second.setDecision("FALLBACK_HIGH");
+    when(decisions.selectBatchIds(any())).thenReturn(List.of(first,second));
+    when(decisions.latest("scope")).thenReturn(first);
+    when(decisions.latest("another")).thenReturn(second);
+    when(decisions.pendingReprice("OA-1",1L,month)).thenAnswer(call -> List.of(first,second).stream()
+        .filter(d -> "REPRICE_PENDING".equals(d.getRetryStatus())).toList());
+    when(prices.generate(eq("OA-1"),eq(1L),any())).thenReturn(response());
+    when(prices.getPricePrepare("OA-1",1L,month)).thenReturn(response());
+
+    assertThat(workflow.repriceSaved("OA-1",1L,List.of(1L,2L)).repriceStatus()).isEqualTo("COMPLETED");
+    assertThat(workflow.repriceSaved("OA-1",1L,List.of(1L,2L)).repriceStatus()).isEqualTo("CURRENT");
+    assertThat(first.getRetryStatus()).isEqualTo("RESOLVED");
+    assertThat(second.getRetryStatus()).isEqualTo("RESOLVED");
+    verify(prices,times(1)).generate(eq("OA-1"),eq(1L),any());
+  }
+
+  private SupplierPriceReview otherReview() {
+    var other = new SupplierPriceScope("COMMERCIAL","OA-1",1L,month,date,"210","MAT-2","FIXED");
+    return new SupplierPriceReview("another","second",other,List.of(),"PENDING",null,null,"待确认");
+  }
   @Test void importClosesEveryResolvedMaterialForTheProduct() {
     var first=decision(1L,"scope");
     var second=decision(2L,"other-scope");

@@ -85,7 +85,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   private static final int ACTIVE = 1;
   private static final int MAX_DEPTH = 128;
-  private static final String PRODUCT_TYPE_NON_BARE = "NON_BARE";
   private static final String DEFAULT_BOM_PURPOSE = "主制造";
 
   private final QuoteBomPreparationRecordMapper preparationMapper;
@@ -166,8 +165,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public QuoteEffectiveBomResponse getEffectiveBom(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
-    QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
-    return draftResponse(context, snapshot);
+    return readDraft(context);
   }
 
   @Override
@@ -200,8 +198,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public QuoteEffectiveBomResponse rebuildPreview(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
-    QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
-    return draftResponse(context, snapshot);
+    return readDraft(context);
   }
 
   @Override
@@ -545,7 +542,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
       throw failure(
           "EFFECTIVE_BOM_SCOPE_INVALID", "OA解析组织与BOM准备记录组织不一致，已阻断读取");
     }
-    String topProductCode = required(formalProductCode(preparation), "topProductCode");
+    // 包装参考和早期无料号的准备记录都不能代替当前报价行决定本体料号。
+    String topProductCode = required(bomContext.productCode(), "topProductCode");
     return new QueryContext(
         normalizedOaNo,
         oaFormItemId,
@@ -557,6 +555,17 @@ public class QuoteEffectiveBomApplicationServiceImpl
         bomContext.packageMethod(),
         preparedOrganization,
         businessUnit.trim());
+  }
+
+  private QuoteEffectiveBomResponse readDraft(QueryContext context) {
+    try {
+      return draftResponse(context, findOrPrepareMonthlySnapshot(context));
+    } catch (QuoteEffectiveBomQueryException failure) {
+      if (!"U9_BOM_CHECK_FAILED".equals(failure.getCode())) throw failure;
+      var issue = new QuoteEffectiveBomIssueResponse(failure.getCode(), context.topProductCode(),
+          null, failure.getMessage());
+      return blockedResponse(context, null, List.of(issue), baseWarnings(context));
+    }
   }
 
   private QuoteBomMonthlySnapshot findMonthlySnapshot(QueryContext context) {
@@ -601,6 +610,34 @@ public class QuoteEffectiveBomApplicationServiceImpl
   /** 历史报价可能已有原始 BOM，但尚未建立新流程使用的内部月度关系。页面打开或刷新时只为当前 产品补齐这层技术关系，业务无需返回产品列表再次执行 BOM 同步。 */
   private QuoteBomMonthlySnapshot findOrPrepareMonthlySnapshot(QueryContext context) {
     QuoteBomMonthlySnapshot snapshot = findMonthlySnapshot(context);
+    if (snapshot != null && "U9".equals(snapshot.getBomSource())
+        && !monthlyDetails.load(snapshot.getId()).isEmpty()) return snapshot;
+
+    // 同月只有可用的 U9 BOM 可直接沿用；选取图库或技术补录前先核实当前料号。
+    var checked =
+        quoteBomStatusService.checkItemForCostRun(
+            context.oaNo(), context.oaFormItemId(), context.costPeriodMonth());
+    if (checked != null && "CHECK_FAILED".equals(checked.getBomStatus())) {
+      throw failure("U9_BOM_CHECK_FAILED", firstText(checked.getErrorMessage(), "U9 BOM 查询失败，请重查"));
+    }
+    // 使用本次检查返回的快照，并在同一事务读视图内读取其不可变明细。
+    // 并发首次创建的冲突由外层事务重试，不能混用新表头和旧明细读视图。
+    if (checked != null
+        && checked.getSyncRecordId() != null
+        && List.of("SYNCED", "REUSED_CURRENT_MONTH", "MANUAL_ENTERED")
+            .contains(checked.getBomStatus())) {
+      QuoteBomMonthlySnapshot current = monthlySnapshotMapper.selectById(checked.getSyncRecordId());
+      if (current != null
+          && "SUCCESS".equals(current.getSyncStatus())
+          && Objects.equals(current.getActiveFlag(), ACTIVE)
+          && Objects.equals(current.getProductCode(), context.topProductCode())
+          && Objects.equals(current.getCostPeriodMonth(), context.costPeriodMonth())
+          && Objects.equals(current.getPriceOrgCode(), context.organization().priceOrgCode())) {
+        if (!"U9".equals(current.getBomSource())) snapshot = current;
+        else if (!monthlyDetails.load(current.getId()).isEmpty()) return current;
+      }
+    }
+    if (snapshot == null || "U9".equals(snapshot.getBomSource())) snapshot = findMonthlySnapshot(context);
     if (snapshot == null || !"U9".equals(snapshot.getBomSource())) {
       var technical = completeBom.snapshot(context.oaFormItemId(), context.costPeriodMonth(), context.businessUnit(),
           context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
@@ -615,32 +652,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
           context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
       if (revised != null) return revised;
     }
-    if (snapshot != null && (!"U9".equals(snapshot.getBomSource())
-        || !monthlyDetails.load(snapshot.getId()).isEmpty())) {
-      return snapshot;
-    }
-    var checked =
-        quoteBomStatusService.checkItemForCostRun(
-            context.oaNo(), context.oaFormItemId(), context.costPeriodMonth());
-    // 使用本次检查返回的快照，并在同一事务读视图内读取其不可变明细。
-    // 并发首次创建的冲突由外层事务重试，不能混用新表头和旧明细读视图。
-    if (checked != null
-        && checked.getSyncRecordId() != null
-        && List.of("SYNCED", "REUSED_CURRENT_MONTH", "MANUAL_ENTERED")
-            .contains(checked.getBomStatus())) {
-      QuoteBomMonthlySnapshot current = monthlySnapshotMapper.selectById(checked.getSyncRecordId());
-      if (current != null
-          && "SUCCESS".equals(current.getSyncStatus())
-          && Objects.equals(current.getActiveFlag(), ACTIVE)
-          && Objects.equals(current.getProductCode(), context.topProductCode())
-          && Objects.equals(current.getCostPeriodMonth(), context.costPeriodMonth())
-          && Objects.equals(current.getPriceOrgCode(), context.organization().priceOrgCode())
-          && (!"U9".equals(current.getBomSource())
-              || !monthlyDetails.load(current.getId()).isEmpty())) {
-        return current;
-      }
-    }
-    snapshot = findMonthlySnapshot(context);
     if (snapshot != null && (!"U9".equals(snapshot.getBomSource())
         || !monthlyDetails.load(snapshot.getId()).isEmpty())) return snapshot;
     if (checked == null || !"NO_BOM".equals(checked.getBomStatus())) return null;
@@ -1148,15 +1159,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
                     Comparator.nullsFirst(Comparator.naturalOrder())))
         .map(BomRawHierarchy::getBuildBatchId)
         .orElse(null);
-  }
-
-  private static String formalProductCode(QuoteBomPreparationRecord record) {
-    if (PRODUCT_TYPE_NON_BARE.equals(record.getProductType())) {
-      return trimToNull(record.getQuoteProductCode());
-    }
-    return firstText(
-        firstText(record.getSourceTopProductCode(), record.getReferenceFinishedCode()),
-        record.getQuoteProductCode());
   }
 
   private static List<String> distinctWarnings(List<String> warnings) {

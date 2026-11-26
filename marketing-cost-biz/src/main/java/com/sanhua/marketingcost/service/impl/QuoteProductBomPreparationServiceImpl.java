@@ -122,9 +122,11 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     String periodMonth = bomContext.costPeriodMonth();
     QuoteDataOrganization organization = bomContext.organization();
     if(quoteShapeInputs!=null) quoteShapeInputs.discoverSelected(context.item().getBusinessUnitType(),periodMonth,itemId);
-    boolean noOriginalBom = QuoteProductIdentityUtils.hasFormalMaterialNo(context.item())
+    boolean formal = QuoteProductIdentityUtils.hasFormalMaterialNo(context.item())
+        || !Objects.equals(productCode, QuoteProductIdentityUtils.resolveCostingCode(context.item()));
+    boolean noOriginalBom = formal
         && originalBomMissing(context, bomContext, resolveQuoteDate(quoteDate));
-    if (noOriginalBom || !QuoteProductIdentityUtils.hasFormalMaterialNo(context.item())) {
+    if (noOriginalBom || !formal) {
       var snapshot = completeBom.snapshot(itemId, periodMonth, context.form().getBusinessUnitType(),
           organization.priceOrgCode(), bomContext.customerKey(), bomContext.packageMethod());
       if (snapshot != null) {
@@ -518,7 +520,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
 
   private QuoteProductTypeResolveResult resolveProductType(
       OaFormItem item, String productCode, String organizationCode) {
-    if (!QuoteProductIdentityUtils.hasFormalMaterialNo(item)) {
+    if (!QuoteProductIdentityUtils.hasFormalMaterialNo(item) && Objects.equals(productCode, QuoteProductIdentityUtils.resolveCostingCode(item))) {
       return fullSupplementType(item, productCode);
     }
     String organization = MaterialOrganization.normalize(organizationCode);

@@ -160,6 +160,22 @@ class TechnicalDataCostingSourcesTest {
     assertBlocked("TECH_DATA_TASK_NOT_SUBMITTED");
   }
 
+  @Test void barePackageOnlyEntersCostingTreeAfterFinanceConfirmsCurrentSubmission() {
+    var product = repository.findProduct(20L).orElseThrow();
+    product.setOaFormItemId(10L);
+    product.setAccountingMonth("2026-09");
+    task.setOaFormId(1L);
+    when(publicSources.checkDataSources(any())).thenReturn(List.of(new TechnicalDataSourceFact(
+        TechnicalDataModuleType.PACKAGE, TechnicalDataAvailability.MISSING, "BARE_PACKAGE_MISSING",
+        "裸品需要包装", "U9", LocalDateTime.now())));
+    when(workflow.findFlow(50L)).thenReturn(flow(false, null));
+    assertThat(service.preparationSources(10L, "2026-09")).doesNotContainKey("PACKAGE");
+    when(workflow.findFlow(50L)).thenReturn(flow(true, "confirmed"));
+    assertThat(service.preparationSources(10L, "2026-09").get("PACKAGE").version().getId()).isEqualTo(40L);
+    task.setTaskStatus("PARTIALLY_RETURNED");
+    assertThat(service.preparationSources(10L, "2026-09")).doesNotContainKey("PACKAGE");
+  }
+
   @Test void anotherQuoteCannotUseAnUnapprovedOriginalDraftEvenForPreparation() {
     task.setTaskStatus("EDITING");
     assertThatThrownBy(() -> service.preparationSources(10L,"2026-09"))

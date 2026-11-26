@@ -104,12 +104,13 @@ public final class MonthlyRepriceInputProjection {
     copper.set("customerPerKg",json.valueToTree(version.getOaCuPrice()));
     copper.set("financialBasePriceId",json.valueToTree(version.getFinanceBasePriceId()));
     copper.set("overrides",json.valueToTree(context.getPriceVariableOverrides()));
-    copper.set("customerMaterialPrices",json.valueToTree(CustomerMaterialPrices.fromQuotation(calculation.input().form())));
+    var customerPrices = CustomerMaterialPrices.fromQuotation(calculation.input().form());
+    copper.set("customerMaterialPrices",json.valueToTree(customerPrices));
     copper.set("householdCustomerPrices",json.valueToTree(materials.householdCustomerPrices()));
     sections.put(MonthlyRepriceInputDocument.Section.COPPER_SCENARIOS,copper.toString());
     sections.put(MonthlyRepriceInputDocument.Section.POLICIES,
         object(Map.of("projectionVersion",3,"algorithm",MonthlyProductCost.ALGORITHM_VERSION,
-            "materialPriceProjection",CustomerMaterialPrices.CALCULATION_VERSION,
+            "materialPriceProjection",customerPrices.quotationVersion(),
             "fees",ProductFeeContract.POLICY_VERSION,"priceAsOf",calculation.priceAsOfTime())).toString());
     return MonthlyRepriceInputDocument.capture(new MonthlyRepriceInputDocument.Scope(context.getBusinessUnitType(),
         YearMonth.parse(context.getPricingMonth()),context.getProductCode(),calculation.input().context().organization(),

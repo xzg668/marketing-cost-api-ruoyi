@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.ingest;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
@@ -19,6 +20,9 @@ import org.springframework.util.StringUtils;
  */
 @Component
 public class QuoteBomContextResolver {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private final MaterialMasterRawMapper materialMaster;
   private final QuotePricingPeriod pricingPeriods;
 
@@ -54,16 +58,26 @@ public class QuoteBomContextResolver {
     if (item == null) {
       throw new QuoteIngestException("报价单产品行不能为空");
     }
+    String month = resolveCostPeriodMonth(form, existingCostPeriodMonth);
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, month);
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) {
       throw new QuoteIngestException("产品料号、三花型号和客户图号均为空，无法识别报价产品");
     }
     return new QuoteBomContext(
-        resolveCostPeriodMonth(form, existingCostPeriodMonth),
+        month,
         productCode,
         resolveCustomer(form, verifiedCustomerCode),
         normalizePackageMethod(item.getPackageMethod()),
         resolveOrganization(form, item));
+  }
+
+  /** 在正式 BOM 检查的写事务中绑定唯一候选；普通浏览只读。 */
+  public void bindUniqueModel(OaForm form, OaFormItem item, QuoteBomContext context) {
+    if (!QuoteModelBomProducts.modelOnly(item) || modelProducts == null) return;
+    var match = modelProducts.inspect(form, item, context.costPeriodMonth());
+    if (match != null && match.selected() != null && !match.saved()
+        && match.selected().equals(context.productCode())) modelProducts.bindFirst(item.getId(), match);
   }
 
   public ResolvedCustomerKey resolveCustomer(OaForm form, String verifiedCustomerCode) {

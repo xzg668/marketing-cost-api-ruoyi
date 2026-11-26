@@ -13,7 +13,12 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 @Tag("integration")
 class HouseholdMonthlyDifferenceIntegrationTest {
-  @BeforeAll static void start() throws Exception { database(); }
+  @BeforeAll static void start() throws Exception {
+    database();
+    // Columns used by the current mappers in this reduced monthly-pricing database.
+    jdbc.execute("ALTER TABLE lp_factor_upload_batch ADD COLUMN range_workbook_group CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL");
+    jdbc.execute("ALTER TABLE lp_household_inquiry_price ADD COLUMN row_voided TINYINT NOT NULL DEFAULT 0");
+  }
   @AfterAll static void finish(){stop();}
   static long finance(String month,int revision,String copper,String zinc) {
     String no=UUID.randomUUID().toString();
@@ -30,10 +35,16 @@ class HouseholdMonthlyDifferenceIntegrationTest {
     return batch;
   }
   static long inquiry(String material,String month,String value) throws Exception {
+    return inquiry(material, month, value, null, null);
+  }
+  static long inquiry(String material,String month,String value,String cuGrams,String znGrams) throws Exception {
     try(var stream=HouseholdMonthlyDifferenceIntegrationTest.class.getResourceAsStream("/household-inquiry/real-20261107.xlsx");
         var book=org.apache.poi.ss.usermodel.WorkbookFactory.create(stream);var bytes=new java.io.ByteArrayOutputStream()) {
       var sheet=book.getSheetAt(0);for(int index=sheet.getLastRowNum();index>2;index--)if(sheet.getRow(index)!=null)sheet.removeRow(sheet.getRow(index));
-      sheet.getRow(2).getCell(0).setCellValue(material);sheet.getRow(2).getCell(4).setCellValue(value);book.write(bytes);
+      sheet.getRow(2).getCell(0).setCellValue(material);sheet.getRow(2).getCell(4).setCellValue(value);
+      if (cuGrams != null) sheet.getRow(2).getCell(5).setCellValue(cuGrams);
+      if (znGrams != null) sheet.getRow(2).getCell(6).setCellValue(znGrams);
+      book.write(bytes);
       var preview=inquiries.preview("COMMERCIAL","test",bytes.toByteArray(),"controlled-single-row.xlsx",month);
       assertThat(preview.content().workbook().errors()).isEmpty();
       return inquiries.publish("COMMERCIAL","test",new PublishRequest(preview.previewId(),preview.publishRequestId(),preview.previewFingerprint())).rows().getFirst().versionId();
@@ -43,6 +54,34 @@ class HouseholdMonthlyDifferenceIntegrationTest {
   static Selection candidate(String material,String month){var candidates=operation.resolveCandidates(context("COMMERCIAL",month,"210"),Set.of(r(material,month)));assertThat(candidates.problems()).isEmpty();return candidates.values().get(r(material,month)).selection();}
   static MonthlyAdoptionPlan hhPlan(String material,String month,Selection value){return new MonthlyAdoptionPlan(Map.of(r(material,month),value),List.of(new Use("root/HH",r(material,month),d("2.5"))),Set.of());}
   static MonthlyAdoptionPlan adopt(String material,String month){return operation.adopt(context("COMMERCIAL",month,"210"),hhPlan(material,month,candidate(material,month))).plan();}
+  @Test void previewAndAdoptedHouseholdWUseTheSalesModeForAnInBandCustomerPrice() throws Exception {
+    String month = "2068-10", material = code();
+    long batch = finance(month, 1, "90", "20.8310629161179");
+    for (var factor : Map.of(PriceFactorContext.COPPER, "100", PriceFactorContext.ZINC, "23.1456254623532").entrySet()) {
+      long identity = jdbc.queryForObject("SELECT p.factor_identity_id FROM lp_factor_monthly_price p JOIN lp_factor_identity i ON i.id=p.factor_identity_id WHERE p.source_upload_batch_id=? AND i.canonical_factor_key=?", Long.class, batch, factor.getKey());
+      jdbc.update("INSERT INTO lp_factor_monthly_price(factor_identity_id,price_month,price,tax_included,source_upload_batch_id,status,price_org_code,scheme_code,condition_code,revision_no,unit,published_at) VALUES(?,?,?,1,?,'PUBLISHED','210','CU_100000','GENERAL',1,'CNY/KG',NOW())", identity, month, factor.getValue(), batch);
+      long priceId = jdbc.queryForObject("SELECT id FROM lp_factor_monthly_price WHERE factor_identity_id=? AND scheme_code='CU_100000'", Long.class, identity);
+      jdbc.update("""
+          INSERT INTO lp_factor_row_ref(factor_upload_batch_id,source_sheet_name,source_row_number,factor_identity_id,factor_monthly_price_id,source_column_number,source_cell_ref,scheme_code,condition_code,source_value_text,source_unit,source_number_format,conversion_basis)
+          SELECT factor_upload_batch_id,source_sheet_name,source_row_number,factor_identity_id,?,5,CONCAT('E',source_row_number),'CU_100000',condition_code,?,source_unit,source_number_format,conversion_basis FROM lp_factor_row_ref WHERE factor_upload_batch_id=? AND factor_identity_id=? AND scheme_code='DEFAULT'
+          """, priceId, factor.getValue(), batch, identity);
+    }
+    inquiry(material, month, "17.8903", "72.2", "1.3");
+    var request = r(material, month);
+    var plan = adopt(material, month);
+    var scenarios = MonthlyScenarioTestSupport.create(null);
+    for (String mode : List.of("固定", "联动", "")) {
+      var demand = new CustomerMaterialPrices(d("105000"), d("24000"), null, null, null, null, mode);
+      var preview = scenarios.previewMaterials(plan.selections(), demand, Map.of()).get(request);
+      var pair = scenarios.calculateMaterials(plan.selections(), demand, Map.of()).get(plan.selections().get(request).monthlyPriceId());
+      assertThat(preview.financialPrice()).isEqualByComparingTo("17.8903");
+      assertThat(pair.financialPrice()).isEqualByComparingTo(preview.financialPrice());
+      assertThat(pair.customerPrice()).isEqualByComparingTo(preview.customerPrice());
+      assertThat(pair.customerPrice().setScale(8, java.math.RoundingMode.HALF_UP))
+          .as(mode).isEqualByComparingTo(mode.equals("联动") ? "18.85235276" : "18.53190082");
+    }
+  }
+
   @Test void decemberCarryOwnMonthAndBackdatedImportKeepOriginalInquiryAndHistoricalFacts() throws Exception {
     String material=code();finance("2065-11",1,"90","20.8310629161179");finance("2065-12",1,"100","24");
     long original=inquiry(material,"2065-11","18.9343");
@@ -51,7 +90,7 @@ class HouseholdMonthlyDifferenceIntegrationTest {
     assertThat(dp.fact().price()).isEqualByComparingTo(np.fact().price());assertThat(dp.monthlyPriceId()).isNotEqualTo(np.monthlyPriceId());
     var snapshot=codec.decode(codec.wrap(dp.fact().evidence().json()),HouseholdMonthlyPriceSource.Snapshot.class);
     assertThat(snapshot.householdSourceId()).isEqualTo(original);assertThat(snapshot.metalInputs().financial().months().sourceMonth()).isEqualTo("2065-12");
-    var customer=CustomerMaterialPrices.copperAndZinc(d("120000"),d("28000"));
+    var customer=new CustomerMaterialPrices(d("120000"),d("28000"),null,null,null,null,"联动");
     assertThat(MonthlyScenarioTestSupport.create(null).calculateMaterials(dec.selections(),customer,Map.of()).get(dp.monthlyPriceId()).customerPrice()).isEqualByComparingTo("19.953061061946902655");
     long december=inquiry(material,"2065-12","21");
     var newDec=adopt(material,"2065-12").selections().get(r(material,"2065-12"));
@@ -78,7 +117,7 @@ class HouseholdMonthlyDifferenceIntegrationTest {
     var adopted=adopt(material,month);long id=adopted.selections().get(r(material,month)).monthlyPriceId();
     for(var data:List.of(new String[]{"120000","27774.7505548238","20.463109690363685593","4.702675"},new String[]{null,null,"18.9343","0"},new String[]{"80000",null,"18.426335398230088496","-1.562518"})) {
       var customer=new CustomerMaterialPrices(data[0]==null?null:d(data[0]),data[1]==null?null:d(data[1]),
-          null,null,null,null,"固定");
+          null,null,null,null,"联动");
       String financeNo="FIN-"+UUID.randomUUID(),customerNo="OA-"+UUID.randomUUID();
       var version=versionService.createRunning("HH-"+UUID.randomUUID(),1L,"TOP",month,month,financeNo,"COMMERCIAL");
       version.setFinancePricePrepareNo(financeNo);version.setOaPricePrepareNo(customerNo);versionMapper.updateById(version);
@@ -129,7 +168,7 @@ class HouseholdMonthlyDifferenceIntegrationTest {
   @Test void sharedHouseholdCostUsesExactWAndSavesEachConsumersOwnSourceWhileRejectingDifferentW() throws Exception {
     String material=code(),month="2068-11";finance(month,1,"90","20.8310629161179");inquiry(material,month,"18.9343");
     var selection=adopt(material,month).selections().get(r(material,month));
-    var customer=CustomerMaterialPrices.copperAndZinc(d("120000"),d("27774.7505548238"));
+    var customer=new CustomerMaterialPrices(d("120000"),d("27774.7505548238"),null,null,null,null,"联动");
     var a=sharedFixture(material,month,selection,"root/A",customer);
     var b=sharedFixture(material,month,selection,"root/B",customer);
     var zero=BigDecimal.ZERO;var ordinary=new Ordinary(List.of(),zero,zero,zero,zero,zero,d("1.05"),zero,d(".25"),zero,zero);
@@ -144,7 +183,7 @@ class HouseholdMonthlyDifferenceIntegrationTest {
       assertThat(saved.version().getCuMaterialAdjustment()).isEqualByComparingTo("4.702675");
       assertThat(costing.read("COMMERCIAL",fixture.version().getId()).snapshot()).isEqualTo(saved.snapshot());
     }
-    var changedCustomer=CustomerMaterialPrices.copperAndZinc(d("80000"),null);
+    var changedCustomer=new CustomerMaterialPrices(d("80000"),null,null,null,null,null,"联动");
     var changed=sharedFixture(material,month,selection,"root/C",changedCustomer);
     assertThatThrownBy(()->costing.saveCalculatedMaterials("COMMERCIAL",changed.version().getId(),changed.prepared().plan(),ordinary,
         null,changedCustomer,changed.bindings(),numbers)).hasMessageContaining("inputs differ");

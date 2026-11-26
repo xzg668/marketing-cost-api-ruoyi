@@ -15,6 +15,9 @@ import org.springframework.stereotype.Component;
 /** Opens the same scoped read session for all existing base-price consumers of one preparation. */
 @Component
 public final class MonthlyQuotationSessions implements QuotationPriceSessions {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts modelProducts;
+
   private final OaFormMapper forms;
   private final OaFormItemMapper items;
   private final MonthlyQuotationPrices prices;
@@ -49,6 +52,10 @@ public final class MonthlyQuotationSessions implements QuotationPriceSessions {
       if (itemId == null) itemId = selected == null ? uniqueProductItem(request) : selected.item().getId();
       var item = selected == null ? (itemId == null ? null : items.selectById(itemId)) : selected.item();
       var form = selected == null ? (item == null ? null : forms.selectById(item.getOaFormId())) : selected.form();
+      if (selected == null && form != null && modelProducts != null
+          && com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts.modelOnly(item)) {
+        item = modelProducts.resolve(form, item, request.month());
+      }
       if (form == null || !Objects.equals(request.oaNo(), form.getOaNo())
           || !Objects.equals(request.businessUnit(), item.getBusinessUnitType())
           || (request.productCode() != null && !request.productCode().equals(QuoteProductIdentityUtils.resolveCostingCode(item))))

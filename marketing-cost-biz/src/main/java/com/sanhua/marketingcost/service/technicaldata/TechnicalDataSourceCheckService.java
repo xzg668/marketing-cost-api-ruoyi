@@ -84,10 +84,6 @@ public class TechnicalDataSourceCheckService {
       var additional = product.map(value -> priceRequirements.checkModuleReferences(
           technicalData.findTask(value.getTaskId()).orElseThrow(), value)).orElse(null);
       if (additional != null) evidence.put("PRICE_MODULE_REFERENCES", additional);
-      if (additional != null && !additional.issues().isEmpty()) {
-        return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.ERROR,
-            "PRICE_MODULE_CHECK_FAILED", String.join("；", additional.issues()), additional.fingerprint());
-      }
       var priceEvidence = Map.of("source", "PricePrepareService", "bomBatch", workspace.getCurrentBomBuildBatchId(),
           "items", result.getItems().stream().map(row -> List.of(Objects.toString(row.getSettlementKey(), ""),
               Objects.toString(row.getMaterialCode(), ""), Objects.toString(row.getUnitPrice(), ""), Objects.toString(row.getPriceSource(), ""))).toList(),
@@ -120,6 +116,10 @@ public class TechnicalDataSourceCheckService {
       }
       if (!missingCodes.isEmpty()) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.MISSING,
           "PRICE_SOURCE_MISSING", "统一取价后仍有 " + missingCodes.size() + " 项物料缺少可用价格", reference);
+      if (additional != null && !additional.issues().isEmpty()) {
+        return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.ERROR,
+            "PRICE_MODULE_CHECK_FAILED", String.join("；", additional.issues()), additional.fingerprint());
+      }
       if (unresolved) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
           "PRICE_BASIS_UNCONFIRMED", "仍有取价范围、结构或来源冲突，请先在价格检查页处理", reference);
       if (result.getItems().isEmpty()) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,

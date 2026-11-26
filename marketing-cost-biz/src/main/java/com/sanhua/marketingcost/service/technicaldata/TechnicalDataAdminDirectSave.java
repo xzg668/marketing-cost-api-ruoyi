@@ -17,6 +17,8 @@ public class TechnicalDataAdminDirectSave {
   public static final String SOURCE = "QUOTE_ADMIN_DIRECT";
   public record Request(Integer expectedVersion) {}
   public record Result(long taskId, Long effectiveVersionId, TechnicalDataTaskValidationResponse validation) {}
+  @org.springframework.beans.factory.annotation.Autowired
+  private AcceptedBarePackaging acceptedPackages;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository taskRepository;
   private final QuoteTechTaskMapper tasks;
@@ -86,6 +88,7 @@ public class TechnicalDataAdminDirectSave {
     if (required.stream().anyMatch(module -> "PRICE".equals(module.getModuleType()))) prices.publish(task, product, submitted);
     var effective = versions.activate(product, actor.userId());
     if (effective == null) throw new IllegalStateException("资料依赖尚未全部通过，不能用于报价");
+    if (acceptedPackages != null) acceptedPackages.confirmDirect(product.getId());
     audit.record(task, product, effective.getId(), "ADMIN_DIRECT_SAVE", "UNASSIGNED", "SUBMITTED",
         "管理员确认保存，资料直接生效用于报价，无 OA 审批", actor,
         "admin-direct:" + effective.getId(), "TD-ADMIN-DIRECT:" + effective.getId());

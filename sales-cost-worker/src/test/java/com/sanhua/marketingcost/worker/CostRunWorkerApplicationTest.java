@@ -85,6 +85,10 @@ class CostRunWorkerApplicationTest {
   void workerPreparationRegistersTheRealPendingSourceReaderDependency() {
     // Use the worker's explicit registration list: technicaldata package scanning is excluded.
     try (var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+      context.registerBean(com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts.class,
+          () -> org.mockito.Mockito.mock(com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts.class));
+      context.registerBean(com.sanhua.marketingcost.service.technicaldata.BareQuoteMaterialPreparation.class,
+          () -> org.mockito.Mockito.mock(com.sanhua.marketingcost.service.technicaldata.BareQuoteMaterialPreparation.class));
       context.registerBean(org.springframework.jdbc.core.JdbcTemplate.class,
           () -> org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class));
       context.registerBean(com.fasterxml.jackson.databind.ObjectMapper.class,

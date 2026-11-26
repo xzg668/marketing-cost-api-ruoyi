@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
@@ -56,6 +57,9 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareWorkbenchService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private final QuotePricingPeriod pricingPeriods;
 
   private static final int DEFAULT_PAGE = 1;
@@ -171,6 +175,22 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     PricePrepareCalculationResult calculation =
         pricePrepareService.calculate(buildOaGenerateRequest(scope, request, true));
     return previewResponse(scope, calculation, persisted);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> checkSupplierReviewCandidates(
+      String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
+    Scope scope = resolveScope(oaNo, oaFormItemId, request.getPeriodMonth());
+    verifyPriceRecognition(scope);
+    var calculation = pricePrepareService.calculate(buildOaGenerateRequest(scope, request, true));
+    var response = new QuotePricePrepareWorkbenchResponse();
+    response.setOaNo(scope.oaNo());
+    response.setOaFormItemId(scope.oaFormItemId());
+    response.setPeriodMonth(scope.periodMonth());
+    response.setSupplierPriceReviews(calculation.getSupplierPriceReviews());
+    reviewMaterials.restoreHighest(response, calculation.getItems());
+    return response.getSupplierPriceReviews();
   }
 
   @Override
@@ -758,12 +778,13 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     if (item == null || !form.getId().equals(item.getOaFormId())) {
       throw new QuoteIngestException("报价产品行不存在或不属于当前报价单: " + oaFormItemId);
     }
-    String topProductCode =
-        requireText(QuoteProductIdentityUtils.resolveCostingCode(item), "报价产品料号、型号或图号");
     String period =
         StringUtils.hasText(periodMonth)
             ? pricingPeriods.requireActiveMonth(periodMonth)
             : resolveDefaultPeriod(form);
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, period);
+    String topProductCode =
+        requireText(QuoteProductIdentityUtils.resolveCostingCode(item), "报价产品料号、型号或图号");
     QuoteBomStatus bomStatus =
         quoteBomStatusMapper.selectOne(
             Wrappers.<QuoteBomStatus>lambdaQuery()

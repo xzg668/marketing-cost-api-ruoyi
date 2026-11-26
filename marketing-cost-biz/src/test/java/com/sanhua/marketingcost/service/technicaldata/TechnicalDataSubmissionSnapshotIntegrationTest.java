@@ -77,9 +77,18 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
         org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
   }
 
-  @Test void financeReturnFromApprovedTaskRestoresDraftAtomicallyUnderDatabaseGuards() {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+  void financeReturnFromApprovedTaskRestoresDraftAtomicallyUnderDatabaseGuards(boolean packageReturned) {
     var fixture = fixture();
     var task = taskMapper.selectById(fixture.taskId());
+    if (packageReturned) {
+      String code = "BARE-RET-" + fixture.productId();
+      jdbc.update("UPDATE lp_quote_tech_product SET material_no=? WHERE id=?", code, fixture.productId());
+      jdbc.update("INSERT INTO lp_material_master_raw(organization_code,material_code,main_category_code,active_flag,import_batch_id) VALUES('COMMERCIAL',?,'11',1,'PACKAGE_RETURN')",code);
+      jdbc.update("UPDATE lp_quote_tech_module SET required_flag=1,source_availability='MISSING',module_status='READY',entry_mode='MANUAL',assignee_user_id=101,assignee_name='技术员101' WHERE product_id=? AND module_type='PACKAGE'",fixture.productId());
+      jdbc.update("UPDATE lp_quote_tech_oa_recipient SET module_types_json=JSON_ARRAY_APPEND(module_types_json,'$','PACKAGE') WHERE task_id=?",task.getId());
+    }
     jdbc.update("INSERT INTO lp_oa_technical_flow(source_system,environment,oa_form_id,accounting_month,external_document_id,external_flow_id) VALUES('TEST','UNIT',?,'2026-09',?,?)",
         task.getOaFormId(), "RETURN-DOC-" + task.getId(), "RETURN-FLOW-" + task.getId());
     Long flow = jdbc.queryForObject("SELECT id FROM lp_oa_technical_flow WHERE oa_form_id=?", Long.class, task.getOaFormId());
@@ -96,8 +105,13 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     task = taskMapper.selectById(task.getId());
     lifecycle.publishSubmitted(task, submissionMapper.selectById(prepared.getId()), TECHNICIAN.userId());
     assertThat(productMapper.selectById(fixture.productId()).getEffectiveVersionId()).isNotNull();
+    if (packageReturned) {
+      new AcceptedBarePackaging(jdbc).confirmFlow(flow);
+      assertThat(jdbc.queryForObject("SELECT module_version_id FROM lp_quote_bare_package_accepted WHERE product_id=?",Long.class,fixture.productId())).isEqualTo(frozen.getId());
+    }
     recipients.requestReturn(person.id(), prepared.getId(), person.messageId(), 1L, "核对产品属性");
     lifecycle.financeReturned(taskMapper.selectById(task.getId()), submissionMapper.selectById(prepared.getId()), 1L, "核对产品属性");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_bare_package_accepted WHERE product_id=?",Integer.class,fixture.productId())).isZero();
     var restored = productMapper.selectById(fixture.productId());
     assertThat(restored.getEffectiveVersionId()).isNull();
     assertThat(versionMapper.selectById(restored.getCurrentEditVersionId()).getVersionStatus()).isEqualTo("DRAFT");

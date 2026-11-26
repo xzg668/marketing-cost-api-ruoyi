@@ -58,7 +58,7 @@ public class HouseholdInquiryTrialService {
         : finance.readDefault(new FinanceFactorImportContext(unit, "210", month.toString(), null, null),
             row.materialCode() == null ? "MONTHLY_HOUSEHOLD" : row.materialCode())
             .evidenceForFactors(Set.of(PriceFactorContext.COPPER, PriceFactorContext.ZINC));
-    var calculation = HouseholdMetalCalculation.calculate(price,
+    var calculation = HouseholdMetalCalculation.calculateTrial(price,
         new HouseholdMetalCalculation.Inputs(original.copperGrams(), original.zincGrams(), financial), customer);
     var factors = List.of(
         factor("Cu 铜", calculation.copperGrams(), calculation.baseCopper(), calculation.customerCopper(),

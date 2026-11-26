@@ -12,6 +12,7 @@ public class QuoteCostingWorkbenchResponse {
   private QuoteCostingWorkbenchItemResponse item;
   private QuoteBomStatusItemResponse bomStatus;
   private String periodMonth;
+  private com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts.Match modelBomMatch;
   private QuoteCostingWorkflowStatusResponse workflowStatus;
   private Boolean snapshotGenerated;
   private String buildBatchId;

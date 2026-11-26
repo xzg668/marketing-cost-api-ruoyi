@@ -220,6 +220,20 @@ public class QuoteRequestController {
     }
   }
 
+  public record ModelBomSelection(String month, String model, String materialCode) {}
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
+  @PostMapping("/{oaNo}/items/{oaFormItemId}/model-bom/prepare")
+  public CommonResult<Boolean> prepareModelProduct(@PathVariable String oaNo, @PathVariable Long oaFormItemId,
+      @RequestBody ModelBomSelection selection) {
+    try {
+      quoteCostingWorkbenchService.prepareModelProduct(oaNo, oaFormItemId, selection.month(), selection.model(), selection.materialCode());
+      return CommonResult.success(true);
+    } catch (QuoteIngestException | IllegalArgumentException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
   @GetMapping("/{oaNo}/items/{oaFormItemId}/price-prepare")
   public CommonResult<QuotePricePrepareWorkbenchResponse> pricePrepare(

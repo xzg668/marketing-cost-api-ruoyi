@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
@@ -65,6 +66,13 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy workflowAccess;
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.QuoteMonthCloseLocks monthLocks;
+
   private final QuotePricingPeriod pricingPeriods;
 
   private static final String TAB_READY = "READY";
@@ -132,6 +140,9 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   public QuoteCostingWorkbenchResponse getWorkbench(String oaNo, Long oaFormItemId) {
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, oaFormItemId);
+    var match = modelProducts != null && QuoteModelBomProducts.modelOnly(item)
+        ? modelProducts.inspect(form, item, pricingPeriods.currentMonth(form.getBusinessUnitType())) : null;
+    if (match != null && match.selected() != null) item = modelProducts.project(item, match);
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) {
       throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
@@ -142,8 +153,37 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     List<BomCostingRow> rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
     String buildBatchId = latestBuildBatchId(rows);
     QuoteCostingWorkspace workspace = workspaceService.find(item.getId(), periodMonth).orElse(null);
-    return buildWorkbenchResponse(
+    var response = buildWorkbenchResponse(
         form, item, status, productCode, periodMonth, rows, false, buildBatchId, workspace);
+    response.setModelBomMatch(match);
+    return response;
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
+  public void prepareModelProduct(String oaNo, Long itemId, String month, String model, String code) {
+    oaFormItemMapper.selectForCostingWrite(itemId);
+    var form = requireForm(oaNo);
+    var item = requireItem(form, itemId);
+    String unit = com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType();
+    if (!com.sanhua.marketingcost.security.BusinessUnitContext.isAdmin() && !Objects.equals(unit, form.getBusinessUnitType()))
+      throw new QuoteIngestException("无权选择此报价单的成品");
+    workflowAccess.requireCosting(form.getId());
+    pricingPeriods.requireActiveMonth(month, form.getBusinessUnitType());
+    monthLocks.requireOpen(form.getBusinessUnitType(), month, itemId);
+    var match = modelProducts.inspect(form, item, month);
+    if (match == null || !Objects.equals(model, match.model())) throw new QuoteIngestException("报价来源已变化，请刷新");
+    var workspace = workspaceService.find(itemId, month).orElse(null);
+    boolean prepared = workspace != null && Objects.equals(code, workspace.getProductCode())
+        && workspace.getCurrentBomBuildBatchId() != null;
+    modelProducts.adopt(itemId, match, code);
+    if (prepared) return;
+    var checked = quoteBomStatusService.checkItemForCostRun(oaNo, itemId, month);
+    if (!isCostReadyBomStatus(checked.getBomStatus())) throw new QuoteIngestException("所选成品 " + code + " 的当前 U9 BOM 未就绪：" + Objects.toString(checked.getErrorMessage(), checked.getBomStatus()));
+    var preparation = bomPreparationService.prepareByOaFormItem(itemId, CostPricingPeriodUtils.currentPricingDate(), month);
+    if (!preparation.ready()) throw new QuoteIngestException("所选成品未能准备报价物料：" + String.join("；", preparation.gapMessages()));
+    effectiveBomCostingService.prepareCurrent(oaNo, itemId);
   }
 
   @Override
@@ -172,6 +212,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     oaFormItemMapper.selectForCostingWrite(itemId);
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, itemId);
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, pricingPeriods.currentMonth(form.getBusinessUnitType()));
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
     String month = pricingPeriods.currentMonth(form.getBusinessUnitType());
@@ -185,6 +226,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     oaFormItemMapper.selectForCostingWrite(launch.item().getId());
     OaForm form = requireForm(launch.form().getOaNo());
     OaFormItem item = requireItem(form, launch.item().getId());
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, launch.month());
     if (!launch.inputs().equals(quoteInputs(form, item))) {
       throw new QuoteIngestException("取图期间报价产品已变化，已保留原取图任务，请刷新后按当前产品继续");
     }

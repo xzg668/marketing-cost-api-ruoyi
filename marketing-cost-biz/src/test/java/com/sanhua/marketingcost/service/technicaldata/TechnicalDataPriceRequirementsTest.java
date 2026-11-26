@@ -46,6 +46,20 @@ class TechnicalDataPriceRequirementsTest {
         .thenAnswer(call -> MakePartMaterialPriceResolveResult.miss(call.getArgument(0),"MISSING_PRICE","缺价",null));
   }
 
+  @Test void unsavedPackageChecksOnlyCurrentRowsAndDistinguishesActualMissingFromAnError() {
+    when(prices.calculateMaterialUnitPrice(eq("BOX"),eq("2026-09"),any(),any(),eq("OA"),eq("COMMERCIAL"),any(),
+        eq(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.PACKAGE)))
+        .thenReturn(MakePartMaterialPriceResolveResult.ok("BOX","FIXED",new BigDecimal("2.50"),"月价",null));
+    when(materials.selectByLatestBatchAndCodes(List.of("UNKNOWN"),null,"COMMERCIAL")).thenReturn(List.of());
+    var preview = service.previewPackage(task,product,List.of("BOX","PAD","BOX","UNKNOWN"));
+    assertThat(preview.items()).extracting(TechnicalDataPriceRequirement::materialNo).containsExactly("BOX","PAD");
+    assertThat(preview.items().getFirst().unitPrice()).isEqualByComparingTo("2.50");
+    assertThat(preview.items().getLast().requiresEntry()).isTrue();
+    assertThat(preview.issues()).singleElement().asString().contains("UNKNOWN");
+    assertThat(service.previewPackage(task,product,List.of("BOX")).items()).hasSize(1);
+    verifyNoInteractions(tasks,preparation);
+  }
+
   @Test void aggregatesRawScrapSolderAndPackageButNeverAuxiliary() {
     when(tasks.findModules(2L)).thenReturn(List.of(module("MANUFACTURING"),module("SOLDER"),module("PACKAGE"),module("AUXILIARY")));
     var evidence = new ManufacturingNodeEvidence("制造件",null,BigDecimal.ONE,null,null,"原料",null,"MATCHED",

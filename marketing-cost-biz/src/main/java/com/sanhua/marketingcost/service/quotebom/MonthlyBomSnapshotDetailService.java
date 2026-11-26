@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.service.bomalternative.U9BomAlternativeMetadata;
 import com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis;
 import com.sanhua.marketingcost.service.impl.BomEffectiveTreePruner;
+import com.sanhua.marketingcost.service.impl.BareProductBomSubtree;
 import com.sanhua.marketingcost.service.impl.PlateCommercialMakeBomExpansionService;
 import java.sql.SQLException;
 import java.time.LocalDate;
@@ -152,7 +153,18 @@ public class MonthlyBomSnapshotDetailService {
     if (pruned.isEmpty()) {
       throw new SourceUnavailableException("月度BOM来源层级已不存在，批次=" + buildBatchId);
     }
-    var expanded = expansionService.expand(pruned, context.productCode(), effectiveDate,
+    expandAndSave(snapshotId, context, pruned);
+  }
+
+  void captureBareBody(Long snapshotId, QuoteBomReadContext context, String batch, Long rootId) {
+    var rows = BareProductBomSubtree.readVerifiedRoot(hierarchyMapper, context.productCode(),
+        context.priceOrgCode(), context.bomEffectiveDate(), batch, rootId);
+    if (rows.size() < 2) throw new SourceUnavailableException("本次核实的裸品下级结构已变化，请重查");
+    expandAndSave(snapshotId, context, rows);
+  }
+
+  private void expandAndSave(Long snapshotId, QuoteBomReadContext context, List<BomRawHierarchy> pruned) {
+    var expanded = expansionService.expand(pruned, context.productCode(), context.bomEffectiveDate(),
         DEFAULT_BOM_PURPOSE, "U9", context.organization());
     if (expanded.hasGaps()) {
       throw new IllegalStateException("本月首次报价的跨组织BOM展开失败：" + expanded.gaps());

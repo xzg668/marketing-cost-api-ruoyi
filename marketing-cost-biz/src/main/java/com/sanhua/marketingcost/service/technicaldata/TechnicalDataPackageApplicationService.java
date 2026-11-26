@@ -19,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 /** 包装草稿与本人模块版本的事务边界；来源查询和用量规则独立维护。 */
 @Service
 public class TechnicalDataPackageApplicationService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private TechnicalDataPriceRequirements priceRequirements;
   private final TechnicalDataUnchangedModuleReuse reuse;
   private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
@@ -68,6 +70,13 @@ public class TechnicalDataPackageApplicationService {
   public TechnicalDataPackageReferenceResponse references(Long productId, String keyword, TechnicalDataActor actor) {
     var scope = scope(productId, actor, null);
     return sources.references(scope.task(), scope.product(), keyword);
+  }
+
+  @Transactional(readOnly = true)
+  public TechnicalDataPriceRequirementsResponse previewPrices(Long productId, List<String> materialCodes, TechnicalDataActor actor) {
+    var scope = scope(productId, actor, null);
+    if (!actor.canEditModule(scope.task(), scope.module())) throw forbidden("无权编辑此产品包装");
+    return priceRequirements.previewPackage(scope.task(), scope.product(), materialCodes);
   }
 
   @Transactional(readOnly = true)

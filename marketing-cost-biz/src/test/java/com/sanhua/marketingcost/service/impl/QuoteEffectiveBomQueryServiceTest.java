@@ -381,6 +381,27 @@ class QuoteEffectiveBomQueryServiceTest {
   }
 
   @Test
+  void newerU9BodyTakesPriorityOverDrawingAfterPreviousMissingCheck() {
+    var missing = snapshot(42L);
+    missing.setSyncStatus("NOT_FOUND");
+    var drawing = snapshot(42L);
+    drawing.setBomSource("ELECTRONIC_DRAWING_BOM");
+    drawing.setId(601L);
+    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(missing), List.of(drawing));
+    var checked = new com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse();
+    checked.setBomStatus("SYNCED"); checked.setSyncRecordId(snapshot.getId());
+    snapshot.setBomSource("U9");
+    when(quoteBomStatusService.checkItemForCostRun("OA-QEB-11", 42L, CURRENT_PERIOD)).thenReturn(checked);
+    when(monthlyMapper.selectById(snapshot.getId())).thenReturn(snapshot);
+    when(monthlyDetails.load(snapshot.getId())).thenReturn(rawRows());
+
+    var result = service.getEffectiveBom("OA-QEB-11", 42L);
+    assertThat(result.monthlySnapshotId()).isEqualTo(snapshot.getId());
+    assertThat(result.state()).isEqualTo("DRAFT");
+    verifyNoInteractions(drawingPreparation);
+  }
+
+  @Test
   void currentRawRevisionOverridesOldPublishedDrawingSnapshot() {
     var u9Missing = snapshot(42L);
     u9Missing.setSyncStatus("NOT_FOUND");
@@ -662,6 +683,7 @@ class QuoteEffectiveBomQueryServiceTest {
     var result = service.getEffectiveBom("OA-QEB-11", 42L);
 
     assertThat(result.state()).isEqualTo("BLOCKED");
+    assertThat(result.blockIssues()).extracting(issue -> issue.issueCode()).containsExactly("U9_BOM_CHECK_FAILED");
     verify(monthlyMapper, never()).selectById(any());
     verifyNoInteractions(rawMapper);
   }

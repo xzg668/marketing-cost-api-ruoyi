@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.entity.QuoteTechDataVersion;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
@@ -31,6 +32,12 @@ import org.springframework.transaction.annotation.Transactional;
 /** 正式组树和成本汇总共用的资料选择：公共明确缺失后，才读取唯一的已提交补录来源。 */
 @Service
 public class TechnicalDataCostingSources {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  private AcceptedBarePackaging acceptedPackages;
+
   public record Source(String moduleType, QuoteTechTask task, QuoteTechProduct product,
       QuoteTechDataVersion version, Long moduleVersionId) {}
   /** Owned batch read capture. Empty queried details must have explicit map entries. */
@@ -113,6 +120,11 @@ public class TechnicalDataCostingSources {
     this.modules = modules;
   }
 
+  private static String materialForSharedSources(com.sanhua.marketingcost.entity.OaFormItem item, QuoteBomReadContext context) {
+    String original = com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(item);
+    return Objects.equals(original, context.productCode()) ? item.getMaterialNo() : context.productCode();
+  }
+
   @Transactional
   public Selection select(Long itemId, String month) {
     var context = context(itemId, month);
@@ -128,11 +140,12 @@ public class TechnicalDataCostingSources {
         continue;
       }
       try {
-        var owner = shared.find(item.getMaterialNo(), itemId, type);
+        var owner = shared.find(materialForSharedSources(item, context), itemId, type);
         if (owner == null) {
           issues.add(new Issue(type, "TECH_DATA_EFFECTIVE_VERSION_MISSING", fact.reason()));
           continue;
         }
+        // 财务检查允许核对本人已提交的资料。正式计价树在 preparationSources 按已认可版本取包装。
         selected.put(type, requireSource(context, owner));
       } catch (EffectiveTechnicalDataException exception) {
         issues.add(new Issue(type, exception.errorCode(), exception.getMessage()));
@@ -164,8 +177,18 @@ public class TechnicalDataCostingSources {
         }
         throw error(context, type, "TECH_DATA_SOURCE_NOT_CONFIRMED", fact.reason());
       }
-      var owner = shared.find(item.getMaterialNo(), itemId, type);
+      var owner = shared.find(materialForSharedSources(item, context), itemId, type);
       if (owner == null) continue;
+      if ("BARE_PACKAGE_MISSING".equals(fact.reasonCode())) {
+        try {
+          selected.put(type, requireSource(context, owner, null, true));
+        } catch (EffectiveTechnicalDataException pending) {
+          if (!Set.of("TECH_DATA_TASK_NOT_SUBMITTED", "TECH_DATA_FINANCE_CONFIRMATION_REQUIRED").contains(pending.errorCode())) throw pending;
+          var prior = acceptedPackages == null ? null : acceptedPackages.previous(context, owner, repository);
+          if (prior != null) selected.put(type, prior);
+        }
+        continue;
+      }
       var product = repository.findProduct(owner.productId()).orElseThrow();
       if (!Objects.equals(product.getOaFormItemId(), itemId)
           || !Objects.equals(product.getAccountingMonth(), month)) {
@@ -194,7 +217,7 @@ public class TechnicalDataCostingSources {
   public Source sharedDrawing(Long itemId, String month) {
     var context = context(itemId, month);
     var item = items.selectById(itemId);
-    var owner = shared.find(item.getMaterialNo(), itemId, "DRAWING_BOM");
+    var owner = shared.find(materialForSharedSources(item, context), itemId, "DRAWING_BOM");
     if (owner == null || Objects.equals(owner.quoteItemId(), itemId)
         && Objects.equals(owner.accountingMonth(), month)) return null;
     return requireSource(context, owner);
@@ -205,6 +228,7 @@ public class TechnicalDataCostingSources {
     var form = item == null ? null : forms.selectById(item.getOaFormId());
     if (form == null) throw new IllegalArgumentException("报价产品行不存在：" + itemId);
     YearMonth.parse(month);
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, month);
     var organization = contexts.resolveOrganization(form, item);
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     return new QuoteBomReadContext(form.getId(), itemId, form.getOaNo(), month,
@@ -214,17 +238,17 @@ public class TechnicalDataCostingSources {
   }
 
   public Source requireSource(QuoteBomReadContext context, TechnicalDataSharedModuleRepository.Owner owner) {
-    return requireSource(context,owner,null);
+    return requireSource(context,owner,null,false);
   }
 
   /** Same final-source rules with no repository, mapper or workflow reads. */
   public Source requireCapturedSource(QuoteBomReadContext context,TechnicalDataSharedModuleRepository.Owner owner,
       Captured captured) {
-    return requireSource(context,owner,Objects.requireNonNull(captured));
+    return requireSource(context,owner,Objects.requireNonNull(captured),false);
   }
 
   private Source requireSource(QuoteBomReadContext context,TechnicalDataSharedModuleRepository.Owner owner,
-      Captured captured) {
+      Captured captured, boolean approvedPackage) {
     String type = owner.moduleType();
     String label = "PRICE".equals(type) ? "价格" : TechnicalDataSharedModules.label(type);
     if (!Objects.equals(owner.businessUnit(), context.businessUnitType())
@@ -244,7 +268,7 @@ public class TechnicalDataCostingSources {
       throw error(context,type,"TECH_DATA_SOURCE_SCOPE_MISMATCH","捕获的原任务业务单元、组织或原产品月份与办理来源不一致");
     if (!Integer.valueOf(1).equals(product.getActiveFlag()) || !Integer.valueOf(1).equals(task.getActiveFlag())
         || !(TechnicalDataSubmissionState.submitted(task.getTaskStatus())
-            || Objects.equals(task.getOaFormId(), context.oaFormId())
+            || !approvedPackage && Objects.equals(task.getOaFormId(), context.oaFormId())
                 && TechnicalDataSubmissionState.retainsSubmittedMaterials(task.getTaskStatus()))
         || !TechnicalDataSubmissionState.submitted(product.getProductStatus()) || product.getEffectiveVersionId() == null
         || !TechnicalDataSubmissionState.submitted(owner.moduleStatus()) || !TechnicalDataSubmissionState.submitted(owner.versionStatus())) {
@@ -258,7 +282,7 @@ public class TechnicalDataCostingSources {
     }
     // 本单资料确认前须能检查已提交内容；成本发布另行校验报价员本次确认采用的整单资料。
     // 其他报价复用时仍要求原报价员已认可资料，避免把待退回内容当作公共有效依据。
-    if (!TechnicalDataAdminDirectSave.isPublished(task) && !Objects.equals(task.getOaFormId(), context.oaFormId())
+    if (!TechnicalDataAdminDirectSave.isPublished(task) && (approvedPackage || !Objects.equals(task.getOaFormId(), context.oaFormId()))
         && (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
         || !flow.confirmedFingerprint().equals(json.canonicalHash(captured==null?workflow.submissionBasis(flow.id()):captured.submissionBasis())))) {
       throw error(context, type, "TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", "原补录尚未到财务节点并完成资料确认：" + label);

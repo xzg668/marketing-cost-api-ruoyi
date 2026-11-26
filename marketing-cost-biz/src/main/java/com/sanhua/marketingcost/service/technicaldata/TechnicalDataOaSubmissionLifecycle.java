@@ -114,6 +114,15 @@ public class TechnicalDataOaSubmissionLifecycle {
     // 旧数据库仍以任务汇总状态保护已提交模块，不能在 APPROVED/SUBMITTED 状态下恢复编辑内容。
     recipients.state(person.id(), submission.getId(), from, "OPEN", reason);
     recipients.refreshTask(task.getId());
+    if (person.processingModules().contains("PACKAGE")) {
+      // 恢复草稿会替换模块指针。用退回前的冻结版本只撤销这次退回的包装。
+      jdbc.update("""
+          DELETE a FROM lp_quote_bare_package_accepted a
+          JOIN lp_quote_tech_module m ON m.product_id=a.product_id AND m.module_type='PACKAGE'
+            AND m.current_version_id=a.module_version_id
+          WHERE a.product_id=?
+          """, product.getId());
+    }
     versions.restoreSubmitted(product, person, operator);
     workflow.invalidateFinance(task.getOaFlowId());
   }

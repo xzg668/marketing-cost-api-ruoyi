@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 /** 核算采用的技术提交版本；本地确认不推动 OA，退回或重提后必须重新采用。 */
 @Service
 public class QuoteCostingSubmissionService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.technicaldata.AcceptedBarePackaging acceptedPackages;
   private final JdbcTemplate jdbc;
   private final TechnicalDataOaWorkflowRepository workflows;
   private final OaMessageCodec codec;
@@ -89,7 +91,10 @@ public class QuoteCostingSubmissionService {
       var flow = workflows.lockFlow(flowId);
       if (!flow.financeReady()) throw new IllegalArgumentException("技术资料尚未形成完整的提交版本，请检查补录内容");
       String fingerprint = codec.canonicalHash(workflows.submissionBasis(flowId));
-      if (!fingerprint.equals(flow.confirmedFingerprint())) workflows.confirmFinance(flowId, fingerprint, actorId);
+      if (!fingerprint.equals(flow.confirmedFingerprint())) {
+        workflows.confirmFinance(flowId, fingerprint, actorId);
+      }
+      if (acceptedPackages != null) acceptedPackages.confirmFlow(flowId);
     }
   }
 

@@ -39,7 +39,7 @@ class TechnicalDataSourceCheckServiceTest {
   private final com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope scope =
       new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomReadScope(versions, savedDetails, mock(com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.class));
   private final TechnicalDataPublicSourceCheck publicSources = new TechnicalDataPublicSourceCheck(u9, salary, codec,
-      drawings, manufacturing, packaging, netLoss, shared, drawingSources, scope, mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing.class), mock(TechnicalBomSavedSourceQuery.class), mock(TechnicalBomAbsenceQuery.class));
+      drawings, manufacturing, packaging, netLoss, shared, drawingSources, scope, mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingReusedManufacturing.class), mock(TechnicalBomSavedSourceQuery.class), mock(TechnicalBomAbsenceQuery.class), mock(com.sanhua.marketingcost.service.QuoteProductTypeResolveService.class));
   private final TechnicalDataSourceCheckService service = new TechnicalDataSourceCheckService(publicSources, prices,
       codec, mock(QuoteTechnicalDataRepository.class), mock(TechnicalDataPriceRequirements.class), mock(TechnicalDataPriceOwnership.class));
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L, 2L, "OA-1", "2026-09", "COMMERCIAL",

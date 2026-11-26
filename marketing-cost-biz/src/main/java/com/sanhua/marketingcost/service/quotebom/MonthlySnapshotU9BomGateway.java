@@ -97,7 +97,9 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
       U9MonthlySnapshotIdentity identity, QuoteBomMonthlySnapshot previous) {
     CurrentU9BomResult live = liveGateway.readLive(context);
     if (live == null) return CurrentU9BomResult.error("U9正式查询没有返回结果");
-    if (live.status() == CurrentU9BomResult.Status.NOT_FOUND) return restored(previous);
+    if (live.status() == CurrentU9BomResult.Status.NOT_FOUND) {
+      return live.withMonthlySnapshot(previous.getId(), false);
+    }
     if (live.status() != CurrentU9BomResult.Status.AVAILABLE) return live;
     // 当前读串行切换月度索引；旧的“无 BOM”证据保留，新可用结构另存快照。
     var current = mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
@@ -137,7 +139,11 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
     }
     if (live.status() == CurrentU9BomResult.Status.AVAILABLE) {
       try {
-        details.captureU9(claim.getId(), context, live.syncBatchId());
+        if (live.subtreeRootId() == null) {
+          details.captureU9(claim.getId(), context, live.syncBatchId());
+        } else {
+          details.captureBareBody(claim.getId(), context, live.syncBatchId(), live.subtreeRootId());
+        }
       } catch (MonthlyBomSnapshotDetailService.SourceUnavailableException missing) {
         mapper.deleteU9MonthlyClaim(claim.getId());
         return CurrentU9BomResult.error(missing.getMessage());
@@ -184,11 +190,6 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
               first(row.getBomSource(), "U9"), row.getBomVersion(), row.getBomBatchId(),
               row.getLineCount() == null ? 0 : row.getLineCount(),
               row.getStructureFingerprint())
-          .withMonthlySnapshot(row.getId(), false);
-    }
-    if (STATUS_NOT_FOUND.equals(row.getSyncStatus())) {
-      return CurrentU9BomResult.notFound(
-              first(row.getErrorMessage(), "本月首次查询确认U9无有效BOM"))
           .withMonthlySnapshot(row.getId(), false);
     }
     return CurrentU9BomResult.error("U9月度快照状态异常：" + row.getSyncStatus());

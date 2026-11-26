@@ -55,7 +55,8 @@ public class TechnicalDataPriceRequirements {
         "PRICE".equals(module.getModuleType()) && TechnicalDataManufacturingPrices.ownsRequirement(module));
     boolean composed = tasks.findModules(product.getId()).stream().anyMatch(module ->
         "PRICE".equals(module.getModuleType()) && isComposedCheck(module));
-    if (!composed) addModules(product, demands, manufacturingPrices ? Set.of("MANUFACTURING") : Set.of("MANUFACTURING", "SOLDER", "PACKAGE"));
+    if (composed) addModules(product, demands, Set.of("PACKAGE"));
+    else addModules(product, demands, manufacturingPrices ? Set.of("MANUFACTURING") : Set.of("MANUFACTURING", "SOLDER", "PACKAGE"));
     if (!manufacturingPrices) addBom(task, product, demands, issues, composed);
     var revisions = ownedRevisions(task, product);
     revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
@@ -70,9 +71,18 @@ public class TechnicalDataPriceRequirements {
     var demands = new TreeMap<String, Set<String>>();
     var issues = new ArrayList<String>();
     addBom(task, product, demands, issues, true);
+    addModules(product, demands, Set.of("PACKAGE"));
     var revisions = ownedRevisions(task, product);
     revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
     return resolve(task, product, demands, issues, revisions.keySet());
+  }
+
+  public TechnicalDataPriceRequirementsResponse previewPackage(QuoteTechTask task, QuoteTechProduct product, List<String> codes) {
+    if (codes == null || codes.size() > 500 || codes.stream().anyMatch(code -> code == null || code.isBlank() || code.length() > 64))
+      throw new IllegalArgumentException("包装子件料号无效");
+    var demands = new TreeMap<String, Set<String>>();
+    codes.forEach(code -> add(demands, code, "PACKAGE"));
+    return resolve(task, product, demands, new ArrayList<>(), Set.of());
   }
 
   public TechnicalDataPriceRequirementsResponse checkModuleReferences(QuoteTechTask task, QuoteTechProduct product) {

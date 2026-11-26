@@ -135,7 +135,8 @@ class FormalBomReadServiceImplTest {
     assertThat(result.found()).isFalse();
     assertThat(result.gapMessage()).contains("lp_bom_raw_hierarchy");
     assertRawHierarchyQueryUsesPriceOrg(bomMapper, "220");
-    verifyNoInteractions(rawMapper);
+    verify(rawMapper).selectByLatestBatchAndCodes(List.of("P-ONLY-210"), null, "PLATE");
+    org.mockito.Mockito.verifyNoMoreInteractions(rawMapper);
   }
 
   @Test

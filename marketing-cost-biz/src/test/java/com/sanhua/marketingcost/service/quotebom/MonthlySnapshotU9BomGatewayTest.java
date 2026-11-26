@@ -119,7 +119,8 @@ class MonthlySnapshotU9BomGatewayTest {
     CurrentU9BomResult result = gateway.read(context("OA-LATER", 12L, "2026-08"));
 
     assertThat(result.status()).isEqualTo(CurrentU9BomResult.Status.NOT_FOUND);
-    assertThat(result.message()).isEqualTo("首次查询无BOM");
+    assertThat(result.message()).isEqualTo("仍无BOM");
+    assertThat(stored.getErrorMessage()).isEqualTo("首次查询无BOM");
     assertThat(result.monthlySnapshotId()).isEqualTo(102L);
     verify(live).readLive(any());
     verify(mapper, never()).insertU9MonthlyClaim(any());

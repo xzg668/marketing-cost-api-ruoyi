@@ -9,6 +9,8 @@ import com.sanhua.marketingcost.entity.OaForm;
 public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDecimal silver,
     BigDecimal tin, BigDecimal sus304, BigDecimal sus316, String priceLinkMode) {
   public static final String CALCULATION_VERSION = "MONTHLY_MATERIAL_CU_BANDS_V6";
+  public static final String FIXED_CU_BAND_VERSION = "MONTHLY_FIXED_SALES_CU_BAND_V7";
+
   public CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDecimal silver,
       BigDecimal tin, BigDecimal sus304, BigDecimal sus316) {
     this(copper, zinc, silver, tin, sus304, sus316, null);
@@ -35,7 +37,7 @@ public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDeci
   }
 
   public BigDecimal pricePerTon(String factorKey) {
-    if (usesFinancialCopperBand() && usesCopperBand(factorKey)) return null;
+    if (fixedSales() && usesCopperBand(factorKey)) return null;
     return switch (canonicalKey(factorKey)) {
       case "AVG|1#CU" -> copper;
       case "AVG|1#ZN" -> zinc;
@@ -48,7 +50,7 @@ public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDeci
     };
   }
 
-  @JsonIgnore public boolean usesFinancialCopperBand() {
+  @JsonIgnore public boolean fixedSales() {
     return priceLinkMode != null && java.util.Set.of("固定", "销售价格固定").contains(priceLinkMode.trim());
   }
 
@@ -56,7 +58,9 @@ public record CustomerMaterialPrices(BigDecimal copper, BigDecimal zinc, BigDeci
     return priceLinkMode != null && java.util.Set.of("联动", "销售价格联动").contains(priceLinkMode.trim());
   }
 
-  @JsonIgnore public BigDecimal copperForBand() { return usesFinancialCopperBand() ? null : copper; }
+  public String quotationVersion() {
+    return fixedSales() && copper != null ? FIXED_CU_BAND_VERSION : CALCULATION_VERSION;
+  }
 
   @JsonIgnore public boolean isEmpty() {
     return copper == null && zinc == null && silver == null && tin == null

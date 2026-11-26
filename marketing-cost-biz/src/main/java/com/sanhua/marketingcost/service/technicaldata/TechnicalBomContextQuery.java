@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
@@ -20,6 +21,9 @@ import org.springframework.stereotype.Component;
 /** Resolve the target from its OA row, never from the uploaded/reference product code. */
 @Component
 public class TechnicalBomContextQuery {
+  @org.springframework.beans.factory.annotation.Autowired
+  private QuoteModelBomProducts modelProducts;
+
   private final OaFormItemMapper items;
   private final OaFormMapper forms;
   private final QuoteBomContextResolver organizations;
@@ -69,6 +73,7 @@ public class TechnicalBomContextQuery {
   }
 
   private Target target(OaForm form, OaFormItem item, String accountingMonth, QuoteDataOrganization org) {
+    if (QuoteModelBomProducts.modelOnly(item) && modelProducts != null) item = modelProducts.resolve(form, item, accountingMonth);
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var context = new QuoteBomReadContext(form.getId(), item.getId(), form.getOaNo(), accountingMonth,
         form.getBusinessUnitType(), QuoteProductIdentityUtils.resolveCostingCode(item), item.getProductName(), item.getSpec(),

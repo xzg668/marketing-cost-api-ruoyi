@@ -185,6 +185,15 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
                 .orderByAsc(BomRawHierarchy::getPath)
                 .orderByAsc(BomRawHierarchy::getSortSeq)
                 .orderByAsc(BomRawHierarchy::getId));
+    if ((rows == null || rows.isEmpty())
+        && (normalizedBomPurpose == null || "主制造".equals(normalizedBomPurpose))
+        && materialMasterRawMapper.selectByLatestBatchAndCodes(
+                List.of(normalizedProductCode), null, organization.materialOrganizationCode()).stream()
+            .map(MaterialMasterRaw::getMainCategoryCode)
+            .anyMatch(code -> code != null && code.trim().startsWith(QuoteProductTypeResolveServiceImpl.BARE_MAIN_CATEGORY_PREFIX))) {
+      rows = BareProductBomSubtree.read(bomRawHierarchyMapper, normalizedProductCode,
+          organization.priceOrgCode(), effectiveDate);
+    }
     if (rows == null || rows.isEmpty()) {
       return new FormalBomReadResult(
           normalizedProductCode,

@@ -123,6 +123,7 @@ public class QuoteEffectiveBomCostingServiceImpl implements QuoteEffectiveBomCos
                 List.of(),
                 List.of()));
     int expectedVersion = workspace.getLockVersion() == null ? 0 : workspace.getLockVersion();
+    workspace.setProductCode(productCode);
     workspace.setWorkspaceStatus("BOM_READY");
     workspace.setCurrentStep("PRICE_TYPE_CONFIRMATION");
     workspace.setInputFingerprint(inputFingerprint);

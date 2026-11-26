@@ -82,8 +82,8 @@ public class TechnicalDataPriceApplicationService {
     }
     var check = requirements.check(scope.task(), scope.product());
     if (!Objects.equals(request.getRequirementsFingerprint(), check.fingerprint())) throw conflict("价格需求或来源已变化，请重新检查；本次输入仍保留");
-    if (!check.issues().isEmpty()) throw invalid(String.join("；", check.issues()));
     var missing = check.items().stream().filter(TechnicalDataPriceRequirement::requiresEntry).toList();
+    if (missing.isEmpty() && !check.issues().isEmpty()) throw invalid(String.join("；", check.issues()));
     boolean sharedOnly = missing.isEmpty() && check.items().stream().anyMatch(row -> "SHARED".equals(row.status()))
         && check.items().stream().allMatch(row -> Set.of("AVAILABLE", "SHARED").contains(row.status()));
     if (missing.isEmpty() && !sharedOnly) throw conflict("当前已无缺价，无需继续补录，请重新检查资料");

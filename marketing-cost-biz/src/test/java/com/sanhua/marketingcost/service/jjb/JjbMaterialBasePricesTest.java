@@ -60,9 +60,9 @@ class JjbMaterialBasePricesTest {
           .containsEntry("zincPrice", "23146.000000")
           .containsEntry("brassPrice", "58.470000");
       assertThat(input.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true))
-          .isEqualByComparingTo(fixed ? "90" : "105");
+          .isEqualByComparingTo(fixed ? "100" : "105");
       assertThat(input.requiredPrice(PriceFactorContext.ZINC, FactorPriceUnit.CNY_KG, true))
-          .isEqualByComparingTo(fixed ? "20.831" : "24");
+          .isEqualByComparingTo(fixed ? "23.146" : "24");
       assertThat(json.writeValueAsString(input)).isEqualTo(before);
     }
   }
@@ -82,8 +82,10 @@ class JjbMaterialBasePricesTest {
     var high = new FactorPriceSnapshot.CuBand("CU_120000", d("120000"),
         factors("120", "27.7747505548238", "70.1643721920502", "73.1956047128448"));
     var financial = original.financial().withCuBands(List.of(high));
-    var input = new PriceFactorContext("PART", original.months(), financial, null)
-        .withCustomerMaterials(new CustomerMaterialPrices(d("120000"), d("24000"), null, null, null, null, "固定"));
+    // The original V6 fixed-sale calculation saved the OA fields but no selected band.
+    var prices = new CustomerMaterialPrices(d("120000"), d("24000"), null, null, null, null, "固定");
+    var input = new PriceFactorContext("PART", original.months(), financial, null, null, null, prices, null,
+        "MONTHLY_MATERIAL_CU_BANDS_V6");
     var saved = pair(input);
     var header = new LinkedHashMap<String, String>();
     new JjbMaterialBasePrices(json).apply(header, List.of(saved), new ArrayList<>());

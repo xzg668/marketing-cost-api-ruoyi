@@ -65,6 +65,9 @@ class MonthlyRepriceBomIntegrationTest {
     spring.registerBean("transactionManager",DataSourceTransactionManager.class,()->manager);
     spring.registerBean(QuoteBomMonthlySnapshotMapper.class,()->snapshots);
     spring.registerBean(LiveU9BomGateway.class,()->LIVE_U9);
+    // This fixture supplies already-expanded quantities; the native bare-package suite exercises U9 bases.
+    var quantityBasis = com.sanhua.marketingcost.service.effectivebom.U9BomQuantityBasis.class;
+    spring.registerBean(quantityBasis, () -> mock(quantityBasis));
     spring.registerBean(MonthlyBomSnapshotDetailService.class,()->details);
     spring.registerBean(MonthlySnapshotU9BomGateway.class);
     spring.registerBean(QuoteBomStatusServiceImpl.class,()->new QuoteBomStatusServiceImpl(

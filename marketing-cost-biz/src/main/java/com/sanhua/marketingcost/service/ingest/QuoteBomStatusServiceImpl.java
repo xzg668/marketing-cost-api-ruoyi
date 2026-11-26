@@ -185,10 +185,15 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
           costPeriodMonth == null
               ? contextResolver.resolve(form, item)
               : contextResolver.resolveWithExistingCostPeriod(form, item, costPeriodMonth);
+    } catch (com.sanhua.marketingcost.service.quotebom.QuoteModelBomProducts.Unresolved ex) {
+      applyStatusIdentity(status, form, item, now);
+      applyCheckFailure(status, ex.getMessage(), now);
+      return;
     } catch (QuoteIngestException ex) {
       applyMissingProductStatus(status, form, item, ex.getMessage(), now);
       return;
     }
+    contextResolver.bindUniqueModel(form, item, context);
     checkResolvedItem(form, item, status, now, context, false);
   }
 
@@ -213,7 +218,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     applyReuseKey(status, key, item, now);
 
     CurrentU9BomResult u9;
-    if (!QuoteProductIdentityUtils.hasFormalMaterialNo(item)) {
+    if (!QuoteProductIdentityUtils.hasFormalMaterialNo(item)
+        && Objects.equals(context.productCode(), QuoteProductIdentityUtils.resolveCostingCode(item))) {
       u9 = CurrentU9BomResult.notFound("新品暂无正式料号，请先由技术补齐完整BOM");
     } else {
       try {
@@ -261,7 +267,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       }
     }
 
-    // U9 的 NOT_FOUND 已按月冻结；之后只在电子图库审核结果和人工补录链路内继续。
+    // 本次确认没有可用的 U9 BOM 后，继续核实电子图库和人工补录来源。
     BomAvailability noU9 = BomAvailability.unavailable(u9.message());
     BomAvailability supplement = monthlyReprice
         ? supplementBomAvailabilityResolver.resolveForMonthlyReprice(item.getId(), context, noU9)
